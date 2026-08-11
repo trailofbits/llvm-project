@@ -28,6 +28,7 @@
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineFunctionExits.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
@@ -53,6 +54,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -75,6 +77,14 @@ using MBBVector = SmallVector<MachineBasicBlock *, 4>;
 STATISTIC(NumLeafFuncWithSpills, "Number of leaf functions with CSRs");
 STATISTIC(NumFuncSeen, "Number of functions seen in PEI");
 
+// Nothing consumes the classification yet, so it is only computed when it is
+// asked for. Printing it is not conditional on assertions or on statistics
+// being built in, because the classification has to be checkable in the
+// configurations a release compiler is built in.
+static cl::opt<bool> PrintExits(
+    "pei-print-exits", cl::Hidden,
+    cl::desc("Print how each function's exits are classified for the purpose "
+             "of clearing registers and stack at them"));
 
 namespace {
 
@@ -1175,6 +1185,13 @@ void PEIImpl::insertPrologEpilogCode(MachineFunction &MF) {
   // Add epilogue to restore the callee-save registers in each exiting block.
   for (MachineBasicBlock *RestoreBlock : RestoreBlocks)
     TFI.emitEpilogue(MF, *RestoreBlock);
+
+  // This is the point at which clearing is enforced: registers are allocated,
+  // the frame is laid out, and frame indices have not been eliminated yet. The
+  // exits of the function are classified here, where the sequences that will
+  // have to cover them are emitted, rather than at each emission site.
+  if (PrintExits)
+    printMachineFunctionExits(errs(), MF);
 
   // Zero call used registers before restoring callee-saved registers.
   insertZeroCallUsedRegs(MF);
