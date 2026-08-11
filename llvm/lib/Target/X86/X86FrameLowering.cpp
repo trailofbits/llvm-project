@@ -625,11 +625,9 @@ void X86FrameLowering::emitCalleeSavedFrameMoves(
 
 void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
                                             MachineBasicBlock &MBB,
+                                            MachineBasicBlock::iterator MBBI,
                                             RegScavenger *) const {
   const MachineFunction &MF = *MBB.getParent();
-
-  // Insertion point.
-  MachineBasicBlock::iterator MBBI = MBB.getFirstTerminator();
 
   // Fake a debug loc.
   DebugLoc DL;

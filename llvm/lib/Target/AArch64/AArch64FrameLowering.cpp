@@ -843,12 +843,9 @@ static MCRegister getRegisterOrZero(MCRegister Reg, bool HasSVE) {
   }
 }
 
-void AArch64FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
-                                                MachineBasicBlock &MBB,
-                                                RegScavenger *) const {
-  // Insertion point.
-  MachineBasicBlock::iterator MBBI = MBB.getFirstTerminator();
-
+void AArch64FrameLowering::emitZeroCallUsedRegs(
+    BitVector RegsToZero, MachineBasicBlock &MBB,
+    MachineBasicBlock::iterator MBBI, RegScavenger *) const {
   // Fake a debug loc.
   DebugLoc DL;
   if (MBBI != MBB.end())
