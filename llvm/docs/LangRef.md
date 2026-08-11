@@ -2678,8 +2678,23 @@ fn -> other_fn -> other_fn ; fn is norecurse
     provenance.
 
     A transform may not leave a function carrying this attribute with a frame
-    that is not cleared on every return from it. How the attribute constrains
-    inlining in particular is specified separately.
+    that is not cleared on every return from it.
+
+    Inlining is constrained accordingly. A function that carries this attribute
+    is not inlined into any caller, because inlining dissolves the callee's
+    frame into the caller's: the bytes the callee promised to clear before
+    returning become bytes of a frame that outlives the point where the clear
+    was due, and nothing remains to record the obligation. This holds however
+    the caller is annotated, including when the caller carries the attribute
+    itself, with any value. The caller's attribute is a promise about the
+    caller's own frame and its own returns, and neither reproduces the clear
+    the callee owed at the point the callee would have returned nor necessarily
+    covers as much of the frame.
+
+    Inlining a function that does not carry the attribute into one that does is
+    not constrained by this, and is desirable: the callee's frame lies below the
+    stack pointer once it returns and no clear reaches it, whereas inlining
+    turns those bytes into frame bytes of the caller, which are cleared.
 
 `returns_twice`
 :   This attribute indicates that this function can return twice. The C
