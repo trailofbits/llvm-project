@@ -200,13 +200,22 @@ enum class ClearingDisposition {
 /// What each step of the sequence does in one function, decided once for the
 /// function and before any of it is emitted, because the sequence has to be
 /// the same at every exit.
+///
+/// Which steps run is a property of the function. What one of them operates on
+/// need not be: the registers a clear can cover are the ones dead at the exit
+/// it runs at, and that differs between exits. So the plan holds the part of
+/// the register set the function's mode decides, and the rest is decided at
+/// each exit; see computeRegsToClearAtExit.
 struct ExitClearingPlan {
   ClearingDisposition Stack = ClearingDisposition::NotRequested;
   ClearingDisposition Registers = ClearingDisposition::NotRequested;
   ClearingDisposition Flags = ClearingDisposition::NotRequested;
 
-  /// The registers ClearRegisters clears, when it emits.
-  BitVector RegsToZero;
+  /// The registers ClearRegisters is allowed to clear anywhere in the
+  /// function: what its mode selects, less what the function has to preserve
+  /// wherever it leaves. It is not what is cleared at any one exit, which is
+  /// this set less what that exit needs.
+  BitVector CandidateRegsToZero;
 
   ClearingDisposition dispositionOf(ClearingStep Step) const {
     switch (Step) {
@@ -299,9 +308,9 @@ class PEIImpl {
   void planClearingSequence(MachineFunction &MF, ExitClearingPlan &Plan);
   ClearingDisposition planClearStack(MachineFunction &MF);
   ClearingDisposition planClearRegisters(MachineFunction &MF,
-                                         BitVector &RegsToZero);
+                                         BitVector &CandidateRegsToZero);
   void emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
-                        const MachineInstr &ExitMI, MachineBasicBlock &MBB,
+                        MachineBasicBlock &MBB,
                         MachineBasicBlock::iterator InsertPt);
   void diagnoseIgnoredZeroizeRequestsOnNakedFunction(MachineFunction &MF);
 
@@ -1528,33 +1537,53 @@ getClearingInsertPoint(MachineBasicBlock &MBB, MachineInstr &ExitMI) {
   return MachineBasicBlock::iterator(ExitMI);
 }
 
-/// The registers to clear at \p Exit, given the set \p RegsToZero computed for
-/// the function as a whole.
+/// The registers to clear at the exit the sequence is being emitted at, from
+/// the candidates \p Candidates the function's mode allows.
 ///
-/// A register the exit itself reads or writes has to come through the sequence
-/// intact: the call that resumes unwinding takes the exception object in an
-/// argument register, and clearing it would leave the unwinder with nothing to
-/// resume. The function-wide set is already computed with the registers used
-/// by the function's returns removed, so this only ever takes something out at
-/// an exit that is not one of them. Computing the set per exit, rather than
-/// narrowing one computed for the whole function, is
-/// trailofbits/vspells-ct-internal-notes#27.
-static BitVector getRegsToClearAtExit(const BitVector &RegsToZero,
-                                      const MachineInstr &ExitMI,
-                                      const TargetRegisterInfo &TRI) {
-  BitVector Result = RegsToZero;
-  for (const MachineOperand &MO : ExitMI.operands()) {
-    if (!MO.isReg())
-      continue;
+/// A register still needed where the sequence runs has to come through it
+/// intact, and what is still needed is decided by the exit, not by the
+/// function. The sequence is emitted at \p InsertPt, so what runs after it is
+/// the rest of \p MBB: the return and the registers it carries the return
+/// value in, the jump of a tail call and the registers it leaves the outgoing
+/// arguments in, or the call that resumes unwinding and the argument register
+/// it takes the exception object in. Those are what the exit needs; everything
+/// else the mode selected is dead by then and gets cleared.
+///
+/// Asking the exit is what makes the answer an exit's answer. Taking the union
+/// over the function's returns instead, as this did when there was one set for
+/// the whole function, leaves every return's live-out registers uncleared at
+/// every other return, where they are dead and hold whatever the function last
+/// put in them.
+static BitVector computeRegsToClearAtExit(
+    const BitVector &Candidates, const MachineBasicBlock &MBB,
+    MachineBasicBlock::const_iterator InsertPt, const TargetRegisterInfo &TRI) {
+  BitVector RegsToZero = Candidates;
 
-    MCRegister Reg = MO.getReg();
-    if (!Reg)
-      continue;
+  for (const MachineInstr &MI : make_range(InsertPt, MBB.end())) {
+    for (const MachineOperand &MO : MI.operands()) {
+      if (!MO.isReg())
+        continue;
 
-    for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(Reg))
-      Result.reset(SReg);
+      MCRegister Reg = MO.getReg();
+      if (!Reg)
+        continue;
+
+      // This picks up sibling registers (e.q. %al -> %ah).
+      // FIXME: Mixing physical registers and register units is likely a bug.
+      // Kept as it was when the return-value exclusion was computed for the
+      // whole function: it only ever spares registers, so correcting it would
+      // widen what is cleared, which is a change to what the existing
+      // "zero-call-used-regs" modes emit.
+      if (MI.isReturn())
+        for (MCRegUnit Unit : TRI.regunits(Reg))
+          RegsToZero.reset(static_cast<unsigned>(Unit));
+
+      for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(Reg))
+        RegsToZero.reset(SReg);
+    }
   }
-  return Result;
+
+  return RegsToZero;
 }
 
 /// insertClearingSequences - Run the clearing sequence at every exit of \p MF
@@ -1563,11 +1592,12 @@ static BitVector getRegsToClearAtExit(const BitVector &RegsToZero,
 /// This is the one place the steps are ordered and the one place they are
 /// emitted; see the comment on ClearingSequence for what the order is and why.
 void PEIImpl::insertClearingSequences(MachineFunction &MF) {
-  // The plan is made once for the function: what a step does cannot depend on
-  // which exit it is being emitted at, or the sequence would not be one
-  // sequence. It is also made before anything is emitted, so that a request
-  // the target cannot discharge is reported whether or not the function has an
-  // exit to emit at.
+  // The plan is made once for the function: which steps run cannot depend on
+  // which exit they are being emitted at, or the sequence would not be one
+  // sequence. What a step covers is another matter, and the register clear
+  // settles that at each exit. The plan is also made before anything is
+  // emitted, so that a request the target cannot discharge is reported whether
+  // or not the function has an exit to emit at.
   ExitClearingPlan Plan;
   planClearingSequence(MF, Plan);
 
@@ -1600,7 +1630,7 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
     for (ClearingStep Step : ClearingSequence) {
       ClearingDisposition D = Plan.dispositionOf(Step);
       if (D == ClearingDisposition::Emit)
-        emitClearingStep(Step, Plan, *ExitMI, MBB, InsertPt);
+        emitClearingStep(Step, Plan, MBB, InsertPt);
       if (PrintClearingSequence)
         OS << " " << getClearingStepName(Step) << "="
            << getClearingDispositionName(D);
@@ -1620,7 +1650,6 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
 /// implementation of it lands at the position the order gives it rather than
 /// wherever it is convenient.
 void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
-                               const MachineInstr &ExitMI,
                                MachineBasicBlock &MBB,
                                MachineBasicBlock::iterator InsertPt) {
   MachineFunction &MF = *MBB.getParent();
@@ -1637,8 +1666,11 @@ void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
     break;
 
   case ClearingStep::ClearRegisters:
-    TFI.emitZeroCallUsedRegs(getRegsToClearAtExit(Plan.RegsToZero, ExitMI, TRI),
-                             MBB, InsertPt, RS);
+    // What to clear is settled here rather than in the plan, because it is the
+    // exit that decides it: see computeRegsToClearAtExit.
+    TFI.emitZeroCallUsedRegs(
+        computeRegsToClearAtExit(Plan.CandidateRegsToZero, MBB, InsertPt, TRI),
+        MBB, InsertPt, RS);
     break;
 
   case ClearingStep::ClearFlags:
@@ -1656,7 +1688,7 @@ void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
 void PEIImpl::planClearingSequence(MachineFunction &MF,
                                    ExitClearingPlan &Plan) {
   Plan.Stack = planClearStack(MF);
-  Plan.Registers = planClearRegisters(MF, Plan.RegsToZero);
+  Plan.Registers = planClearRegisters(MF, Plan.CandidateRegsToZero);
   // Nothing asks for the flags to be cleared and nothing clears them. The step
   // is planned all the same, so that the sequence a function runs is described
   // by the plan in full rather than in the parts that have an implementation.
@@ -1684,9 +1716,16 @@ ClearingDisposition PEIImpl::planClearStack(MachineFunction &MF) {
 }
 
 /// planClearRegisters - Decide what the ClearRegisters step does in \p MF, and
-/// compute the registers it clears.
-ClearingDisposition PEIImpl::planClearRegisters(MachineFunction &MF,
-                                                BitVector &RegsToZero) {
+/// compute the registers it is allowed to clear.
+///
+/// What comes out is the candidate set, not the set cleared at any exit. Two
+/// things about a register decide whether it can be cleared: whether the mode
+/// selects it, which is a question about the function, and whether it is dead
+/// where the sequence runs, which is a question about one exit. This answers
+/// the first; computeRegsToClearAtExit answers the second at each exit.
+ClearingDisposition
+PEIImpl::planClearRegisters(MachineFunction &MF,
+                            BitVector &CandidateRegsToZero) {
   const Function &F = MF.getFunction();
 
   if (!F.hasFnAttribute("zero-call-used-regs"))
@@ -1742,7 +1781,7 @@ ClearingDisposition PEIImpl::planClearRegisters(MachineFunction &MF,
   for (const MachineBasicBlock::RegisterMaskPair &LI : MF.front().liveins())
     LiveIns.set(LI.PhysReg);
 
-  RegsToZero.resize(TRI.getNumRegs());
+  CandidateRegsToZero.resize(TRI.getNumRegs());
   for (MCRegister Reg : AllocatableSet.set_bits()) {
     // Skip over fixed registers.
     if (TRI.isFixedRegister(MF, Reg))
@@ -1761,7 +1800,7 @@ ClearingDisposition PEIImpl::planClearRegisters(MachineFunction &MF,
       if (OnlyUsed) {
         for (MCRegister LiveReg : LiveIns.set_bits()) {
           if (TRI.regsOverlap(Reg, LiveReg))
-            RegsToZero.set(LiveReg);
+            CandidateRegsToZero.set(LiveReg);
         }
         continue;
       } else if (!TRI.isArgumentRegister(MF, Reg)) {
@@ -1769,61 +1808,21 @@ ClearingDisposition PEIImpl::planClearRegisters(MachineFunction &MF,
       }
     }
 
-    RegsToZero.set(Reg.id());
+    CandidateRegsToZero.set(Reg.id());
   }
 
-  // Don't clear registers that are live when leaving the function.
-  for (const MachineBasicBlock &MBB : MF)
-    for (const MachineInstr &MI : MBB.terminators()) {
-      if (!MI.isReturn())
-        continue;
+  // Registers still needed where the sequence runs are taken out at each exit
+  // rather than here. Doing it here means doing it for the function, which
+  // means the union over its exits, and a register the function needs at one
+  // exit is left holding a value at every other one.
 
-      for (const auto &MO : MI.operands()) {
-        if (!MO.isReg())
-          continue;
-
-        MCRegister Reg = MO.getReg();
-        if (!Reg)
-          continue;
-
-        // This picks up sibling registers (e.q. %al -> %ah).
-        // FIXME: Mixing physical registers and register units is likely a bug.
-        for (MCRegUnit Unit : TRI.regunits(Reg))
-          RegsToZero.reset(static_cast<unsigned>(Unit));
-
-        for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(Reg))
-          RegsToZero.reset(SReg);
-      }
-    }
-
-  // Don't need to clear registers that are used/clobbered by terminating
-  // instructions.
-  for (const MachineBasicBlock &MBB : MF) {
-    if (!MBB.isReturnBlock())
-      continue;
-
-    MachineBasicBlock::const_iterator MBBI = MBB.getFirstTerminator();
-    for (MachineBasicBlock::const_iterator I = MBBI, E = MBB.end(); I != E;
-         ++I) {
-      for (const MachineOperand &MO : I->operands()) {
-        if (!MO.isReg())
-          continue;
-
-        MCRegister Reg = MO.getReg();
-        if (!Reg)
-          continue;
-
-        for (const MCPhysReg Reg : TRI.sub_and_superregs_inclusive(Reg))
-          RegsToZero.reset(Reg);
-      }
-    }
-  }
-
-  // Don't clear registers that must be preserved.
+  // Don't clear registers that must be preserved. This is the function's to
+  // decide: a callee-saved register has to hold what the caller left in it
+  // wherever the function leaves, so no exit can clear one.
   for (const MCPhysReg *CSRegs = TRI.getCalleeSavedRegs(&MF);
        MCPhysReg CSReg = *CSRegs; ++CSRegs)
     for (MCRegister Reg : TRI.sub_and_superregs_inclusive(CSReg))
-      RegsToZero.reset(Reg.id());
+      CandidateRegsToZero.reset(Reg.id());
 
   return ClearingDisposition::Emit;
 }
