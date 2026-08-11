@@ -459,6 +459,12 @@ static bool hasDistinctMetadataIntrinsic(const Function &F) {
 static bool isEligibleForMerging(Function &F) {
   return !F.isDeclaration() && !F.hasAvailableExternallyLinkage() &&
          !F.hasFnAttribute(Attribute::NoIPA) &&
+         // Merging turns the function into a thunk that tail-calls the merged
+         // body and keeps its attributes; a "zeroize-stack" thunk would promise
+         // to clear a frame it no longer owns, and a musttail thunk (swifttailcc)
+         // cannot clear one at all. Keep protected functions whole, as inlining
+         // already does.
+         !F.hasFnAttribute("zeroize-stack") &&
          !hasDistinctMetadataIntrinsic(F);
 }
 
