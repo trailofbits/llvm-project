@@ -279,6 +279,10 @@ private:
                                        const DebugLoc &DL, uint64_t Offset,
                                        uint64_t Align) const;
 
+  bool supportsZeroCallUsedRegs(const MachineFunction &MF) const override {
+    return true;
+  }
+
   /// Emit target zero call-used regs.
   void emitZeroCallUsedRegs(BitVector RegsToZero, MachineBasicBlock &MBB,
                             RegScavenger *RS) const override;

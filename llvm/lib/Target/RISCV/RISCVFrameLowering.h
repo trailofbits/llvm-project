@@ -123,6 +123,10 @@ private:
                                    MachineInstr::MIFlag Flag, bool EmitCFI,
                                    bool DynAllocation) const;
 
+  bool supportsZeroCallUsedRegs(const MachineFunction &MF) const override {
+    return true;
+  }
+
   /// Emit target zero call-used regs.
   void emitZeroCallUsedRegs(BitVector RegsToZero, MachineBasicBlock &MBB,
                             RegScavenger *RS) const override;

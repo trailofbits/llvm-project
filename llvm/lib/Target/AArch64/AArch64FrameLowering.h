@@ -211,6 +211,10 @@ private:
   void determineStackHazardSlot(MachineFunction &MF,
                                 BitVector &SavedRegs) const;
 
+  bool supportsZeroCallUsedRegs(const MachineFunction &MF) const override {
+    return true;
+  }
+
   /// Emit target zero call-used regs.
   void emitZeroCallUsedRegs(BitVector RegsToZero, MachineBasicBlock &MBB,
                             RegScavenger *RS) const override;
