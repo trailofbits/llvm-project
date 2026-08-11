@@ -459,6 +459,16 @@ static bool hasDistinctMetadataIntrinsic(const Function &F) {
 static bool isEligibleForMerging(Function &F) {
   return !F.isDeclaration() && !F.hasAvailableExternallyLinkage() &&
          !F.hasFnAttribute(Attribute::NoIPA) &&
+         // Merging replaces the function with a thunk that tail-calls the body
+         // it was merged into, and the thunk keeps the attributes it was
+         // written from. A thunk carrying "zeroize-stack" undertakes to clear a
+         // frame that is no longer the one holding anything, and when the two
+         // functions share a calling convention whose thunks are musttail the
+         // undertaking cannot be discharged at all. A protected function is
+         // already kept whole against inlining for the same reason; keep it
+         // whole here too rather than produce a thunk that reports a guarantee
+         // it is not in a position to keep.
+         !F.hasFnAttribute("zeroize-stack") &&
          !hasDistinctMetadataIntrinsic(F);
 }
 

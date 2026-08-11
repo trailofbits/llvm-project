@@ -538,6 +538,29 @@ static bool nextRealType(SmallVectorImpl<Type *> &SubTypes,
 /// This function only tests target-independent requirements.
 bool llvm::isInTailCallPosition(const CallBase &Call, const TargetMachine &TM,
                                 bool ReturnsFirstArg) {
+  // A tail call replaces the caller's frame with the callee's and jumps, so
+  // control never returns to the caller. A function that has undertaken to
+  // clear its frame before it returns has nowhere left to do that, and the
+  // frame it promised to clear stays live under the callee. Refuse the
+  // optimization rather than emit a function that reports itself protected and
+  // leaves its frame intact.
+  //
+  // This is the target-independent answer, so it is given once here rather than
+  // at each of the places that ask: SelectionDAGBuilder, FastISel and GlobalISel
+  // all reach tail-call eligibility through this function, as does the folding
+  // of a memcpy, memmove or memset into a tail call to the library routine,
+  // which replaces the frame just the same.
+  //
+  // musttail is suppressed here too, which the "disable-tail-calls" attribute
+  // just above deliberately does not do. A caller cannot drop musttail, so the
+  // combination cannot be honored in either direction and is rejected in the
+  // Verifier instead; suppressing it here is the backstop for IR that reached
+  // CodeGen without being verified, and it fails closed by turning that IR into
+  // the backend's existing musttail error rather than into a protected function
+  // that silently keeps its frame.
+  if (Call.getCaller()->hasFnAttribute("zeroize-stack"))
+    return false;
+
   const BasicBlock *ExitBB = Call.getParent();
   const Instruction *Term = ExitBB->getTerminator();
   const ReturnInst *Ret = dyn_cast<ReturnInst>(Term);

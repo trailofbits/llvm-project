@@ -4219,6 +4219,19 @@ void Verifier::verifyMustTailCall(CallInst &CI) {
   Check(!CI.isInlineAsm(), "cannot use musttail call with inline asm", &CI);
 
   Function *F = CI.getParent()->getParent();
+
+  // "zeroize-stack" undertakes that the frame is cleared before the function
+  // returns; musttail requires that the frame is replaced by the callee's and
+  // that control never returns here to clear it. Neither is the kind of request
+  // that can be weakened to accommodate the other: an ordinary tail call is an
+  // optimization and is suppressed for a protected function, but musttail is a
+  // semantic requirement the caller is not allowed to drop, so the two together
+  // describe a function that cannot exist and the IR is rejected instead.
+  Check(!F->hasFnAttribute("zeroize-stack"),
+        "cannot use musttail call in a function with the \"zeroize-stack\" "
+        "attribute",
+        &CI);
+
   FunctionType *CallerTy = F->getFunctionType();
   FunctionType *CalleeTy = CI.getFunctionType();
   Check(CallerTy->isVarArg() == CalleeTy->isVarArg(),
