@@ -2908,6 +2908,22 @@ void CodeGenModule::ConstructAttributeList(StringRef Name,
           "zero-call-used-regs",
           ZeroCallUsedRegsAttr::ConvertZeroCallUsedRegsKindToStr(Kind));
     }
+    if (!AttrOnCallSite && TargetDecl->hasAttr<ZeroizeOnReturnAttr>()) {
+      // Function-boundary zeroization requests register clearing and stack
+      // clearing together. It runs after the block above so that it wins over
+      // both the command-line mode and an explicit zero_call_used_regs on the
+      // same function: the guarantee is a minimum that other policy may widen
+      // but not narrow.
+      //
+      // The "all" mode rather than one of the "used" modes because the
+      // used-register computation ignores implicit operands, so a register
+      // defined only implicitly is not counted as used. That imprecision is
+      // acceptable for a hardening option and not for an obligation over
+      // machine state.
+      FuncAttrs.removeAttribute("zero-call-used-regs");
+      FuncAttrs.addAttribute("zero-call-used-regs", "all");
+      FuncAttrs.addAttribute("zeroize-stack", "used");
+    }
 
     // Add NonLazyBind attribute to function declarations when -fno-plt
     // is used.
