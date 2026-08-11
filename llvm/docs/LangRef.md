@@ -2665,8 +2665,10 @@ fn -> other_fn -> other_fn ; fn is norecurse
       callee-save area, and alignment padding can all hold copies of data that
       was marked, and nothing records where those copies came from.
 
-    Any other value is treated as `"used"`. An unrecognized mode must not
-    clear less than a recognized one.
+    The value is required and may not be empty: the attribute with no value
+    names no mode and is rejected. Any other value is accepted and treated as
+    `"used"`, because an unrecognized mode must not clear less than a
+    recognized one.
 
     `"sensitive"` is a request for precision, not a weaker guarantee: it
     narrows what a function clears relative to `"used"`, and it is only as
