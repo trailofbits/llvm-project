@@ -129,6 +129,7 @@ private:
 
   /// Emit target zero call-used regs.
   void emitZeroCallUsedRegs(BitVector RegsToZero, MachineBasicBlock &MBB,
+                            MachineBasicBlock::iterator MBBI,
                             RegScavenger *RS) const override;
 };
 } // namespace llvm

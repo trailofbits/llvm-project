@@ -219,10 +219,20 @@ public:
     return false;
   }
 
-  /// Zeros out call used registers. Only called when supportsZeroCallUsedRegs
-  /// returns true.
+  /// emitZeroCallUsedRegs - Zeros out call used registers. Only called on
+  /// targets whose supportsZeroCallUsedRegs returns true.
+  ///
+  /// \p MBBI is where to emit, and is not the target's to choose: register
+  /// clearing is one step of an ordered sequence run at each exit of the
+  /// function, and steps that pick their own positions cannot be ordered
+  /// against each other. See the comment on ClearingSequence in
+  /// PrologEpilogInserter.cpp for what the order is. It is the first
+  /// terminator of \p MBB at an exit that leaves through one, which is where
+  /// this has always emitted, and the call itself at an exit that leaves
+  /// through a call.
   virtual void emitZeroCallUsedRegs(BitVector RegsToZero,
                                     MachineBasicBlock &MBB,
+                                    MachineBasicBlock::iterator MBBI,
                                     RegScavenger *RS) const {}
 
   /// Returns true if this target can clear the stack frame of a function
