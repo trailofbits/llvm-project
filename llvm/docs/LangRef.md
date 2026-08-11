@@ -2651,6 +2651,34 @@ fn -> other_fn -> other_fn ; fn is norecurse
 `"no-stack-arg-probe"`
 :   This attribute disables ABI-required stack probes, if any.
 
+`"zeroize-stack"`
+:   This attribute requests that the function clear its stack frame before
+    returning, so that data the frame held is not left readable to whatever
+    runs on those addresses next. It takes one required string value selecting
+    how much of the frame is cleared:
+
+    - `"used"` clears every stack slot the function used.
+    - `"sensitive"` clears the slots that sensitivity metadata identifies,
+      together with every slot whose contents cannot be traced back to a
+      source-level object. The second half is not optional: spill slots, the
+      callee-save area, and alignment padding can all hold copies of data that
+      was marked, and nothing records where those copies came from.
+
+    Any other value is treated as `"used"`. An unrecognized mode must not
+    clear less than a recognized one.
+
+    `"sensitive"` is a request for precision, not a weaker guarantee: it
+    narrows what a function clears relative to `"used"`, and it is only as
+    accurate as the metadata. A producer that marks an object is responsible
+    for the mark surviving to codegen; where it cannot be, `"used"` is the
+    mode to ask for. What a lost mark can never do is weaken the guarantee to
+    nothing: the mode clears every frame slot with no source-level provenance
+    whether or not anything is marked.
+
+    A transform may not leave a function carrying this attribute with a frame
+    that is not cleared on every return from it. How the attribute constrains
+    inlining in particular is specified separately.
+
 `returns_twice`
 :   This attribute indicates that this function can return twice. The C
     `setjmp` is an example of such a function. The compiler disables
