@@ -119,6 +119,7 @@ class PEIImpl {
 
   void insertPrologEpilogCode(MachineFunction &MF);
   void insertZeroCallUsedRegs(MachineFunction &MF);
+  void diagnoseUnsupportedZeroizeStack(MachineFunction &MF);
 
 public:
   PEIImpl(MachineOptimizationRemarkEmitter *ORE) : ORE(ORE) {}
@@ -1178,6 +1179,10 @@ void PEIImpl::insertPrologEpilogCode(MachineFunction &MF) {
   // Zero call used registers before restoring callee-saved registers.
   insertZeroCallUsedRegs(MF);
 
+  // Stack clearing is not emitted by any target yet, so a function asking for
+  // it can only be told that it will not happen.
+  diagnoseUnsupportedZeroizeStack(MF);
+
   for (MachineBasicBlock *SaveBlock : SaveBlocks)
     TFI.inlineStackProbe(MF, *SaveBlock);
 
@@ -1224,6 +1229,18 @@ void PEIImpl::insertZeroCallUsedRegs(MachineFunction &MF) {
 
   if (ZeroRegsKind == ZeroCallUsedRegsKind::Skip)
     return;
+
+  // Ask the target whether it can discharge the request before computing what
+  // to clear. A target that cannot has to say so: emitZeroCallUsedRegs does
+  // nothing by default, so going ahead would leave the registers holding the
+  // values the attribute exists to destroy, with nothing to tell the caller
+  // that they still do.
+  const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
+  if (!TFI.supportsZeroCallUsedRegs(MF)) {
+    F.getContext().diagnose(DiagnosticInfoUnsupported{
+        F, "\"zero-call-used-regs\" is not supported by this target"});
+    return;
+  }
 
   const bool OnlyGPR = static_cast<unsigned>(ZeroRegsKind) & ONLY_GPR;
   const bool OnlyUsed = static_cast<unsigned>(ZeroRegsKind) & ONLY_USED;
@@ -1340,10 +1357,25 @@ void PEIImpl::insertZeroCallUsedRegs(MachineFunction &MF) {
     for (MCRegister Reg : TRI.sub_and_superregs_inclusive(CSReg))
       RegsToZero.reset(Reg.id());
 
-  const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
   for (MachineBasicBlock &MBB : MF)
     if (MBB.isReturnBlock())
       TFI.emitZeroCallUsedRegs(RegsToZero, MBB, RS);
+}
+
+/// diagnoseUnsupportedZeroizeStack - Report a stack clearing request that the
+/// target cannot discharge.
+void PEIImpl::diagnoseUnsupportedZeroizeStack(MachineFunction &MF) {
+  const Function &F = MF.getFunction();
+
+  if (!F.hasFnAttribute("zeroize-stack"))
+    return;
+
+  const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
+  if (TFI.supportsZeroizeStack(MF))
+    return;
+
+  F.getContext().diagnose(DiagnosticInfoUnsupported{
+      F, "\"zeroize-stack\" is not supported by this target"});
 }
 
 /// Replace all FrameIndex operands with physical register references and actual
