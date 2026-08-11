@@ -63,6 +63,9 @@ private:
 
   bool legalizeGLOBAL_VALUE(MachineInstr &MI, MachineRegisterInfo &MRI,
                             LegalizerHelper &Helper) const;
+
+  bool legalizeZeroize(MachineInstr &MI, MachineRegisterInfo &MRI,
+                       LegalizerHelper &Helper) const;
 };
 } // namespace llvm
 #endif
