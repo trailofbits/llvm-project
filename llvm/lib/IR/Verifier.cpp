@@ -375,6 +375,7 @@ private:
   void visitAllocTokenMetadata(Instruction &I, MDNode *MD);
   void visitInlineHistoryMetadata(Instruction &I, MDNode *MD);
   void visitMemCacheHintMetadata(Instruction &I, MDNode *MD);
+  void visitNoZeroizeMetadata(Instruction &I, MDNode *MD);
 
 #define HANDLE_SPECIALIZED_MDNODE_LEAF(CLASS) void visit##CLASS(const CLASS &N);
 #include "llvm/IR/Metadata.def"
@@ -572,6 +573,12 @@ void Verifier::visitGlobalValue(const GlobalValue &GV) {
         "Global is external, but doesn't have external or weak linkage!", &GV);
 
   if (const auto *GO = dyn_cast<GlobalObject>(&GV)) {
+    // !nozeroize describes a stack object. A global is not one, and nothing
+    // clears it on return, so an attachment here would read as a request that
+    // is silently never honored.
+    Check(!GO->getMetadata(LLVMContext::MD_nozeroize),
+          "!nozeroize metadata can only be applied to alloca instructions", GO);
+
     if (const MDNode *Associated =
             GO->getMetadata(LLVMContext::MD_associated)) {
       Check(Associated->getNumOperands() == 1,
@@ -2599,6 +2606,16 @@ void Verifier::verifyFunctionAttrs(FunctionType *FT, AttributeList Attrs,
       CheckFailed("invalid value for 'guarded-control-stack' attribute: " + S,
                   V);
   }
+
+  // "zeroize-stack" selects how much of the frame is cleared, so it has to name
+  // a mode. A mode this version of LLVM does not recognize is deliberately not
+  // rejected: LangRef gives an unrecognized mode the meaning of "used", the
+  // widest mode, so that a producer using a mode a consumer has not learned yet
+  // clears more of the frame than it has to rather than less. No such reading
+  // is available when the value is absent, because nothing was named.
+  if (auto A = Attrs.getFnAttr("zeroize-stack"); A.isValid())
+    Check(!A.getValueAsString().empty(),
+          "\"zeroize-stack\" attribute must name a mode", V);
 
   if (auto A = Attrs.getFnAttr("vector-function-abi-variant"); A.isValid()) {
     StringRef S = A.getValueAsString();
@@ -5618,6 +5635,16 @@ void Verifier::visitAllocTokenMetadata(Instruction &I, MDNode *MD) {
         "expected integer constant", MD);
 }
 
+void Verifier::visitNoZeroizeMetadata(Instruction &I, MDNode *MD) {
+  Check(isa<AllocaInst>(I),
+        "!nozeroize metadata can only be applied to alloca instructions", &I);
+  // Presence is the whole signal, so the node carries nothing. Rejecting a
+  // payload now keeps the room reserved: were operands ignored today, IR
+  // relying on their being ignored would fix their meaning by the time anything
+  // wanted to give them one.
+  Check(MD->getNumOperands() == 0, "!nozeroize metadata must be empty", &I, MD);
+}
+
 void Verifier::visitInlineHistoryMetadata(Instruction &I, MDNode *MD) {
   Check(isa<CallBase>(I), "!inline_history should only exist on calls", &I);
   for (Metadata *Op : MD->operands()) {
@@ -5956,6 +5983,9 @@ void Verifier::visitInstruction(Instruction &I) {
 
   if (MDNode *MD = I.getMetadata(LLVMContext::MD_mem_cache_hint))
     visitMemCacheHintMetadata(I, MD);
+
+  if (MDNode *MD = I.getMetadata(LLVMContext::MD_nozeroize))
+    visitNoZeroizeMetadata(I, MD);
 
   if (MDNode *MD = I.getMetadata("amdgpu.expected.active.lanes")) {
     Check(MD->getNumOperands() == 1,
