@@ -2658,7 +2658,8 @@ fn -> other_fn -> other_fn ; fn is norecurse
     how much of the frame is cleared:
 
     - `"used"` clears every stack slot the function used.
-    - `"sensitive"` clears the slots that sensitivity metadata identifies,
+    - `"sensitive"` clears the slots that
+      {ref}`sensitivity metadata <md_sensitive>` identifies,
       together with every slot whose contents cannot be traced back to a
       source-level object. The second half is not optional: spill slots, the
       callee-save area, and alignment padding can all hold copies of data that
@@ -8011,6 +8012,57 @@ call void @llvm.memcpy.p1.p1.i64(ptr addrspace(1) %d,
 !2 = !{ !"nvvm.l1_eviction", !"first",
         !"nvvm.l2_prefetch_size", !"128B" }
 ```
+
+(md_sensitive)=
+
+#### '`sensitive`' Metadata
+
+`sensitive` metadata may be attached to an `alloca` to record that the object
+it allocates holds data that should not be left readable in the stack frame
+once the function is done with it. It identifies the objects that the
+`"sensitive"` mode of the `"zeroize-stack"` function attribute clears.
+
+This metadata is only used as a flag, so the associated node must be empty. Its
+presence on the `alloca` is the entire signal; the contents of the node are
+reserved for future use.
+
+```llvm
+%round_keys = alloca [176 x i8], align 16, !sensitive !0
+
+...
+!0 = !{}
+```
+
+The metadata is a hint that lets a function clear less of its frame than it
+would otherwise have to. It is not itself part of any guarantee, and no
+guarantee is conditioned on it being present, accurate, or complete. The
+obligation to clear a frame comes from the `"zeroize-stack"` attribute alone,
+and the `"sensitive"` mode of that attribute clears every frame object whose
+contents cannot be traced back to a source-level object — spill slots, the
+callee-save area, alignment padding — whether or not anything is marked.
+
+Transforms must respect the one-directional rule this sets up:
+
+- Dropping the metadata is always permitted. A transform is never required to
+  preserve or propagate it in order to be correct, and no correctness argument
+  may rest on it having survived. Where the marked set has stopped describing
+  the frame, because a marked object was split, merged, replaced, or promoted
+  and the metadata did not follow, the response is to clear more, falling back
+  at the limit to clearing every stack slot the function used. It is never to
+  clear less.
+- Attaching the metadata to an object that was not marked before is likewise
+  permitted, and can only widen what is cleared.
+- The absence of the metadata on a frame object is not a statement that the
+  object is insensitive. A transform may not conclude from an object being
+  unmarked that its contents need not be cleared, and may not shrink the set of
+  objects a function clears on the strength of what is or is not marked.
+  Clearing only the marked objects together with the objects of unknown
+  provenance is the request that the `"sensitive"` mode expresses; it is not a
+  licence for a transform to narrow that set further.
+
+Whether an individual transform propagates this metadata across the objects it
+creates is therefore a question of precision rather than of correctness, and is
+specified separately.
 
 (llvm.loop)=
 
