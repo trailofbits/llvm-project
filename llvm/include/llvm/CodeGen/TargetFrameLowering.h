@@ -212,10 +212,29 @@ public:
   virtual void emitEpilogue(MachineFunction &MF,
                             MachineBasicBlock &MBB) const = 0;
 
-  /// emitZeroCallUsedRegs - Zeros out call used registers.
+  /// supportsZeroCallUsedRegs - Returns true if this target implements
+  /// emitZeroCallUsedRegs. The default is false rather than true because the
+  /// emission hook does nothing by default: without a query to ask first, a
+  /// target that has not implemented it would drop the request silently, and
+  /// silence is indistinguishable from having zeroed the registers.
+  virtual bool supportsZeroCallUsedRegs(const MachineFunction &MF) const {
+    return false;
+  }
+
+  /// emitZeroCallUsedRegs - Zeros out call used registers. Only called on
+  /// targets whose supportsZeroCallUsedRegs returns true.
   virtual void emitZeroCallUsedRegs(BitVector RegsToZero,
                                     MachineBasicBlock &MBB,
                                     RegScavenger *RS) const {}
+
+  /// supportsZeroizeStack - Returns true if this target can clear the stack
+  /// frame of a function carrying the "zeroize-stack" attribute, that is, if
+  /// it implements emitZeroizeStack. The default is false for the same reason
+  /// as supportsZeroCallUsedRegs. No target implements the emission yet, so
+  /// every target currently reports the attribute as unsupported.
+  virtual bool supportsZeroizeStack(const MachineFunction &MF) const {
+    return false;
+  }
 
   /// With basic block sections, emit callee saved frame moves for basic blocks
   /// that are in a different section.
