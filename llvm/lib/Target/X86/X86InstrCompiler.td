@@ -479,6 +479,17 @@ let Defs = [RCX,RDI], isCodeGenOnly = 1 in {
                         [(X86rep_stos i64)]>, REP, AdSize64,
                         Requires<[IsLP64]>;
 }
+
+// Clear the %rcx bytes at %rdi, for llvm.zeroize. Both instruction selectors
+// lower the intrinsic to this and to the copies feeding it, and nothing looks
+// inside it again: it carries no memory operand and no pattern, so no analysis
+// can attribute a store to it and no pass can decide the store is redundant.
+// X86ExpandPseudo turns it into "movb $0, %al; rep;stosb" in addPreSched2,
+// after register allocation, which is past the last point where anything looks
+// for stores to remove.
+let isPseudo = 1, isCodeGenOnly = 1, hasSideEffects = 1, mayStore = 1,
+    Defs = [AL,RCX,RDI], Uses = [RCX,RDI] in
+def ZEROIZE64 : PseudoI<(outs), (ins), []>, Requires<[IsLP64]>;
 } // SchedRW
 
 //===----------------------------------------------------------------------===//

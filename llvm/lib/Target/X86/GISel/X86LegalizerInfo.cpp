@@ -1051,7 +1051,49 @@ bool X86LegalizerInfo::legalizeGLOBAL_VALUE(MachineInstr &MI,
   return true;
 }
 
+bool X86LegalizerInfo::legalizeZeroize(MachineInstr &MI,
+                                       MachineRegisterInfo &MRI,
+                                       LegalizerHelper &Helper) const {
+  // Only the LP64 sequence exists so far; 32-bit x86 keeps reporting the
+  // intrinsic as unlowered.
+  if (!Subtarget.isTarget64BitLP64())
+    return false;
+
+  MachineIRBuilder &MIRBuilder = Helper.MIRBuilder;
+  const LLT S64 = LLT::scalar(64);
+
+  Register Dst = MI.getOperand(1).getReg();
+  Register Len = MI.getOperand(2).getReg();
+
+  // The count is overloaded on any integer width, while rep;stosb only reads
+  // %rcx. A count that does not fit is truncated rather than rejected: no such
+  // region can be stepped through anyway.
+  LLT LenTy = MRI.getType(Len);
+  if (LenTy.getSizeInBits() > 64)
+    Len = MIRBuilder.buildTrunc(S64, Len).getReg(0);
+  else if (LenTy.getSizeInBits() < 64)
+    Len = MIRBuilder.buildZExt(S64, Len).getReg(0);
+
+  MIRBuilder.buildCopy(Register(X86::RCX), Len);
+  MIRBuilder.buildCopy(Register(X86::RDI), Dst);
+
+  // Emit the pseudo, not the clearing sequence itself. Everything the sequence
+  // is made of appears in X86ExpandPseudo, past every pass that deletes
+  // stores.
+  MIRBuilder.buildInstr(X86::ZEROIZE64);
+
+  MI.eraseFromParent();
+  return true;
+}
+
 bool X86LegalizerInfo::legalizeIntrinsic(LegalizerHelper &Helper,
                                          MachineInstr &MI) const {
+  MachineRegisterInfo &MRI = *Helper.MIRBuilder.getMRI();
+  switch (cast<GIntrinsic>(MI).getIntrinsicID()) {
+  case Intrinsic::zeroize:
+    return legalizeZeroize(MI, MRI, Helper);
+  default:
+    break;
+  }
   return true;
 }

@@ -28139,6 +28139,34 @@ static SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, const X86Subtarget &Subtarget,
   if (!IntrData) {
     switch (IntNo) {
 
+    case Intrinsic::zeroize: {
+      // Only the LP64 sequence exists so far; 32-bit x86 keeps reporting the
+      // intrinsic as unlowered.
+      if (!Subtarget.isTarget64BitLP64())
+        return SDValue();
+
+      SDLoc dl(Op);
+      SDValue Chain = Op.getOperand(0);
+
+      // The count is overloaded on any integer width, while rep;stosb only
+      // reads %rcx. A count that does not fit is truncated rather than
+      // rejected: no such region can be stepped through anyway.
+      SDValue Len = DAG.getZExtOrTrunc(Op.getOperand(3), dl, MVT::i64);
+
+      SDValue InGlue;
+      Chain = DAG.getCopyToReg(Chain, dl, X86::RCX, Len, InGlue);
+      InGlue = Chain.getValue(1);
+      Chain = DAG.getCopyToReg(Chain, dl, X86::RDI, Op.getOperand(2), InGlue);
+      InGlue = Chain.getValue(1);
+
+      // Emit the pseudo, not the clearing sequence itself. Everything the
+      // sequence is made of appears in X86ExpandPseudo, past every pass that
+      // deletes stores.
+      SDValue Ops[] = {Chain, InGlue};
+      return SDValue(DAG.getMachineNode(X86::ZEROIZE64, dl, MVT::Other, Ops),
+                     0);
+    }
+
     case Intrinsic::swift_async_context_addr: {
       SDLoc dl(Op);
       auto &MF = DAG.getMachineFunction();
