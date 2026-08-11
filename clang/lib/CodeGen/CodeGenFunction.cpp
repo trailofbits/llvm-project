@@ -1107,8 +1107,11 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
              CGM.getCodeGenOpts().StackAlignment))
     Fn->addFnAttr("stackrealign");
 
-  // "main" doesn't need to zero out call-used registers.
-  if (FD && FD->isMain())
+  // "main" doesn't need to zero out call-used registers. This drops the
+  // command-line default only: a hand-written zeroize_on_return on main is a
+  // deliberate request, and honouring it silently everywhere except main would
+  // be the kind of quietly-unmet guarantee the attribute exists to avoid.
+  if (FD && FD->isMain() && !FD->hasAttr<ZeroizeOnReturnAttr>())
     Fn->removeFnAttr("zero-call-used-regs");
 
   // Add vscale_range attribute if appropriate.
