@@ -2603,6 +2603,26 @@ static bool checkStrictFP(const Function &Caller, const Function &Callee) {
          Caller.getAttributes().hasFnAttr(Attribute::StrictFP);
 }
 
+static bool checkZeroizeStack(const Function &Caller, const Function &Callee) {
+  // Do not inline a function that carries "zeroize-stack" into any caller. The
+  // attribute is a promise about the callee's own frame, and inlining dissolves
+  // that frame into the caller's: the bytes the callee promised to clear before
+  // returning become bytes of a frame that outlives the point where the clear
+  // was due, and nothing is left in the IR to record the obligation.
+  //
+  // This is a callee-side rule with no exemption for a caller that carries the
+  // attribute itself. The caller's attribute constrains the caller's own frame
+  // and its own returns; it does not reproduce the clear the callee owed at the
+  // point the callee would have returned, and the two functions may in any case
+  // ask for different amounts of the frame to be cleared.
+  //
+  // Inlining an unprotected callee into a protected caller is unaffected, and
+  // is worth encouraging: it moves the callee's frame, which sits below the
+  // stack pointer at the caller's return and which no clear reaches, into the
+  // frame bytes the protected caller does clear.
+  return !Callee.hasFnAttribute("zeroize-stack");
+}
+
 template<typename AttrClass>
 static bool isEqual(const Function &Caller, const Function &Callee) {
   return Caller.getFnAttribute(AttrClass::getKind()) ==
