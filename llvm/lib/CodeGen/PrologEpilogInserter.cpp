@@ -77,16 +77,188 @@ using MBBVector = SmallVector<MachineBasicBlock *, 4>;
 STATISTIC(NumLeafFuncWithSpills, "Number of leaf functions with CSRs");
 STATISTIC(NumFuncSeen, "Number of functions seen in PEI");
 
-// Nothing consumes the classification yet, so it is only computed when it is
-// asked for. Printing it is not conditional on assertions or on statistics
-// being built in, because the classification has to be checkable in the
+// The classification the clearing sequence runs off. Printing it is not
+// conditional on assertions or on statistics being built in, because a
+// classification that decides what gets protected has to be checkable in the
 // configurations a release compiler is built in.
 static cl::opt<bool> PrintExits(
     "pei-print-exits", cl::Hidden,
     cl::desc("Print how each function's exits are classified for the purpose "
              "of clearing registers and stack at them"));
 
+// The sequence itself, for the same reason: the order the steps run in is what
+// is being enforced, so it has to be observable without a debug build.
+static cl::opt<bool> PrintClearingSequence(
+    "pei-print-clearing-sequence", cl::Hidden,
+    cl::desc("Print the clearing sequence emitted at each in-scope exit, in "
+             "the order its steps run"));
+
 namespace {
+
+//===----------------------------------------------------------------------===//
+// The clearing sequence.
+//
+// A function that has been told to destroy what it leaves behind has more than
+// one thing to destroy, and the pieces are not independent: clearing the frame
+// needs registers to do it with, and everything that runs writes the flags. So
+// what is emitted at an exit is not a set of steps that happen to share a
+// pass, it is one sequence with an order, run once at every exit the
+// classification calls in scope, and the order is part of what is enforced.
+//
+// The order is ClearStack, then ClearRegisters, then ClearFlags, and each step
+// is where it is for a reason that outlives whichever implementation is behind
+// it:
+//
+//  - Clearing the stack is first because it cannot be done without registers.
+//    The value being stored and the address being stored through are both in
+//    registers while it runs, and both are derived from the frame it is
+//    destroying, so it ends leaving in registers what it has just taken out of
+//    memory. A register clear placed in front of it would be undone by it.
+//    Which registers those are, and making sure the register clear covers
+//    them, is trailofbits/vspells-ct-internal-notes#20; the clearing itself is
+//    trailofbits/vspells-ct-internal-notes#26.
+//
+//  - Clearing the registers is after every step that needs a register to work
+//    with and before every step that does not, which is what makes it the step
+//    that sees the final state of the registers. Anything added later that
+//    computes an address, a length or a value has to go in front of it for the
+//    same reason the stack clear does.
+//
+//  - Clearing the flags is last because every other step writes them. A
+//    register is cleared on x86 by exclusive-oring it with itself, which sets
+//    them from the value that was in the register, and a stack clear that
+//    loops sets them from the count. A flag clear anywhere else in the
+//    sequence is overwritten by the step after it, which is why the design
+//    fixes it at the end of the x86 sequence rather than leaving it to the
+//    target.
+//
+// The order is over the emitted code, not over insertion points. Every step
+// implemented today emits at the exit's insertion point, which is in front of
+// the instruction control leaves through and so after the epilogue has
+// restored the callee-saved registers and released the frame. A step that has
+// to run earlier in the block than that will not emit there: clearing the
+// frame has to happen before the epilogue moves the stack pointer, because
+// after that the frame is no longer addressable as the frame. It still has to
+// leave every later step behind it in program order, which is what the order
+// is over.
+//
+// Two properties hold of the sequence as a whole, and a step added later has
+// to keep both:
+//
+//  - It is emitted at the exits the classification calls in scope, and only
+//    there. Which blocks those are is decided in MachineFunctionExits.h, once,
+//    rather than by each step looking for somewhere to put itself; a step that
+//    cannot be placed at an exit that is in scope is a gap to record, not a
+//    reason for the step to pick its own sites.
+//
+//  - It does not depend on secret values. Which steps run is decided from the
+//    function's attributes and the target's capabilities, and where they run
+//    from the shape of the control flow; nothing in it is chosen by a value
+//    the function computed. Two runs of a protected function therefore execute
+//    the same sequence, so the sequence itself tells an observer nothing about
+//    what it is clearing.
+//
+//===----------------------------------------------------------------------===//
+
+/// One step of the clearing sequence. The order is not this enumeration's
+/// order but ClearingSequence's; see the comment above.
+enum class ClearingStep {
+  /// Clear the stack frame, for "zeroize-stack". No target implements this
+  /// yet.
+  ClearStack,
+
+  /// Clear the call-used registers, for "zero-call-used-regs".
+  ClearRegisters,
+
+  /// Clear the condition flags. Nothing implements this yet and nothing can
+  /// ask for it: the flag register classes are not allocatable, so the
+  /// register clear cannot reach them and a mechanism of its own is needed.
+  ClearFlags,
+};
+
+/// The steps of the clearing sequence, in the order they run at every in-scope
+/// exit. This array is the order: it is what the emission walks and what the
+/// tests pin.
+constexpr ClearingStep ClearingSequence[] = {
+    ClearingStep::ClearStack,
+    ClearingStep::ClearRegisters,
+    ClearingStep::ClearFlags,
+};
+
+/// What a step of the sequence does in a given function.
+enum class ClearingDisposition {
+  /// The function did not ask for this step.
+  NotRequested,
+
+  /// The function asked for it and the target cannot do it. The request has
+  /// been reported; nothing is emitted.
+  Unsupported,
+
+  /// Nothing in the tree emits this step yet. The step holds its place in the
+  /// order so that the implementation lands in the right one.
+  Unimplemented,
+
+  /// The step emits at every in-scope exit.
+  Emit,
+};
+
+/// What each step of the sequence does in one function, decided once for the
+/// function and before any of it is emitted, because the sequence has to be
+/// the same at every exit.
+struct ExitClearingPlan {
+  ClearingDisposition Stack = ClearingDisposition::NotRequested;
+  ClearingDisposition Registers = ClearingDisposition::NotRequested;
+  ClearingDisposition Flags = ClearingDisposition::NotRequested;
+
+  /// The registers ClearRegisters clears, when it emits.
+  BitVector RegsToZero;
+
+  ClearingDisposition dispositionOf(ClearingStep Step) const {
+    switch (Step) {
+    case ClearingStep::ClearStack:
+      return Stack;
+    case ClearingStep::ClearRegisters:
+      return Registers;
+    case ClearingStep::ClearFlags:
+      return Flags;
+    }
+    llvm_unreachable("unhandled ClearingStep");
+  }
+
+  bool anyStepEmits() const {
+    return any_of(ClearingSequence, [this](ClearingStep Step) {
+      return dispositionOf(Step) == ClearingDisposition::Emit;
+    });
+  }
+};
+
+/// The name of \p Step, as printed by -pei-print-clearing-sequence.
+StringRef getClearingStepName(ClearingStep Step) {
+  switch (Step) {
+  case ClearingStep::ClearStack:
+    return "clear-stack";
+  case ClearingStep::ClearRegisters:
+    return "clear-registers";
+  case ClearingStep::ClearFlags:
+    return "clear-flags";
+  }
+  llvm_unreachable("unhandled ClearingStep");
+}
+
+/// The name of \p D, as printed by -pei-print-clearing-sequence.
+StringRef getClearingDispositionName(ClearingDisposition D) {
+  switch (D) {
+  case ClearingDisposition::NotRequested:
+    return "not-requested";
+  case ClearingDisposition::Unsupported:
+    return "unsupported";
+  case ClearingDisposition::Unimplemented:
+    return "unimplemented";
+  case ClearingDisposition::Emit:
+    return "emitted";
+  }
+  llvm_unreachable("unhandled ClearingDisposition");
+}
 
 class PEIImpl {
   RegScavenger *RS = nullptr;
@@ -128,8 +300,14 @@ class PEIImpl {
                                    int &SPAdj);
 
   void insertPrologEpilogCode(MachineFunction &MF);
-  void insertZeroCallUsedRegs(MachineFunction &MF);
-  void diagnoseUnsupportedZeroizeStack(MachineFunction &MF);
+  void insertClearingSequences(MachineFunction &MF);
+  void planClearingSequence(MachineFunction &MF, ExitClearingPlan &Plan);
+  ClearingDisposition planClearStack(MachineFunction &MF);
+  ClearingDisposition planClearRegisters(MachineFunction &MF,
+                                         BitVector &RegsToZero);
+  void emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
+                        const MachineExit &Exit, MachineBasicBlock &MBB,
+                        MachineBasicBlock::iterator InsertPt);
 
 public:
   PEIImpl(MachineOptimizationRemarkEmitter *ORE) : ORE(ORE) {}
@@ -1188,17 +1366,13 @@ void PEIImpl::insertPrologEpilogCode(MachineFunction &MF) {
 
   // This is the point at which clearing is enforced: registers are allocated,
   // the frame is laid out, and frame indices have not been eliminated yet. The
-  // exits of the function are classified here, where the sequences that will
-  // have to cover them are emitted, rather than at each emission site.
+  // exits of the function are classified here, where the sequences that have
+  // to cover them are emitted, rather than at each emission site.
   if (PrintExits)
     printMachineFunctionExits(errs(), MF);
 
-  // Zero call used registers before restoring callee-saved registers.
-  insertZeroCallUsedRegs(MF);
-
-  // Stack clearing is not emitted by any target yet, so a function asking for
-  // it can only be told that it will not happen.
-  diagnoseUnsupportedZeroizeStack(MF);
+  // Run the clearing sequence at every exit that is in scope.
+  insertClearingSequences(MF);
 
   for (MachineBasicBlock *SaveBlock : SaveBlocks)
     TFI.inlineStackProbe(MF, *SaveBlock);
@@ -1222,12 +1396,189 @@ void PEIImpl::insertPrologEpilogCode(MachineFunction &MF) {
       TFI.adjustForHiPEPrologue(MF, *SaveBlock);
 }
 
-/// insertZeroCallUsedRegs - Zero out call used registers.
-void PEIImpl::insertZeroCallUsedRegs(MachineFunction &MF) {
+/// Where the clearing sequence goes at \p Exit.
+///
+/// Every step of the sequence is emitted here, so that the order the steps are
+/// emitted in is the order they run in. The whole terminator run of a block
+/// stays together and stays last, so at an exit that leaves through a
+/// terminator the sequence goes in front of the first of them, which is where
+/// register clearing has always been placed and is after the epilogue. An exit
+/// that leaves through a call, that is, one that resumes unwinding, has no
+/// terminator to sit in front of; there the sequence goes in front of the call
+/// itself, because after it is after the function.
+static MachineBasicBlock::iterator
+getClearingInsertPoint(MachineBasicBlock &MBB, const MachineExit &Exit) {
+  if (Exit.MI && Exit.MI->isTerminator())
+    return MBB.getFirstTerminator();
+  return find_if(MBB, [&](const MachineInstr &MI) { return &MI == Exit.MI; });
+}
+
+/// The registers to clear at \p Exit, given the set \p RegsToZero computed for
+/// the function as a whole.
+///
+/// A register the exit itself reads or writes has to come through the sequence
+/// intact: the call that resumes unwinding takes the exception object in an
+/// argument register, and clearing it would leave the unwinder with nothing to
+/// resume. The function-wide set is already computed with the registers used
+/// by the function's returns removed, so this only ever takes something out at
+/// an exit that is not one of them. Computing the set per exit, rather than
+/// narrowing one computed for the whole function, is
+/// trailofbits/vspells-ct-internal-notes#27.
+static BitVector getRegsToClearAtExit(const BitVector &RegsToZero,
+                                      const MachineExit &Exit,
+                                      const TargetRegisterInfo &TRI) {
+  if (!Exit.MI)
+    return RegsToZero;
+
+  BitVector Result = RegsToZero;
+  for (const MachineOperand &MO : Exit.MI->operands()) {
+    if (!MO.isReg())
+      continue;
+
+    MCRegister Reg = MO.getReg();
+    if (!Reg)
+      continue;
+
+    for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(Reg))
+      Result.reset(SReg);
+  }
+  return Result;
+}
+
+/// insertClearingSequences - Run the clearing sequence at every exit of \p MF
+/// that is in scope.
+///
+/// This is the one place the steps are ordered and the one place they are
+/// emitted; see the comment on ClearingSequence for what the order is and why.
+void PEIImpl::insertClearingSequences(MachineFunction &MF) {
+  // The plan is made once for the function: what a step does cannot depend on
+  // which exit it is being emitted at, or the sequence would not be one
+  // sequence. It is also made before anything is emitted, so that a request
+  // the target cannot discharge is reported whether or not the function has an
+  // exit to emit at.
+  ExitClearingPlan Plan;
+  planClearingSequence(MF, Plan);
+
+  if (!Plan.anyStepEmits() && !PrintClearingSequence)
+    return;
+
+  raw_ostream &OS = errs();
+  if (PrintClearingSequence)
+    OS << "clearing sequence for function '" << MF.getName() << "':\n";
+
+  for (MachineBasicBlock &MBB : MF) {
+    // Where the sequence runs is decided by the classification, not by looking
+    // for blocks that end in a return: the two differ, and where they differ
+    // the classification is the answer to the question being asked here.
+    std::optional<MachineExit> Exit = classifyMachineExit(MBB);
+    if (!Exit || !isEnforceableExit(Exit->Kind))
+      continue;
+
+    // An exit that is in scope is one the sequence can be placed at, so it has
+    // a position by construction. Emitting at the end of the block instead
+    // would put the sequence after the instruction control leaves through.
+    MachineBasicBlock::iterator InsertPt = getClearingInsertPoint(MBB, *Exit);
+    assert(InsertPt != MBB.end() && "in-scope exit with nowhere to emit");
+    if (InsertPt == MBB.end())
+      continue;
+
+    if (PrintClearingSequence)
+      OS << "  " << printMBBReference(MBB) << " "
+         << getMachineExitKindName(Exit->Kind) << ":";
+
+    for (ClearingStep Step : ClearingSequence) {
+      ClearingDisposition D = Plan.dispositionOf(Step);
+      if (D == ClearingDisposition::Emit)
+        emitClearingStep(Step, Plan, *Exit, MBB, InsertPt);
+      if (PrintClearingSequence)
+        OS << " " << getClearingStepName(Step) << "="
+           << getClearingDispositionName(D);
+    }
+
+    if (PrintClearingSequence)
+      OS << "\n";
+  }
+
+  if (PrintClearingSequence)
+    OS << "end clearing sequence for function '" << MF.getName() << "'\n";
+}
+
+/// emitClearingStep - Emit one step of the clearing sequence at \p InsertPt.
+///
+/// A step that emits nothing today still has its case here, so that the
+/// implementation of it lands at the position the order gives it rather than
+/// wherever it is convenient.
+void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
+                               const MachineExit &Exit, MachineBasicBlock &MBB,
+                               MachineBasicBlock::iterator InsertPt) {
+  MachineFunction &MF = *MBB.getParent();
+  const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
+  const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+
+  switch (Step) {
+  case ClearingStep::ClearStack:
+    // Nothing emits here yet: no target can clear the frame, so planning has
+    // already refused every request for it and this step never reaches
+    // emission. It is first in the order because it needs registers to run,
+    // and the register clear after it is what destroys those;
+    // trailofbits/vspells-ct-internal-notes#26.
+    break;
+
+  case ClearingStep::ClearRegisters:
+    TFI.emitZeroCallUsedRegs(getRegsToClearAtExit(Plan.RegsToZero, Exit, TRI),
+                             MBB, InsertPt, RS);
+    break;
+
+  case ClearingStep::ClearFlags:
+    // Nothing emits here yet. It is last in the order because every step in
+    // front of it writes the flags, so a flag clear anywhere else is undone by
+    // what follows it.
+    break;
+  }
+}
+
+/// planClearingSequence - Decide what each step of the sequence does in \p MF.
+///
+/// The steps are planned in the order they run, so that a function asking for
+/// more than one of them is told about them in that order too.
+void PEIImpl::planClearingSequence(MachineFunction &MF,
+                                   ExitClearingPlan &Plan) {
+  Plan.Stack = planClearStack(MF);
+  Plan.Registers = planClearRegisters(MF, Plan.RegsToZero);
+  // Nothing asks for the flags to be cleared and nothing clears them. The step
+  // is planned all the same, so that the sequence a function runs is described
+  // by the plan in full rather than in the parts that have an implementation.
+  Plan.Flags = ClearingDisposition::Unimplemented;
+}
+
+/// planClearStack - Decide what the ClearStack step does in \p MF, reporting a
+/// request the target cannot discharge.
+ClearingDisposition PEIImpl::planClearStack(MachineFunction &MF) {
+  const Function &F = MF.getFunction();
+
+  if (!F.hasFnAttribute("zeroize-stack"))
+    return ClearingDisposition::NotRequested;
+
+  const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
+  if (!TFI.supportsZeroizeStack(MF)) {
+    F.getContext().diagnose(DiagnosticInfoUnsupported{
+        F, "\"zeroize-stack\" is not supported by this target"});
+    return ClearingDisposition::Unsupported;
+  }
+
+  // A target answering that it can clear the frame has nothing to clear it
+  // with yet: trailofbits/vspells-ct-internal-notes#26.
+  return ClearingDisposition::Unimplemented;
+}
+
+/// planClearRegisters - Decide what the ClearRegisters step does in \p MF, and
+/// compute the registers it clears.
+ClearingDisposition PEIImpl::planClearRegisters(MachineFunction &MF,
+                                                BitVector &RegsToZero) {
   const Function &F = MF.getFunction();
 
   if (!F.hasFnAttribute("zero-call-used-regs"))
-    return;
+    return ClearingDisposition::NotRequested;
 
   using namespace ZeroCallUsedRegs;
 
@@ -1245,7 +1596,7 @@ void PEIImpl::insertZeroCallUsedRegs(MachineFunction &MF) {
           .Case("all", ZeroCallUsedRegsKind::All);
 
   if (ZeroRegsKind == ZeroCallUsedRegsKind::Skip)
-    return;
+    return ClearingDisposition::NotRequested;
 
   // Ask the target whether it can discharge the request before computing what
   // to clear. A target that cannot has to say so: emitZeroCallUsedRegs does
@@ -1256,7 +1607,7 @@ void PEIImpl::insertZeroCallUsedRegs(MachineFunction &MF) {
   if (!TFI.supportsZeroCallUsedRegs(MF)) {
     F.getContext().diagnose(DiagnosticInfoUnsupported{
         F, "\"zero-call-used-regs\" is not supported by this target"});
-    return;
+    return ClearingDisposition::Unsupported;
   }
 
   const bool OnlyGPR = static_cast<unsigned>(ZeroRegsKind) & ONLY_GPR;
@@ -1291,7 +1642,7 @@ void PEIImpl::insertZeroCallUsedRegs(MachineFunction &MF) {
   for (const MachineBasicBlock::RegisterMaskPair &LI : MF.front().liveins())
     LiveIns.set(LI.PhysReg);
 
-  BitVector RegsToZero(TRI.getNumRegs());
+  RegsToZero.resize(TRI.getNumRegs());
   for (MCRegister Reg : AllocatableSet.set_bits()) {
     // Skip over fixed registers.
     if (TRI.isFixedRegister(MF, Reg))
@@ -1374,25 +1725,7 @@ void PEIImpl::insertZeroCallUsedRegs(MachineFunction &MF) {
     for (MCRegister Reg : TRI.sub_and_superregs_inclusive(CSReg))
       RegsToZero.reset(Reg.id());
 
-  for (MachineBasicBlock &MBB : MF)
-    if (MBB.isReturnBlock())
-      TFI.emitZeroCallUsedRegs(RegsToZero, MBB, RS);
-}
-
-/// diagnoseUnsupportedZeroizeStack - Report a stack clearing request that the
-/// target cannot discharge.
-void PEIImpl::diagnoseUnsupportedZeroizeStack(MachineFunction &MF) {
-  const Function &F = MF.getFunction();
-
-  if (!F.hasFnAttribute("zeroize-stack"))
-    return;
-
-  const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
-  if (TFI.supportsZeroizeStack(MF))
-    return;
-
-  F.getContext().diagnose(DiagnosticInfoUnsupported{
-      F, "\"zeroize-stack\" is not supported by this target"});
+  return ClearingDisposition::Emit;
 }
 
 /// Replace all FrameIndex operands with physical register references and actual

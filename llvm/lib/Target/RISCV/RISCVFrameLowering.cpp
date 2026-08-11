@@ -1536,10 +1536,8 @@ static MCRegister getLargestFPRegisterOrZero(const RISCVSubtarget &STI,
 
 void RISCVFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
                                               MachineBasicBlock &MBB,
+                                              MachineBasicBlock::iterator MBBI,
                                               RegScavenger *RS) const {
-  // Insertion point.
-  MachineBasicBlock::iterator MBBI = MBB.getFirstTerminator();
-
   // Fake a debug loc.
   DebugLoc DL;
   if (MBBI != MBB.end())
