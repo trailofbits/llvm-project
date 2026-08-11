@@ -125,6 +125,7 @@ add_llvm_component_library(LLVMCodeGen
   MachineDominators.cpp
   MachineFrameInfo.cpp
   MachineFunction.cpp
+  MachineFunctionExits.cpp
   MachineFunctionPass.cpp
   MachineFunctionPrinterPass.cpp
   MachineFunctionSplitter.cpp
