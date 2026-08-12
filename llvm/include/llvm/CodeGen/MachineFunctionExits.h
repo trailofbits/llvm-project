@@ -66,6 +66,20 @@ enum class MachineExitKind {
   /// the function on that path.
   UnwindResume,
 
+  /// A block control does not come back from, ending in something this
+  /// classification cannot account for: inline assembly, or a target
+  /// operation whose effect on control flow is not modelled.
+  ///
+  /// In scope, because being unable to say what an exit does is not the same
+  /// as knowing it does nothing. An opaque instruction at the end of a block
+  /// with no successors may transfer out of the function -- inline assembly
+  /// can jump, issue a system call that does not return, or return into
+  /// another frame -- and the compiler has no way to establish that it does
+  /// not. Clearing in front of it costs a dead sequence when control really
+  /// does stop there, and clearing nothing costs the frame when it does not,
+  /// so the uncertainty is resolved towards clearing.
+  Unknown,
+
   /// A call after which control does not come back to this function: a call to
   /// a noreturn callee such as abort or exit, a throw with no cleanup in this
   /// function to catch it, or longjmp reached as an ordinary call.
@@ -87,11 +101,12 @@ enum class MachineExitKind {
   /// A terminal block control does not leave the function through: a trap, or
   /// a block with nothing in it that an unreachable was lowered to.
   ///
-  /// Out of scope: there is no transfer out of the frame to protect. It is a
-  /// kind rather than an absence so that a block which reaches the end of the
-  /// function without matching any other shape is recorded as classified,
-  /// instead of being indistinguishable from a block the walk failed to
-  /// reach.
+  /// Out of scope: there is no transfer out of the frame to protect. Unlike
+  /// Unknown, this is a positive finding rather than the absence of one. A
+  /// block with no instructions left in it has nothing that could transfer
+  /// anywhere, and an instruction the target has marked as a trap raises a
+  /// fault rather than transferring; anything else that a block with no
+  /// successors ends in is Unknown.
   Unreachable,
 };
 

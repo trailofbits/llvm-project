@@ -79,6 +79,7 @@ bool llvm::isEnforceableExit(MachineExitKind K) {
   case MachineExitKind::TailCall:
   case MachineExitKind::EHScopeReturn:
   case MachineExitKind::UnwindResume:
+  case MachineExitKind::Unknown:
     return true;
   case MachineExitKind::NoReturnCall:
   case MachineExitKind::NonLocalJump:
@@ -98,6 +99,8 @@ StringRef llvm::getMachineExitKindName(MachineExitKind K) {
     return "eh-scope-return";
   case MachineExitKind::UnwindResume:
     return "unwind-resume";
+  case MachineExitKind::Unknown:
+    return "unknown";
   case MachineExitKind::NoReturnCall:
     return "no-return-call";
   case MachineExitKind::NonLocalJump:
@@ -147,7 +150,18 @@ llvm::classifyMachineExit(const MachineBasicBlock &MBB) {
       (Last->isTerminator() && Last->isBarrier() && !Last->isBranch()))
     return MachineExit{&MBB, Last, MachineExitKind::NonLocalJump};
 
-  return MachineExit{&MBB, Last, MachineExitKind::Unreachable};
+  // A trap is where control stops, not where it goes: the target has said so
+  // by marking the instruction, and it is the one shape left here that can be
+  // ruled out rather than merely not recognised.
+  if (Last->getDesc().isTrap())
+    return MachineExit{&MBB, Last, MachineExitKind::Unreachable};
+
+  // Nothing else is known about this block, and not knowing has to be recorded
+  // as not knowing. Falling back on Unreachable here would turn every shape
+  // the classification has not learned -- inline assembly above all -- into a
+  // claim that control stops in the block, which is the one answer that leaves
+  // the frame and the registers alone.
+  return MachineExit{&MBB, Last, MachineExitKind::Unknown};
 }
 
 void llvm::collectMachineFunctionExits(const MachineFunction &MF,

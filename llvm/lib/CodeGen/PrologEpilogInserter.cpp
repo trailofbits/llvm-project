@@ -1504,10 +1504,23 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
     // An exit that is in scope is one the sequence can be placed at, so it has
     // a position by construction. Emitting at the end of the block instead
     // would put the sequence after the instruction control leaves through.
+    //
+    // If that construction ever fails, the compilation fails with it. Carrying
+    // on past an exit the sequence could not be placed at produces the one
+    // output the attribute exists to rule out: a function that reports itself
+    // protected and leaves through a point at which nothing was cleared, with
+    // nothing said about it. There is no way to reach this from IR today; it
+    // is here so that a later change which introduces one is stopped rather
+    // than absorbed.
     MachineBasicBlock::iterator InsertPt = getClearingInsertPoint(MBB, *Exit);
-    assert(InsertPt != MBB.end() && "in-scope exit with nowhere to emit");
-    if (InsertPt == MBB.end())
+    if (InsertPt == MBB.end()) {
+      if (Plan.anyStepEmits())
+        MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+            MF.getFunction(),
+            "clearing sequence could not be placed at an exit of this "
+            "function"});
       continue;
+    }
 
     if (PrintClearingSequence)
       OS << "  " << printMBBReference(MBB) << " "
@@ -1630,7 +1643,19 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
           .Case("all-gpr-arg", ZeroCallUsedRegsKind::AllGPRArg)
           .Case("all-gpr", ZeroCallUsedRegsKind::AllGPR)
           .Case("all-arg", ZeroCallUsedRegsKind::AllArg)
-          .Case("all", ZeroCallUsedRegsKind::All);
+          .Case("all", ZeroCallUsedRegsKind::All)
+          // A mode this version of LLVM does not recognize means the widest
+          // one. The modes are a scale from "skip" to "all", and a name off
+          // the end of what is known here is either a mode added later, whose
+          // author selected it over the ones that already existed, or a
+          // mistake. "all" is the only answer that is safe under both
+          // readings, and it is the reading LangRef already fixes for an
+          // unrecognized "zeroize-stack" mode.
+          //
+          // Without this the switch runs off its end: an assertion in a build
+          // that has them, and in a release compiler an uninitialized mode
+          // that decides what gets cleared. Neither is a decision.
+          .Default(ZeroCallUsedRegsKind::All);
 
   if (ZeroRegsKind == ZeroCallUsedRegsKind::Skip)
     return ClearingDisposition::NotRequested;
@@ -1655,6 +1680,23 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
   const BitVector AllocatableSet(TRI.getAllocatableSet(MF));
 
   // Mark all used registers.
+  //
+  // Every register operand counts, whether the instruction names it or carries
+  // it implicitly. An implicit operand is how the machine layer writes down a
+  // register an instruction touches without being told to, which is exactly
+  // the case where a narrowing this set drives cannot be justified: the
+  // register was written, the value is there, and the mode's promise is that
+  // what the function touched does not outlive it.
+  //
+  // Inline assembly is the case that made this visible. Every register an asm
+  // block names -- its clobber list and its physical-register outputs alike --
+  // reaches the machine layer as an implicit operand of the INLINEASM
+  // instruction, so skipping implicit operands made an asm block invisible
+  // here. A function whose only register traffic was an asm block cleared
+  // nothing at all under a "used" mode, and the asm's registers carried their
+  // contents past the return. Opaque target operations behave the same way for
+  // the same reason: a division's remainder register, a return value that no
+  // longer has a copy naming it, anything a pseudo defines on the side.
   BitVector UsedRegs(TRI.getNumRegs());
   if (OnlyUsed)
     for (const MachineBasicBlock &MBB : MF)
@@ -1668,8 +1710,7 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
             continue;
 
           MCRegister Reg = MO.getReg();
-          if (AllocatableSet[Reg.id()] && !MO.isImplicit() &&
-              (MO.isDef() || MO.isUse()))
+          if (AllocatableSet[Reg.id()] && (MO.isDef() || MO.isUse()))
             UsedRegs.set(Reg.id());
         }
       }
