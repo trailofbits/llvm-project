@@ -16523,8 +16523,7 @@ writes with any other value, and in particular may not do so because a later
 store overwrites the same bytes, because the object's lifetime ends, or because
 the object is unreachable from the rest of the program: the region being
 provably dead afterwards is the expected case here, not a reason to drop the
-write. Calls also carry `noduplicate`, so one call may not be turned into
-several.
+write.
 
 A volatile '`llvm.memset.*`' is not removable either, so this part of the
 contract is not what separates the two; it is stated because a clearing

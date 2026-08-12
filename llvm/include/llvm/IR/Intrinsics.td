@@ -1213,12 +1213,12 @@ def int_experimental_memset_pattern
 // can attribute to a single location, so it has nothing to remove; the
 // argument memory half keeps the write to the region itself visible to alias
 // analysis. llvm.prefetch above is pessimistic in the same way and for a
-// related reason. IntrNoDuplicate keeps a single clear from becoming several.
+// related reason.
 def int_zeroize
     : DefaultAttrsIntrinsic<[],
       [llvm_anyptr_ty,  // Destination.
        llvm_anyint_ty], // Number of bytes to clear.
-      [IntrWriteMem, IntrInaccessibleMemOrArgMemOnly, IntrNoDuplicate,
+      [IntrWriteMem, IntrInaccessibleMemOrArgMemOnly,
        NoCapture<ArgIndex<0>>, WriteOnly<ArgIndex<0>>]>;
 
 // FIXME: Add version of these floating point intrinsics which allow non-default
