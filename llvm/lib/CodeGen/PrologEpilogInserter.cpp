@@ -333,7 +333,7 @@ class PEIImpl {
   void emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
                         MachineBasicBlock &MBB,
                         MachineBasicBlock::iterator InsertPt,
-                        BitVector &ScratchRegs);
+                        BitVector &ScratchRegs, BitVector &ClearedRegs);
 
 public:
   PEIImpl(MachineOptimizationRemarkEmitter *ORE) : ORE(ORE) {}
@@ -1606,6 +1606,107 @@ static bool anyRegNeededAtExit(const BitVector &Regs,
 }
 #endif
 
+//===----------------------------------------------------------------------===//
+// Keeping the clears.
+//
+// A register clear is an instruction whose only effect is to overwrite a
+// register nothing reads afterwards, which is the definition of dead code. It
+// is emitted precisely because nothing reads the register: the value being
+// destroyed is one the function is finished with, and if anything still needed
+// it the clear would be wrong. So the machine-level reason to keep it is
+// missing from the instruction itself, and it survives only for as long as
+// nothing looks. This is the machine-level counterpart of the non-removability
+// the llvm.zeroize intrinsic already carries in the IR; an intrinsic's
+// properties stop meaning anything once it has been lowered to an XOR.
+//
+// What supplies the missing reason is the exit. Recording the cleared
+// registers as used at the point control leaves says what is in fact true:
+// their values at the point of leaving are part of what the function leaves
+// behind, so an instruction that sets them has an effect that outlives the
+// function. A pass that removes an instruction because its definitions are
+// dead then finds them live, and leaves the clear alone.
+//
+// The registers are named as implicit uses of the return, and only of a
+// return. The other in-scope exits leave through a call or through an
+// instruction the classification could not read, and neither is a place to
+// state what the function leaves behind: a call's register operands describe
+// its arguments and an opaque instruction's describe whatever the target or
+// the asm string put there. The clears at those exits stay as they are.
+//
+// A register operand on an exit is not read only as liveness, which is why the
+// target gets a say in which register is named: see
+// TargetFrameLowering::getClearedRegExitAnchor. On X86 the collision is not
+// hypothetical. The pass that inserts vzeroupper treats a return naming a YMM
+// or ZMM register as a return that carries a vector value and skips the
+// vzeroupper in front of it, so naming a cleared YMM there drops the
+// vzeroupper from an AVX function that clears its registers and leaves the
+// caller an AVX-to-SSE transition to pay. X86 answers with the 128-bit part of
+// the register instead, which keeps the definition live -- a definition is
+// live as soon as any part of it is -- and says nothing about vector state.
+//
+// An extra instruction was tried in place of the operands and does not work.
+// FAKE_USE is the pseudo for exactly this ("represents a use of the operand
+// but generates no code"), it is explicitly exempted from
+// MachineInstr::wouldBeTriviallyDead, and it would work at every exit rather
+// than only at returns. But it is not free of output: the asm printer writes a
+// "# fake_use:" comment for it, so every function that clears registers grows
+// a line, and a dozen existing tests read the emitted code line by line.
+// Recording the fact on an instruction that is already there costs nothing.
+//
+// isBarrier is not the mechanism for this, and was considered and rejected. It
+// says that control does not fall through the instruction -- Target.td spells
+// the field "Can control flow fall through this instruction?" -- which is a
+// statement about the CFG and is what makes an unconditional branch different
+// from a conditional one. It has nothing to say about whether an instruction's
+// effects can be discarded, it would be false of a clear in any case, and
+// setting it would misdescribe the block to everything that reads it.
+//
+// The exposure this closes is narrower than it looks, and saying so is part of
+// the change. DeadMachineInstructionElim is the pass that removes instructions
+// on exactly these grounds, and in the default pipeline it runs twice, both
+// times in addMachineSSAOptimization, which is before register allocation and
+// so long before this. Nothing after prologue/epilogue insertion runs it: the
+// passes that follow are MachineLateInstrsCleanup, BranchFolder,
+// TailDuplicate, MachineCopyPropagation, the post-RA expansions and
+// schedulers, block placement and the target's pre-emit passes, and none of
+// them removes an instruction for having no live definitions.
+// MachineLateInstrsCleanup comes closest, and it declines an XOR before
+// reaching the question: its candidate test rejects an instruction that reads
+// a register other than the frame register, which the two operands of the XOR
+// are.
+//
+// So this is not a fix for something the compiler does today. It is the
+// property being made to hold rather than being left to the pipeline's
+// composition, and the difference is easy to see: run the pass that would
+// remove them over the code this emits and, before this change, every clear in
+// a function goes.
+//===----------------------------------------------------------------------===//
+
+/// Record the registers \p ClearedRegs the sequence cleared at \p Exit as
+/// implicit uses of the return control leaves through, so that the clears are
+/// observably live and cannot be removed for having no live definitions.
+static void anchorClearedRegsAtExit(MachineBasicBlock &MBB,
+                                    const MachineExit &Exit,
+                                    const BitVector &ClearedRegs,
+                                    const TargetFrameLowering &TFI) {
+  if (ClearedRegs.none() || !Exit.MI || !Exit.MI->isReturn())
+    return;
+
+  const MachineFunction &MF = *MBB.getParent();
+
+  for (MachineInstr &MI : MBB.terminators()) {
+    if (&MI != Exit.MI)
+      continue;
+    for (unsigned Reg : ClearedRegs.set_bits()) {
+      MCRegister Anchor = TFI.getClearedRegExitAnchor(MF, MCRegister(Reg));
+      if (Anchor && !MI.hasRegisterImplicitUseOperand(Anchor))
+        MI.addOperand(MachineOperand::CreateReg(Anchor, /*isDef=*/false,
+                                                /*isImp=*/true));
+    }
+    return;
+  }
+}
+
 /// insertClearingSequences - Run the clearing sequence at every exit of \p MF
 /// that is in scope.
 ///
@@ -1625,6 +1726,7 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
     return;
 
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+  const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
 
   raw_ostream &OS = errs();
   if (PrintClearingSequence)
@@ -1668,10 +1770,14 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
     // at this exit; see the comment on scratch registers above.
     BitVector ScratchRegs(TRI.getNumRegs());
 
+    // What the sequence cleared here, collected as it runs and used once it
+    // has finished; see the comment on keeping the clears above.
+    BitVector ClearedRegs(TRI.getNumRegs());
+
     for (ClearingStep Step : ClearingSequence) {
       ClearingDisposition D = Plan.dispositionOf(Step);
       if (D == ClearingDisposition::Emit)
-        emitClearingStep(Step, Plan, MBB, InsertPt, ScratchRegs);
+        emitClearingStep(Step, Plan, MBB, InsertPt, ScratchRegs, ClearedRegs);
       if (PrintClearingSequence)
         OS << " " << getClearingStepName(Step) << "="
            << getClearingDispositionName(D);
@@ -1690,6 +1796,15 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
       }
       OS << "\n";
     }
+
+    // Strictly after the sequence has run, and so strictly after the register
+    // clear has decided what it covers here. The registers this adds to the
+    // exit are registers the exit reads, and computeRegsToClearAtExit spares
+    // every register the exit reads: add them first and the register clear
+    // spares exactly the registers it was about to clear, and spares them
+    // silently, the result being a function that reports itself protected and
+    // clears nothing.
+    anchorClearedRegsAtExit(MBB, *Exit, ClearedRegs, TFI);
   }
 
   if (PrintClearingSequence)
@@ -1703,13 +1818,17 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
 /// used to it, and the register clear reads it; see the comment on scratch
 /// registers above.
 ///
+/// \p ClearedRegs collects the registers the sequence has cleared here, for
+/// the implicit uses that keep the clears; see the comment on keeping the
+/// clears above.
+///
 /// A step that emits nothing today still has its case here, so that the
 /// implementation of it lands at the position the order gives it rather than
 /// wherever it is convenient.
 void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
                                MachineBasicBlock &MBB,
                                MachineBasicBlock::iterator InsertPt,
-                               BitVector &ScratchRegs) {
+                               BitVector &ScratchRegs, BitVector &ClearedRegs) {
   MachineFunction &MF = *MBB.getParent();
   const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
@@ -1741,7 +1860,36 @@ void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
            "whose value at the exit something depends on");
     RegsToZero |= ScratchRegs;
 
+    // The registers to put on the exit are the ones the clear writes, which
+    // are not the ones it was asked to clear: the request names every
+    // allocatable alias of a register, and the target picks which of them to
+    // write, so x86 is asked for %rax, %eax, %ax, %al and %ah and emits one
+    // instruction defining %eax. Reading the emitted instructions back is what
+    // gives the registers that exist. The range is what was inserted in front
+    // of InsertPt just now.
+    MachineBasicBlock::iterator Emitted = InsertPt;
+    bool AtBegin = Emitted == MBB.begin();
+    MachineBasicBlock::iterator Before;
+    if (!AtBegin)
+      Before = std::prev(Emitted);
+
     TFI.emitZeroCallUsedRegs(RegsToZero, MBB, InsertPt, RS);
+
+    for (MachineInstr &MI :
+         make_range(AtBegin ? MBB.begin() : std::next(Before), InsertPt))
+      for (const MachineOperand &MO : MI.operands()) {
+        if (!MO.isReg() || !MO.isDef() || !MO.getReg())
+          continue;
+        // Only what was asked for. A clear writes registers on the side that
+        // are not part of what it destroys -- an XOR sets the flags -- and
+        // saying the function leaves those behind would be saying something
+        // else, and something untrue.
+        for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(MO.getReg()))
+          if (RegsToZero.test(SReg)) {
+            ClearedRegs.set(MO.getReg().id());
+            break;
+          }
+      }
     break;
   }
 

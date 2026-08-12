@@ -246,6 +246,22 @@ public:
     return false;
   }
 
+  /// getClearedRegExitAnchor - The register to name on the instruction control
+  /// leaves through, to record that the clearing sequence wrote \p Reg there
+  /// and that a pass which removes instructions with no live definitions must
+  /// therefore leave the clear alone.
+  ///
+  /// The default is \p Reg itself, which is the direct statement of what
+  /// happened. A target overrides this where naming a register at an exit
+  /// means something to it beyond liveness, and returns instead a register
+  /// overlapping \p Reg -- which is enough, because a definition is live as
+  /// soon as any part of it is -- or a null register, which leaves the clear
+  /// of \p Reg unanchored.
+  virtual MCRegister getClearedRegExitAnchor(const MachineFunction &MF,
+                                             MCRegister Reg) const {
+    return Reg;
+  }
+
   /// With basic block sections, emit callee saved frame moves for basic blocks
   /// that are in a different section.
   virtual void
