@@ -288,6 +288,11 @@ private:
                             MachineBasicBlock::iterator MBBI,
                             RegScavenger *RS) const override;
 
+  /// The register to name on a return to record that the clearing sequence
+  /// wrote \p Reg. A YMM or ZMM register is answered with its 128-bit part.
+  MCRegister getClearedRegExitAnchor(const MachineFunction &MF,
+                                     MCRegister Reg) const override;
+
   void adjustFrameForMsvcCxxEh(MachineFunction &MF) const;
 
   /// Aligns the stack pointer by ANDing it with -MaxAlign.
