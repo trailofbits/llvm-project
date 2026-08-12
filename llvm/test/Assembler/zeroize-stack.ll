@@ -1,4 +1,6 @@
-; Textual and bitcode round-trips of the "zeroize-stack" function attribute.
+; Round-trip of the "zeroize-stack" function attribute. The input spells the
+; attribute inline on the define and llvm-dis prints it as an attribute group,
+; so the second llvm-as is what covers parsing the group form.
 ; RUN: llvm-as < %s | llvm-dis | llvm-as | llvm-dis | FileCheck %s
 
 define void @used() "zeroize-stack"="used" {
