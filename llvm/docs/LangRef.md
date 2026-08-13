@@ -16480,10 +16480,10 @@ declare void @llvm.zeroize.p0.i64(ptr <dest>, i64 <len>)
 
 ##### Overview:
 
-The '`llvm.zeroize.*`' intrinsics write zero over a block of memory so that
-whatever can read those addresses afterwards cannot recover what they held, and
-guarantee that no external functions are called and no call frame is established
-in order to do it.
+The '`llvm.zeroize.*`' intrinsics write zero over a block of memory so that its
+former contents cannot be recovered from those addresses, and guarantee that no
+external functions are called and no call frame is established in order to do
+it.
 
 ##### Arguments:
 
@@ -16507,37 +16507,20 @@ behavior is undefined.
 The behavior of '`llvm.zeroize.*`' is equivalent to the behavior of
 '`llvm.memset.*`' with a value of zero and `isvolatile` set to `true`, but the
 generated code is guaranteed not to call any external functions and not to
-establish a call frame in order to perform the clear. That guarantee is the
-property the intrinsic exists for: a clear lowered through `memset` spills the
-values live across it and enlarges the frame, leaving in the very stack and
-registers being cleaned up the residue the clear was meant to remove.
-'`llvm.memset.inline.*`' provides the no-external-call half of it, but only
-until a transform rewrites it into a plain '`llvm.memset.*`', which is permitted
-precisely because those two are equivalent.
+establish a call frame in order to perform the clear.
 
-Performing the write is itself the effect the call is there for, rather than a
-means of setting up a value some later read is meant to observe, so the usual
-grounds for discarding a store do not apply to it. A transform may not delete a
-call to '`llvm.zeroize.*`', narrow the region it covers, or replace the bytes it
-writes with any other value, and in particular may not do so because a later
-store overwrites the same bytes, because the object's lifetime ends, or because
-the object is unreachable from the rest of the program: the region being
-provably dead afterwards is the expected case here, not a reason to drop the
-write.
-
-A volatile '`llvm.memset.*`' is not removable either, so this part of the
-contract is not what separates the two; it is stated because a clearing
-intrinsic that could be discarded would be useless, not because it is the
-reason the intrinsic exists.
+A transform may not delete a call to '`llvm.zeroize.*`', narrow the region it
+covers, or replace the bytes it writes with any other value, and in particular
+may not do so because a later store overwrites the same bytes, because the
+object's lifetime ends, or because the object is unreachable from the rest of
+the program.
 
 A transform may move a call to '`llvm.zeroize.*`' to a later point on the same
 control-flow paths when nothing in between can read the region, and may combine
 two calls covering adjacent or overlapping regions into one call covering their
 union.
 
-The clearing sequence a given target emits is specified separately; the
-guarantee that it calls no external function and establishes no call frame holds
-for every target.
+The clearing sequence a given target emits is specified separately.
 
 (int_sqrt)=
 
