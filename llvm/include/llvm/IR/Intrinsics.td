@@ -1200,6 +1200,27 @@ def int_experimental_memset_pattern
        NoCapture<ArgIndex<0>>, WriteOnly<ArgIndex<0>>,
        ImmArg<ArgIndex<3>>]>;
 
+// Clear the region [dest, dest + len). The write itself is the observable
+// effect of the call, so it has to survive even where the region is provably
+// never read again. A volatile memset survives too; what this intrinsic adds
+// on top is the guarantee that the clear lowers without a libcall and without
+// a call frame, which no attribute on a memset expresses. See the LangRef
+// entry.
+//
+// Claiming inaccessible memory in addition to argument memory is what carries
+// the survival half. It is more pessimistic than the intrinsic really is, but a write that
+// is not confined to argument pointees is not a write dead store elimination
+// can attribute to a single location, so it has nothing to remove; the
+// argument memory half keeps the write to the region itself visible to alias
+// analysis. llvm.prefetch above is pessimistic in the same way and for a
+// related reason.
+def int_zeroize
+    : DefaultAttrsIntrinsic<[],
+      [llvm_anyptr_ty,  // Destination.
+       llvm_anyint_ty], // Number of bytes to clear.
+      [IntrWriteMem, IntrInaccessibleMemOrArgMemOnly,
+       NoCapture<ArgIndex<0>>, WriteOnly<ArgIndex<0>>]>;
+
 // FIXME: Add version of these floating point intrinsics which allow non-default
 // rounding modes and FP exception handling.
 
