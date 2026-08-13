@@ -16504,11 +16504,6 @@ If `<len>` is not a well-defined value, the behavior is undefined.
 If `<len>` is not zero, `<dest>` should be well-defined, otherwise the
 behavior is undefined.
 
-The behavior of '`llvm.zeroize.*`' is equivalent to the behavior of
-'`llvm.memset.*`' with a value of zero and `isvolatile` set to `true`, but the
-generated code is guaranteed not to call any external functions and not to
-establish a call frame in order to perform the clear.
-
 A transform may not delete a call to '`llvm.zeroize.*`', narrow the region it
 covers, or replace the bytes it writes with any other value, and in particular
 may not do so because a later store overwrites the same bytes, because the
