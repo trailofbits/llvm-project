@@ -2658,23 +2658,24 @@ fn -> other_fn -> other_fn ; fn is norecurse
     how much of the frame is cleared:
 
     - `"used"` clears every stack slot the function used.
-    - `"sensitive"` clears the slots that
-      {ref}`sensitivity metadata <md_sensitive>` identifies,
-      together with every slot whose contents cannot be traced back to a
-      source-level object. The second half is not optional: spill slots, the
-      callee-save area, and alignment padding can all hold copies of data that
-      was marked, and nothing records where those copies came from.
+    - `"sensitive"` clears every stack slot except those whose contents can be
+      traced back to a source-level object marked
+      {ref}`nozeroize <md_nozeroize>`. Slots whose contents cannot be
+      traced back to a source-level object are cleared regardless: spill slots,
+      the callee-save area, and alignment padding can all hold copies of data
+      that was not marked, and nothing records where those copies came from.
 
     Any other value is treated as `"used"`. An unrecognized mode must not
     clear less than a recognized one.
 
     `"sensitive"` is a request for precision, not a weaker guarantee: it
-    narrows what a function clears relative to `"used"`, and it is only as
-    accurate as the metadata. A producer that marks an object is responsible
-    for the mark surviving to codegen; where it cannot be, `"used"` is the
-    mode to ask for. What a lost mark can never do is weaken the guarantee to
-    nothing: the mode clears every frame slot with no source-level provenance
-    whether or not anything is marked.
+    narrows what a function clears relative to `"used"`, and only where the
+    metadata says a slot can be spared. A producer that marks an object is
+    responsible for the object holding nothing that needs clearing; where that
+    cannot be established, leaving the object unmarked costs precision and
+    nothing else. What a lost mark can never do is weaken the guarantee: an
+    unmarked object is cleared, as is every frame slot with no source-level
+    provenance.
 
     A transform may not leave a function carrying this attribute with a frame
     that is not cleared on every return from it. How the attribute constrains
@@ -8013,21 +8014,21 @@ call void @llvm.memcpy.p1.p1.i64(ptr addrspace(1) %d,
         !"nvvm.l2_prefetch_size", !"128B" }
 ```
 
-(md_sensitive)=
+(md_nozeroize)=
 
-#### '`sensitive`' Metadata
+#### '`nozeroize`' Metadata
 
-`sensitive` metadata may be attached to an `alloca` to record that the object
-it allocates holds data that should not be left readable in the stack frame
+`nozeroize` metadata may be attached to an `alloca` to record that the
+object it allocates holds no data that needs clearing from the stack frame
 once the function is done with it. It identifies the objects that the
-`"sensitive"` mode of the `"zeroize-stack"` function attribute clears.
+`"sensitive"` mode of the `"zeroize-stack"` function attribute may leave alone.
 
 This metadata is only used as a flag, so the associated node must be empty. Its
 presence on the `alloca` is the entire signal; the contents of the node are
 reserved for future use.
 
 ```llvm
-%round_keys = alloca [176 x i8], align 16, !sensitive !0
+%loop_bound = alloca i64, align 8, !nozeroize !0
 
 ...
 !0 = !{}
@@ -8036,33 +8037,26 @@ reserved for future use.
 The metadata is a hint that lets a function clear less of its frame than it
 would otherwise have to. It is not itself part of any guarantee, and no
 guarantee is conditioned on it being present, accurate, or complete. The
-obligation to clear a frame comes from the `"zeroize-stack"` attribute alone,
-and the `"sensitive"` mode of that attribute clears every frame object whose
-contents cannot be traced back to a source-level object — spill slots, the
-callee-save area, alignment padding — whether or not anything is marked.
+obligation to clear a frame comes from the `"zeroize-stack"` attribute alone.
+An unmarked object is cleared, and so is every slot whose contents cannot be
+traced back to a source-level object: spill slots, the callee-save area, and
+alignment padding are cleared whether or not anything is marked.
 
 Transforms must respect the one-directional rule this sets up:
 
-- Dropping the metadata is always permitted. A transform is never required to
-  preserve or propagate it in order to be correct, and no correctness argument
-  may rest on it having survived. Losing a mark degrades toward clearing more
-  by construction, rather than by a rule a pass has to apply: because the mode
-  clears every slot whose contents it cannot trace back to a source-level
-  object, a marked object that is split, merged, replaced, or promoted without
-  the metadata following it leaves its contents in slots that are cleared for
-  want of provenance. Nothing records that a mark existed, so no pass can
-  detect that one went missing, and none is asked to. Where the provenance of
-  the frame cannot be established at all, the mode clears every stack slot the
-  function used.
-- Attaching the metadata to an object that was not marked before is likewise
-  permitted, and can only widen what is cleared.
-- The absence of the metadata on a frame object is not a statement that the
-  object is insensitive. A transform may not conclude from an object being
-  unmarked that its contents need not be cleared, and may not shrink the set of
-  objects a function clears on the strength of what is or is not marked.
-  Clearing only the marked objects together with the objects of unknown
-  provenance is the request that the `"sensitive"` mode expresses; it is not a
-  licence for a transform to narrow that set further.
+- Dropping the metadata is always permitted, from some of the marked objects or
+  from all of them. An unmarked object is treated as holding data that needs
+  clearing, so a mark that does not survive can only widen what a function
+  clears. A transform is never required to preserve or propagate the metadata
+  in order to be correct, and no correctness argument may rest on it having
+  survived.
+- Attaching the metadata to an object that was not marked before narrows what
+  is cleared, so it is only permitted where the object is known to hold no data
+  that needs clearing. A transform that cannot establish that leaves the object
+  unmarked, which costs precision and nothing else.
+- A mark describes the object, not the slots its contents reach. Copying the
+  contents of a marked object into a slot whose provenance cannot be traced
+  does not spare that slot.
 
 Whether an individual transform propagates this metadata across the objects it
 creates is therefore a question of precision rather than of correctness, and is
