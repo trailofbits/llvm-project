@@ -8045,11 +8045,15 @@ Transforms must respect the one-directional rule this sets up:
 
 - Dropping the metadata is always permitted. A transform is never required to
   preserve or propagate it in order to be correct, and no correctness argument
-  may rest on it having survived. Where the marked set has stopped describing
-  the frame, because a marked object was split, merged, replaced, or promoted
-  and the metadata did not follow, the response is to clear more, falling back
-  at the limit to clearing every stack slot the function used. It is never to
-  clear less.
+  may rest on it having survived. Losing a mark degrades toward clearing more
+  by construction, rather than by a rule a pass has to apply: because the mode
+  clears every slot whose contents it cannot trace back to a source-level
+  object, a marked object that is split, merged, replaced, or promoted without
+  the metadata following it leaves its contents in slots that are cleared for
+  want of provenance. Nothing records that a mark existed, so no pass can
+  detect that one went missing, and none is asked to. Where the provenance of
+  the frame cannot be established at all, the mode clears every stack slot the
+  function used.
 - Attaching the metadata to an object that was not marked before is likewise
   permitted, and can only widen what is cleared.
 - The absence of the metadata on a frame object is not a statement that the
