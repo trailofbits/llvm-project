@@ -7,9 +7,21 @@
 ; "sensitive" callee, and an unannotated caller takes neither. A callee that does
 ; not carry the attribute is unconstrained by this. A request to inline does not
 ; override the rule.
+;
+; LangRef requires that an unrecognized mode not clear less than a recognized
+; one, so the unrecognized-mode cases here pin that direction: the mode is read
+; as clearing the most, not the least.
 
 ; RUN: opt < %s -passes=inline -S | FileCheck %s
 ; RUN: opt < %s -passes='default<O2>' -S | FileCheck %s --check-prefix=O2
+
+;; Each refusal is checked against the reason the inliner reports for it, so a
+;; refusal that fires for some unrelated cause, or inlining being switched off
+;; altogether, fails the test instead of passing it. The implicit-check-not
+;; makes the list exhaustive: an inline that stops being refused, or a refusal
+;; that appears where none is expected, is a failure either way.
+; RUN: opt < %s -passes=inline -pass-remarks-missed=inline -disable-output 2>&1 \
+; RUN:   | FileCheck %s --check-prefix=REMARK --implicit-check-not="remark: "
 
 declare void @sink(i32)
 
@@ -19,6 +31,15 @@ define void @zeroize_used_callee(i32 %x) "zeroize-stack"="used" {
 }
 
 define void @zeroize_sensitive_callee(i32 %x) "zeroize-stack"="sensitive" {
+  call void @sink(i32 %x)
+  ret void
+}
+
+;; Not a mode this or any other version of the attribute defines. LangRef gives
+;; any unrecognized value the meaning of "used", the widest mode, so this callee
+;; promises a clear of its whole frame just as a "used" one does.
+
+define void @zeroize_unrecognized_callee(i32 %x) "zeroize-stack"="not-a-real-mode" {
   call void @sink(i32 %x)
   ret void
 }
@@ -46,6 +67,9 @@ define void @unannotated_caller(i32 %x) {
 ; O2: call void @zeroize_used_callee(
 ; O2: call void @zeroize_sensitive_callee(
 ; O2-NOT: call void @sink(
+;
+; REMARK: remark: {{.*}} 'zeroize_used_callee' not inlined into 'unannotated_caller'{{.*}}: conflicting attributes
+; REMARK: remark: {{.*}} 'zeroize_sensitive_callee' not inlined into 'unannotated_caller'{{.*}}: conflicting attributes
   call void @zeroize_used_callee(i32 %x)
   call void @zeroize_sensitive_callee(i32 %x)
   ret void
@@ -108,7 +132,61 @@ define void @used_into_sensitive_caller(i32 %x) "zeroize-stack"="sensitive" {
 ; O2-LABEL: define void @used_into_sensitive_caller(
 ; O2: call void @zeroize_used_callee(
 ; O2-NOT: call void @sink(
+;
+; REMARK: remark: {{.*}} 'zeroize_used_callee' not inlined into 'used_into_sensitive_caller'{{.*}}: conflicting attributes
   call void @zeroize_used_callee(i32 %x)
+  ret void
+}
+
+;; An unrecognized mode is treated as "used", the widest mode, and the direction
+;; that matters is the one LangRef forbids: it must not be read as clearing the
+;; least. So an unrecognized-mode callee is refused into a "sensitive" caller,
+;; exactly as a "used" callee is. An implementation that fell back to clearing
+;; the least, or that ignored a mode it could not parse, would inline here.
+
+define void @unrecognized_into_sensitive_caller(i32 %x) "zeroize-stack"="sensitive" {
+; CHECK-LABEL: define void @unrecognized_into_sensitive_caller(
+; CHECK: call void @zeroize_unrecognized_callee(
+; CHECK-NOT: call void @sink(
+;
+; O2-LABEL: define void @unrecognized_into_sensitive_caller(
+; O2: call void @zeroize_unrecognized_callee(
+; O2-NOT: call void @sink(
+;
+; REMARK: remark: {{.*}} 'zeroize_unrecognized_callee' not inlined into 'unrecognized_into_sensitive_caller'{{.*}}: conflicting attributes
+  call void @zeroize_unrecognized_callee(i32 %x)
+  ret void
+}
+
+;; The same reading in the permitted direction: an unrecognized-mode caller
+;; clears its whole frame, so it takes a "sensitive" callee, which asked for
+;; less. A mode that could not be parsed is not a reason to refuse.
+
+define void @sensitive_into_unrecognized_caller(i32 %x) "zeroize-stack"="not-a-real-mode" {
+; CHECK-LABEL: define void @sensitive_into_unrecognized_caller(
+; CHECK-NOT: call void @zeroize_sensitive_callee(
+; CHECK: call void @sink(
+;
+; O2-LABEL: define void @sensitive_into_unrecognized_caller(
+; O2-NOT: call void @zeroize_sensitive_callee(
+; O2: call void @sink(
+  call void @zeroize_sensitive_callee(i32 %x)
+  ret void
+}
+
+;; Two different unrecognized modes: both mean "used", so neither clears less
+;; than the other and the inline goes through. Two unequal strings are not a
+;; mismatch when both denote the widest mode.
+
+define void @unrecognized_into_unrecognized_caller(i32 %x) "zeroize-stack"="also-not-a-real-mode" {
+; CHECK-LABEL: define void @unrecognized_into_unrecognized_caller(
+; CHECK-NOT: call void @zeroize_unrecognized_callee(
+; CHECK: call void @sink(
+;
+; O2-LABEL: define void @unrecognized_into_unrecognized_caller(
+; O2-NOT: call void @zeroize_unrecognized_callee(
+; O2: call void @sink(
+  call void @zeroize_unrecognized_callee(i32 %x)
   ret void
 }
 
@@ -154,6 +232,26 @@ define void @alwaysinline_caller(i32 %x) {
 ; O2-LABEL: define void @alwaysinline_caller(
 ; O2: call void @zeroize_alwaysinline_callee(
 ; O2-NOT: call void @sink(
+;
+; REMARK: remark: {{.*}} 'zeroize_alwaysinline_callee' not inlined into 'alwaysinline_caller'{{.*}}: incompatible zeroize-stack attributes
+  call void @zeroize_alwaysinline_callee(i32 %x) alwaysinline
+  ret void
+}
+
+;; The same path in the permitted direction, so that the rule being consulted
+;; there is pinned as a rule and not as a blanket refusal: the alwaysinline
+;; callee goes into a caller whose mode clears at least as much, and the call
+;; is gone. A check that only ever saw the refusal above would still pass if
+;; this path refused everything.
+
+define void @alwaysinline_used_caller(i32 %x) "zeroize-stack"="used" {
+; CHECK-LABEL: define void @alwaysinline_used_caller(
+; CHECK-NOT: call void @zeroize_alwaysinline_callee(
+; CHECK: call void @sink(
+;
+; O2-LABEL: define void @alwaysinline_used_caller(
+; O2-NOT: call void @zeroize_alwaysinline_callee(
+; O2: call void @sink(
   call void @zeroize_alwaysinline_callee(i32 %x) alwaysinline
   ret void
 }

@@ -2610,11 +2610,11 @@ static constexpr StringRef ZeroizeStackNarrowestMode = "sensitive";
 
 static bool checkZeroizeStack(const Function &Caller, const Function &Callee) {
   // A function carrying "zeroize-stack" promises to clear its own frame before
-  // returning. Inlining dissolves that frame into the caller's, so the bytes the
-  // callee promised to clear become bytes of the caller's frame: a caller that
-  // clears at least as much of its own frame still clears them, while a caller
-  // that clears nothing, or clears less, leaves them behind with nothing in the
-  // IR to record the obligation.
+  // returning. Inlining dissolves that frame into the caller's, so the bytes
+  // the callee promised to clear become bytes of the caller's frame: a caller
+  // that clears at least as much of its own frame still clears them, while a
+  // caller that clears nothing, or clears less, leaves them behind with nothing
+  // in the IR to record the obligation.
   //
   // A callee without the attribute promises nothing, so it goes anywhere. That
   // direction is worth encouraging where the caller is protected: the callee's
