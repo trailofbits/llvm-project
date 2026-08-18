@@ -1,22 +1,38 @@
-; Which registers the clear covers is now decided at each exit, but whether the
-; step runs at all is still decided for the function. The two are easy to
-; confuse once one of them has moved, and a target that refuses the request is
-; where the difference shows: ARM cannot clear call-used registers, so a
-; function that asks for it has to be told once, however many exits it has, and
-; every exit has to report the same refusal rather than some of them planning
-; their own.
+; Which registers the clear covers is decided at each exit, and the two exits of
+; this function need different registers: the tail call needs the ones it is
+; passing arguments in, the return needs the one it is returning in. A set
+; computed once for the function would have to spare the union and would clear
+; less at both.
+;
+; Whether the step runs at all is still decided for the function, which is the
+; other half of what this pins: one plan, many exits.
 
-; RUN: not llc -mtriple=armv7-unknown-linux-gnueabi -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck %s
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=SEQ
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi %s -o - | FileCheck %s
 
 declare i32 @callee(i32, i32)
 
-; CHECK:      error: {{.*}}in function two_exits i32 (i1, i32, i32): "zero-call-used-regs" is not supported by this target
-; CHECK-NOT:  error:
-; CHECK-LABEL: clearing sequence for function 'two_exits':
-; CHECK-NEXT:  %bb.1 tail-call: clear-stack=not-requested clear-registers=unsupported clear-flags=unimplemented
-; CHECK-NEXT:  %bb.2 return: clear-stack=not-requested clear-registers=unsupported clear-flags=unimplemented
-; CHECK-NEXT:  end clearing sequence for function 'two_exits'
-define i32 @two_exits(i1 %c, i32 %a, i32 %b) "zero-call-used-regs"="used-gpr" {
+; SEQ-LABEL: clearing sequence for function 'two_exits':
+; SEQ-NEXT:   %bb.1 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:   %bb.2 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:  end clearing sequence for function 'two_exits'
+
+; CHECK-LABEL: two_exits:
+; The tail call is passing arguments in r0 and r1, so it keeps them and clears
+; what is left.
+; CHECK:         mov r0, r1
+; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    mov r3, #0
+; CHECK-NEXT:    mov r12, #0
+; CHECK-NEXT:    b callee
+; The return is returning in r0, so it keeps only that one, and r2 -- which the
+; tail-call exit had to spare -- is cleared here.
+; CHECK:         add r0, r1, r2
+; CHECK-NEXT:    mov r2, #0
+; CHECK-NEXT:    mov r3, #0
+; CHECK-NEXT:    mov r12, #0
+; CHECK-NEXT:    bx lr
+define i32 @two_exits(i1 %c, i32 %a, i32 %b) "zero-call-used-regs"="all-gpr" {
 entry:
   br i1 %c, label %tail, label %plain
 
