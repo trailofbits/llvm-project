@@ -2681,15 +2681,20 @@ fn -> other_fn -> other_fn ; fn is norecurse
     that is not cleared on every return from it.
 
     Inlining is constrained accordingly. A function that carries this attribute
-    is not inlined into any caller, because inlining dissolves the callee's
-    frame into the caller's: the bytes the callee promised to clear before
-    returning become bytes of a frame that outlives the point where the clear
-    was due, and nothing remains to record the obligation. This holds however
-    the caller is annotated, including when the caller carries the attribute
-    itself, with any value. The caller's attribute is a promise about the
-    caller's own frame and its own returns, and neither reproduces the clear
-    the callee owed at the point the callee would have returned nor necessarily
-    covers as much of the frame.
+    is inlined only into a caller that carries it as well, and only where the
+    caller's mode clears at least as much of the frame as the callee's mode does.
+    Inlining dissolves the callee's frame into the caller's, so the bytes the
+    callee promised to clear before returning become bytes of the caller's frame:
+    a caller clearing at least as much still clears them, while an unannotated
+    caller, or one clearing less, leaves them with nothing to record the
+    obligation. Because `"used"` is the widest mode, a `"used"` caller may inline
+    a callee of either mode, and a `"sensitive"` caller may inline a
+    `"sensitive"` callee but not a `"used"` one.
+
+    A request to inline does not override this, however it is spelled. An
+    implementation may report a warning when it declines to inline for this
+    reason, and should not report an error: inlining is advisory, and refusing it
+    changes no semantics other than the frame the clear covers.
 
     Inlining a function that does not carry the attribute into one that does is
     not constrained by this, and is desirable: the callee's frame lies below the
