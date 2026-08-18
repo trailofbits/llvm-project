@@ -9,8 +9,10 @@
 ; override the rule.
 ;
 ; LangRef requires that an unrecognized mode not clear less than a recognized
-; one, so the unrecognized-mode cases here pin that direction: the mode is read
-; as clearing the most, not the least.
+; one. In each group of mode-value cases below, the refusal into a "sensitive"
+; caller is the row that pins that direction; the other rows in the group pin
+; that refusal as the widest-mode reading rather than as a blanket refusal of
+; the value.
 
 ; RUN: opt < %s -passes=inline -S | FileCheck %s
 ; RUN: opt < %s -passes='default<O2>' -S | FileCheck %s --check-prefix=O2
@@ -22,6 +24,8 @@
 ;; that appears where none is expected, is a failure either way.
 ; RUN: opt < %s -passes=inline -pass-remarks-missed=inline -disable-output 2>&1 \
 ; RUN:   | FileCheck %s --check-prefix=REMARK --implicit-check-not="remark: "
+;; Any function added below that produces a missed-inline remark has to add its
+;; REMARK line as well, in source order.
 
 declare void @sink(i32)
 
@@ -44,20 +48,24 @@ define void @zeroize_unrecognized_callee(i32 %x) "zeroize-stack"="not-a-real-mod
   ret void
 }
 
-;; An empty value is not a mode either, and unlike an unrecognized one it is not
-;; a value the attribute is written to carry at all: LangRef says the attribute
-;; "takes one required string value". Nothing in the tree enforces that yet, so a
-;; module can reach the inliner with an empty value, and when it does it goes
-;; through the identical comparison an unrecognized value goes through -- not
-;; "sensitive", therefore the widest mode. The three cases below pin that, which
-;; is the conservative direction: an empty value can only cost an inline, never
-;; buy one into a caller that clears less. They assert what happens today and do
-;; not endorse writing this; enforcement of the required value is pending in a
-;; separate change, and if it lands, or if the empty value is ever given a
-;; meaning of its own, these cases are what makes that a decision rather than an
-;; accident.
+;; An empty value is not a mode either, and neither is an absent one: an absent,
+;; an empty, and an unrecognized value all mean "used", the widest mode. So a
+;; value this consumer cannot interpret clears more of the frame than it must,
+;; never less, and each of these callees promises a clear of its whole frame
+;; just as a "used" one does.
+;;
+;; The two spellings are the same attribute once parsed. Attribute::getAsString
+;; prints ="value" only for a non-empty value, so "zeroize-stack"="" prints as
+;; the bare "zeroize-stack" and the two collapse into one attribute group: the
+;; valueless form is what -S and bitcode emit, which is why it is covered here
+;; and not only the spelling written below.
 
 define void @zeroize_empty_callee(i32 %x) "zeroize-stack"="" {
+  call void @sink(i32 %x)
+  ret void
+}
+
+define void @zeroize_valueless_callee(i32 %x) "zeroize-stack" {
   call void @sink(i32 %x)
   ret void
 }
@@ -158,9 +166,11 @@ define void @used_into_sensitive_caller(i32 %x) "zeroize-stack"="sensitive" {
 
 ;; An unrecognized mode is treated as "used", the widest mode, and the direction
 ;; that matters is the one LangRef forbids: it must not be read as clearing the
-;; least. So an unrecognized-mode callee is refused into a "sensitive" caller,
-;; exactly as a "used" callee is. An implementation that fell back to clearing
-;; the least, or that ignored a mode it could not parse, would inline here.
+;; least. This row is the one that pins that direction -- an unrecognized-mode
+;; callee is refused into a "sensitive" caller, exactly as a "used" callee is.
+;; An implementation that fell back to clearing the least, or that ignored a
+;; mode it could not parse, would inline here. The two rows that follow do not
+;; pin the direction; they pin this refusal as the widest-mode reading.
 
 define void @unrecognized_into_sensitive_caller(i32 %x) "zeroize-stack"="sensitive" {
 ; CHECK-LABEL: define void @unrecognized_into_sensitive_caller(
@@ -176,9 +186,11 @@ define void @unrecognized_into_sensitive_caller(i32 %x) "zeroize-stack"="sensiti
   ret void
 }
 
-;; The same reading in the permitted direction: an unrecognized-mode caller
-;; clears its whole frame, so it takes a "sensitive" callee, which asked for
-;; less. A mode that could not be parsed is not a reason to refuse.
+;; The same reading in the permitted direction, so that the refusal above is
+;; pinned as the widest-mode reading rather than as a blanket refusal of an
+;; unrecognized value: an unrecognized-mode caller clears its whole frame, so it
+;; takes a "sensitive" callee, which asked for less. A mode that could not be
+;; parsed is not a reason to refuse.
 
 define void @sensitive_into_unrecognized_caller(i32 %x) "zeroize-stack"="not-a-real-mode" {
 ; CHECK-LABEL: define void @sensitive_into_unrecognized_caller(
@@ -209,12 +221,13 @@ define void @unrecognized_into_unrecognized_caller(i32 %x) "zeroize-stack"="also
 }
 
 ;; The empty value read as the widest mode, in the direction that costs an
-;; inline: an empty-valued callee is refused into a "sensitive" caller, exactly
-;; as a "used" or an unrecognized-mode one is, because the string is not
-;; "sensitive" and so promises a clear of the whole frame that a "sensitive"
-;; caller does not necessarily make. An implementation that treated a value it
-;; did not recognize as the narrowest mode, or that skipped the check when the
-;; value was empty, would inline here.
+;; inline, and this row is the one that pins it: an empty-valued callee is
+;; refused into a "sensitive" caller, exactly as a "used" or an
+;; unrecognized-mode one is, because the value is not "sensitive" and so
+;; promises a clear of the whole frame that a "sensitive" caller does not
+;; necessarily make. An implementation that read a value it could not interpret
+;; as the narrowest mode, or that skipped the check when the value was empty,
+;; would inline here.
 
 define void @empty_into_sensitive_caller(i32 %x) "zeroize-stack"="sensitive" {
 ; CHECK-LABEL: define void @empty_into_sensitive_caller(
@@ -260,6 +273,25 @@ define void @empty_into_empty_caller(i32 %x) "zeroize-stack"="" {
 ; O2-NOT: call void @zeroize_empty_callee(
 ; O2: call void @sink(
   call void @zeroize_empty_callee(i32 %x)
+  ret void
+}
+
+;; The valueless spelling, refused into a "sensitive" caller for the same
+;; reason. This is the form the empty value prints and reloads as, so it is the
+;; one a module reaching the inliner actually carries, and it has to be read as
+;; the widest mode too.
+
+define void @valueless_into_sensitive_caller(i32 %x) "zeroize-stack"="sensitive" {
+; CHECK-LABEL: define void @valueless_into_sensitive_caller(
+; CHECK: call void @zeroize_valueless_callee(
+; CHECK-NOT: call void @sink(
+;
+; O2-LABEL: define void @valueless_into_sensitive_caller(
+; O2: call void @zeroize_valueless_callee(
+; O2-NOT: call void @sink(
+;
+; REMARK: remark: {{.*}} 'zeroize_valueless_callee' not inlined into 'valueless_into_sensitive_caller'{{.*}}: conflicting attributes
+  call void @zeroize_valueless_callee(i32 %x)
   ret void
 }
 

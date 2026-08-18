@@ -2634,16 +2634,9 @@ static bool checkZeroizeStack(const Function &Caller, const Function &Callee) {
   // "sensitive" caller takes a "sensitive" callee and nothing wider, while a
   // caller in any other mode clears the whole frame and takes either.
   //
-  // An empty value is not a mode, and it reaches this comparison as just
-  // another string that is not "sensitive": it is read as the widest mode,
-  // through the very same path that gives an unrecognized value that meaning.
-  // That is the conservative direction, since it can only refuse inlines and
-  // never permit one into a caller that clears less. It is not a licence to
-  // leave the value off, though: LangRef documents the value as required, and
-  // nothing in the tree rejects a module that omits it yet, with enforcement
-  // pending in a separate change. Until then this reading is pinned by
-  // test/Transforms/Inline/zeroize-stack.ll, so that changing it has to be a
-  // decision rather than an accident.
+  // An absent, an empty, and an unrecognized value all mean "used", so a value
+  // this consumer cannot interpret clears more of the frame than it must,
+  // never less. See llvm/test/Transforms/Inline/zeroize-stack.ll.
   return Caller.getFnAttribute("zeroize-stack").getValueAsString() !=
              ZeroizeStackNarrowestMode ||
          Callee.getFnAttribute("zeroize-stack").getValueAsString() ==
