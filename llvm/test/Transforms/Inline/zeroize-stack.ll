@@ -44,6 +44,24 @@ define void @zeroize_unrecognized_callee(i32 %x) "zeroize-stack"="not-a-real-mod
   ret void
 }
 
+;; An empty value is not a mode either, and unlike an unrecognized one it is not
+;; a value the attribute is written to carry at all: LangRef says the attribute
+;; "takes one required string value". Nothing in the tree enforces that yet, so a
+;; module can reach the inliner with an empty value, and when it does it goes
+;; through the identical comparison an unrecognized value goes through -- not
+;; "sensitive", therefore the widest mode. The three cases below pin that, which
+;; is the conservative direction: an empty value can only cost an inline, never
+;; buy one into a caller that clears less. They assert what happens today and do
+;; not endorse writing this; enforcement of the required value is pending in a
+;; separate change, and if it lands, or if the empty value is ever given a
+;; meaning of its own, these cases are what makes that a decision rather than an
+;; accident.
+
+define void @zeroize_empty_callee(i32 %x) "zeroize-stack"="" {
+  call void @sink(i32 %x)
+  ret void
+}
+
 define void @plain_callee(i32 %x) {
   call void @sink(i32 %x)
   ret void
@@ -187,6 +205,61 @@ define void @unrecognized_into_unrecognized_caller(i32 %x) "zeroize-stack"="also
 ; O2-NOT: call void @zeroize_unrecognized_callee(
 ; O2: call void @sink(
   call void @zeroize_unrecognized_callee(i32 %x)
+  ret void
+}
+
+;; The empty value read as the widest mode, in the direction that costs an
+;; inline: an empty-valued callee is refused into a "sensitive" caller, exactly
+;; as a "used" or an unrecognized-mode one is, because the string is not
+;; "sensitive" and so promises a clear of the whole frame that a "sensitive"
+;; caller does not necessarily make. An implementation that treated a value it
+;; did not recognize as the narrowest mode, or that skipped the check when the
+;; value was empty, would inline here.
+
+define void @empty_into_sensitive_caller(i32 %x) "zeroize-stack"="sensitive" {
+; CHECK-LABEL: define void @empty_into_sensitive_caller(
+; CHECK: call void @zeroize_empty_callee(
+; CHECK-NOT: call void @sink(
+;
+; O2-LABEL: define void @empty_into_sensitive_caller(
+; O2: call void @zeroize_empty_callee(
+; O2-NOT: call void @sink(
+;
+; REMARK: remark: {{.*}} 'zeroize_empty_callee' not inlined into 'empty_into_sensitive_caller'{{.*}}: conflicting attributes
+  call void @zeroize_empty_callee(i32 %x)
+  ret void
+}
+
+;; The same reading in the permitted direction, so that the refusal above is
+;; pinned as the widest mode rather than as a blanket refusal of the empty
+;; value: an empty-valued caller clears its whole frame, so it takes a
+;; "sensitive" callee, which asked for less.
+
+define void @sensitive_into_empty_caller(i32 %x) "zeroize-stack"="" {
+; CHECK-LABEL: define void @sensitive_into_empty_caller(
+; CHECK-NOT: call void @zeroize_sensitive_callee(
+; CHECK: call void @sink(
+;
+; O2-LABEL: define void @sensitive_into_empty_caller(
+; O2-NOT: call void @zeroize_sensitive_callee(
+; O2: call void @sink(
+  call void @zeroize_sensitive_callee(i32 %x)
+  ret void
+}
+
+;; Empty into empty: both mean the widest mode, so neither clears less than the
+;; other and the inline goes through. Two equal strings that are equally not a
+;; mode are not a mismatch.
+
+define void @empty_into_empty_caller(i32 %x) "zeroize-stack"="" {
+; CHECK-LABEL: define void @empty_into_empty_caller(
+; CHECK-NOT: call void @zeroize_empty_callee(
+; CHECK: call void @sink(
+;
+; O2-LABEL: define void @empty_into_empty_caller(
+; O2-NOT: call void @zeroize_empty_callee(
+; O2: call void @sink(
+  call void @zeroize_empty_callee(i32 %x)
   ret void
 }
 
