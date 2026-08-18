@@ -9,6 +9,7 @@
 #ifndef LLVM_LIB_TARGET_ARM_ARMFRAMELOWERING_H
 #define LLVM_LIB_TARGET_ARM_ARMFRAMELOWERING_H
 
+#include "llvm/ADT/BitVector.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/Support/TypeSize.h"
 
@@ -17,6 +18,7 @@ namespace llvm {
 class ARMSubtarget;
 class CalleeSavedInfo;
 class MachineFunction;
+class RegScavenger;
 
 class ARMFrameLowering : public TargetFrameLowering {
 protected:
@@ -92,6 +94,15 @@ protected:
   bool hasFPImpl(const MachineFunction &MF) const override;
 
 private:
+  bool supportsZeroCallUsedRegs(const MachineFunction &MF) const override {
+    return true;
+  }
+
+  /// Emit target zero call-used regs.
+  void emitZeroCallUsedRegs(BitVector RegsToZero, MachineBasicBlock &MBB,
+                            MachineBasicBlock::iterator MBBI,
+                            RegScavenger *RS) const override;
+
   void emitPushInst(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
                     ArrayRef<CalleeSavedInfo> CSI, unsigned StmOpc,
                     unsigned StrOpc, bool NoGap,

@@ -214,6 +214,22 @@ public:
                    bool KillSrc, bool RenamableDest = false,
                    bool RenamableSrc = false) const override;
 
+  /// Write zero to \p Reg with a single instruction.
+  ///
+  /// This covers the registers ARM can zero without a second register to read
+  /// a zero out of, which is every general-purpose register except a Thumb-1
+  /// high register on a subtarget without the 16-bit-immediate move, and the
+  /// D and Q registers on a subtarget with NEON or MVE. A register outside
+  /// that set is reported rather than skipped, because a caller that asked for
+  /// it to be cleared and got nothing would have no way to tell.
+  ///
+  /// The cases left out are the ones that need a register already holding
+  /// zero, and a caller that has one clears them itself; see
+  /// ARMFrameLowering::emitZeroCallUsedRegs.
+  void buildClearRegister(Register Reg, MachineBasicBlock &MBB,
+                          MachineBasicBlock::iterator Iter, DebugLoc &DL,
+                          bool AllowSideEffects = true) const override;
+
   void storeRegToStackSlot(
       MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI, Register SrcReg,
       bool isKill, int FrameIndex, const TargetRegisterClass *RC, Register VReg,
