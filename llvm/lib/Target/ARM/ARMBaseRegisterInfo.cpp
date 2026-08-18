@@ -13,7 +13,9 @@
 #include "ARMBaseRegisterInfo.h"
 #include "ARM.h"
 #include "ARMBaseInstrInfo.h"
+#include "ARMCallingConv.h"
 #include "ARMFrameLowering.h"
+#include "ARMISelLowering.h"
 #include "ARMMachineFunctionInfo.h"
 #include "ARMSubtarget.h"
 #include "MCTargetDesc/ARMAddressingModes.h"
@@ -53,6 +55,9 @@
 #include "ARMGenRegisterInfo.inc"
 
 using namespace llvm;
+
+#define GET_CC_REGISTER_LISTS
+#include "ARMGenCallingConv.inc"
 
 ARMBaseRegisterInfo::ARMBaseRegisterInfo()
     : ARMGenRegisterInfo(ARM::LR, 0, 0, ARM::PC) {
@@ -277,6 +282,53 @@ bool ARMBaseRegisterInfo::isInlineAsmReadOnlyReg(const MachineFunction &MF,
     markSuperRegs(Reserved, BasePtr);
   assert(checkAllSuperRegsMarked(Reserved));
   return Reserved.test(PhysReg.id());
+}
+
+bool ARMBaseRegisterInfo::isArgumentRegister(const MachineFunction &MF,
+                                             MCRegister PhysReg) const {
+  // Ask the lowering which convention this function was assigned rather than
+  // deriving it again here. Which one a calling convention resolves to depends
+  // on the ABI, on whether the subtarget has floating-point registers, on
+  // Thumb-1, and on varargs, and a second copy of that reasoning would be one
+  // that can disagree with the one the arguments were actually assigned by.
+  const Function &F = MF.getFunction();
+  const ARMTargetLowering *TLI = MF.getSubtarget<ARMSubtarget>().getTargetLowering();
+  CCAssignFn *Fn = TLI->CCAssignFnForCall(F.getCallingConv(), F.isVarArg());
+
+  auto HasReg = [PhysReg](ArrayRef<MCRegister> RegList) {
+    return llvm::is_contained(RegList, PhysReg);
+  };
+
+  // Registers a convention uses only for a swift-self or swift-error argument
+  // are emitted as a list of their own, and belong to the convention only when
+  // the function is one that can carry those arguments.
+  CallingConv::ID CC = F.getCallingConv();
+  const bool IsSwift =
+      CC == CallingConv::Swift || CC == CallingConv::SwiftTail;
+
+  // A convention that delegates has a list per definition, and the delegated-to
+  // definition's list is as much a part of it as its own.
+  if (Fn == CC_ARM_APCS)
+    return HasReg(CC_ARM_APCS_ArgRegs) ||
+           (IsSwift && HasReg(CC_ARM_APCS_Swift_ArgRegs));
+  if (Fn == FastCC_ARM_APCS)
+    return HasReg(FastCC_ARM_APCS_ArgRegs) || HasReg(CC_ARM_APCS_ArgRegs);
+  if (Fn == CC_ARM_APCS_GHC)
+    return HasReg(CC_ARM_APCS_GHC_ArgRegs);
+  if (Fn == CC_ARM_AAPCS)
+    return HasReg(CC_ARM_AAPCS_ArgRegs) ||
+           HasReg(CC_ARM_AAPCS_Common_ArgRegs) ||
+           (IsSwift && HasReg(CC_ARM_AAPCS_Swift_ArgRegs));
+  if (Fn == CC_ARM_AAPCS_VFP)
+    return HasReg(CC_ARM_AAPCS_VFP_ArgRegs) ||
+           HasReg(CC_ARM_AAPCS_Common_ArgRegs) ||
+           (IsSwift && HasReg(CC_ARM_AAPCS_VFP_Swift_ArgRegs));
+  if (Fn == CC_ARM_Win32_CFGuard_Check)
+    return HasReg(CC_ARM_Win32_CFGuard_Check_ArgRegs);
+
+  // CCAssignFnForCall answers with one of the above or reports the convention
+  // as unsupported before returning, so there is no fourth possibility.
+  llvm_unreachable("unhandled ARM calling convention");
 }
 
 const TargetRegisterClass *
