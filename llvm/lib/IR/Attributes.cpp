@@ -2610,11 +2610,11 @@ static constexpr StringRef ZeroizeStackNarrowestMode = "sensitive";
 
 static bool checkZeroizeStack(const Function &Caller, const Function &Callee) {
   // A function carrying "zeroize-stack" promises to clear its own frame before
-  // returning. Inlining dissolves that frame into the caller's, so the bytes the
-  // callee promised to clear become bytes of the caller's frame: a caller that
-  // clears at least as much of its own frame still clears them, while a caller
-  // that clears nothing, or clears less, leaves them behind with nothing in the
-  // IR to record the obligation.
+  // returning. Inlining dissolves that frame into the caller's, so the bytes
+  // the callee promised to clear become bytes of the caller's frame: a caller
+  // that clears at least as much of its own frame still clears them, while a
+  // caller that clears nothing, or clears less, leaves them behind with nothing
+  // in the IR to record the obligation.
   //
   // A callee without the attribute promises nothing, so it goes anywhere. That
   // direction is worth encouraging where the caller is protected: the callee's
@@ -2633,6 +2633,10 @@ static bool checkZeroizeStack(const Function &Caller, const Function &Callee) {
   // the callee asked for. "sensitive" is the only mode that clears less, so a
   // "sensitive" caller takes a "sensitive" callee and nothing wider, while a
   // caller in any other mode clears the whole frame and takes either.
+  //
+  // An absent, an empty, and an unrecognized value all mean "used", so a value
+  // this consumer cannot interpret clears more of the frame than it must,
+  // never less. See llvm/test/Transforms/Inline/zeroize-stack.ll.
   return Caller.getFnAttribute("zeroize-stack").getValueAsString() !=
              ZeroizeStackNarrowestMode ||
          Callee.getFnAttribute("zeroize-stack").getValueAsString() ==

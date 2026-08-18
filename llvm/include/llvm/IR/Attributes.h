@@ -1400,8 +1400,8 @@ LLVM_ABI bool isStrictFPInlineCompatible(const Function &Caller,
 
 /// \returns Return false if inlining \p Callee into \p Caller would lose a
 /// "zeroize-stack" guarantee the callee carries, either because the caller does
-/// not carry the attribute or because the caller's mode clears less of the frame
-/// than the callee's does. Return true otherwise.
+/// not carry the attribute or because the caller's mode clears less of the
+/// frame than the callee's does. Return true otherwise.
 LLVM_ABI bool isZeroizeStackInlineCompatible(const Function &Caller,
                                              const Function &Callee);
 
