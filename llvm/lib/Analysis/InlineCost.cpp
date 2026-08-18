@@ -3212,6 +3212,13 @@ std::optional<InlineResult> llvm::getAttributeBasedInliningDecision(
     if (!AttributeFuncs::isStrictFPInlineCompatible(*Caller, *Callee))
       return InlineResult::failure("incompatible strictfp attributes");
 
+    // A request to inline does not override the "zeroize-stack" rule: dropping
+    // the callee's clear would change what the frame guarantees, not just what
+    // it costs. The attribute compatibility check below is not reached from
+    // here, so the rule is consulted directly.
+    if (!AttributeFuncs::isZeroizeStackInlineCompatible(*Caller, *Callee))
+      return InlineResult::failure("incompatible zeroize-stack attributes");
+
     auto IsViable = isInlineViable(*Callee);
     if (IsViable.isSuccess())
       return InlineResult::success();

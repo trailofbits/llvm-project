@@ -2603,24 +2603,40 @@ static bool checkStrictFP(const Function &Caller, const Function &Callee) {
          Caller.getAttributes().hasFnAttr(Attribute::StrictFP);
 }
 
+/// The one "zeroize-stack" mode that clears less than the others. LangRef makes
+/// "used" the widest mode and gives any unrecognized value that same widest
+/// meaning, so every value other than this one clears the whole frame.
+static constexpr StringRef ZeroizeStackNarrowestMode = "sensitive";
+
 static bool checkZeroizeStack(const Function &Caller, const Function &Callee) {
-  // Do not inline a function that carries "zeroize-stack" into any caller. The
-  // attribute is a promise about the callee's own frame, and inlining dissolves
-  // that frame into the caller's: the bytes the callee promised to clear before
-  // returning become bytes of a frame that outlives the point where the clear
-  // was due, and nothing is left in the IR to record the obligation.
+  // A function carrying "zeroize-stack" promises to clear its own frame before
+  // returning. Inlining dissolves that frame into the caller's, so the bytes the
+  // callee promised to clear become bytes of the caller's frame: a caller that
+  // clears at least as much of its own frame still clears them, while a caller
+  // that clears nothing, or clears less, leaves them behind with nothing in the
+  // IR to record the obligation.
   //
-  // This is a callee-side rule with no exemption for a caller that carries the
-  // attribute itself. The caller's attribute constrains the caller's own frame
-  // and its own returns; it does not reproduce the clear the callee owed at the
-  // point the callee would have returned, and the two functions may in any case
-  // ask for different amounts of the frame to be cleared.
-  //
-  // Inlining an unprotected callee into a protected caller is unaffected, and
-  // is worth encouraging: it moves the callee's frame, which sits below the
-  // stack pointer at the caller's return and which no clear reaches, into the
-  // frame bytes the protected caller does clear.
-  return !Callee.hasFnAttribute("zeroize-stack");
+  // A callee without the attribute promises nothing, so it goes anywhere. That
+  // direction is worth encouraging where the caller is protected: the callee's
+  // frame would have sat below the stack pointer at the caller's return, where
+  // no clear reaches it, and inlining turns those bytes into frame bytes the
+  // caller does clear.
+  if (!Callee.hasFnAttribute("zeroize-stack"))
+    return true;
+
+  // Otherwise the caller has to carry the attribute too, or there is no clear
+  // for the callee's frame bytes to be folded into.
+  if (!Caller.hasFnAttribute("zeroize-stack"))
+    return false;
+
+  // Both are protected, so the caller must not ask for less of its frame than
+  // the callee asked for. "sensitive" is the only mode that clears less, so a
+  // "sensitive" caller takes a "sensitive" callee and nothing wider, while a
+  // caller in any other mode clears the whole frame and takes either.
+  return Caller.getFnAttribute("zeroize-stack").getValueAsString() !=
+             ZeroizeStackNarrowestMode ||
+         Callee.getFnAttribute("zeroize-stack").getValueAsString() ==
+             ZeroizeStackNarrowestMode;
 }
 
 template<typename AttrClass>
@@ -2808,6 +2824,11 @@ bool AttributeFuncs::areInlineCompatible(const Function &Caller,
 bool AttributeFuncs::isStrictFPInlineCompatible(const Function &Caller,
                                                 const Function &Callee) {
   return checkStrictFP(Caller, Callee);
+}
+
+bool AttributeFuncs::isZeroizeStackInlineCompatible(const Function &Caller,
+                                                    const Function &Callee) {
+  return checkZeroizeStack(Caller, Callee);
 }
 
 bool AttributeFuncs::areOutlineCompatible(const Function &A,
