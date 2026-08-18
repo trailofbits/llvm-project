@@ -7034,7 +7034,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     // FIXME: There's no reason for this to be restricted to some backend.
     // The backend code needs to be changed to include the appropriate function
     // calls automatically.
-    if (!Triple.isX86() && !Triple.isAArch64() && !Triple.isRISCV())
+    if (!Triple.isX86() && !Triple.isAArch64() && !Triple.isRISCV() &&
+        !Triple.isARM() && !Triple.isThumb())
       D.Diag(diag::err_drv_unsupported_opt_for_target)
           << A->getAsString(Args) << TripleStr;
   }
