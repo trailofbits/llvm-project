@@ -89,6 +89,8 @@ public:
                        MCRegister PhysReg) const override;
   bool isInlineAsmReadOnlyReg(const MachineFunction &MF,
                               MCRegister PhysReg) const override;
+  bool isArgumentRegister(const MachineFunction &MF,
+                          MCRegister PhysReg) const override;
 
   const TargetRegisterClass *
   getPointerRegClass(unsigned Kind = 0) const override;
