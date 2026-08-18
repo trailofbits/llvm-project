@@ -1,15 +1,11 @@
-; The fallbacks are not written in terms of any one target's instructions, and
-; two of them are visible on a target that cannot clear anything at all: which
-; exits are in scope is decided before any target is asked, and an unreadable
-; mode is resolved before the target is asked too.
+; The fallbacks are not written in terms of any one target's instructions:
+; which exits are in scope is decided before any target is asked, and an
+; unreadable mode is resolved before the target is asked too.
 ;
 ; trailofbits/vspells-ct-internal-notes#24.
 
-; Both runs are under "not", because the widened mode reaches a refusal this
-; target has to give and llc exits non-zero for it. That refusal is the second
-; half of what is being tested.
-; RUN: not llc -mtriple=armv7-unknown-linux-gnueabi -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck --check-prefix=SEQ %s
-; RUN: not llc -mtriple=armv7-unknown-linux-gnueabi %s -o /dev/null 2>&1 | FileCheck --check-prefix=DIAG %s
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck --check-prefix=SEQ %s
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi %s -o - | FileCheck --check-prefix=ASM %s
 
 @g = external global i32
 
@@ -36,17 +32,29 @@ define void @traps() {
   unreachable
 }
 
-; An unreadable mode is not "skip". ARM cannot clear registers, so what the
-; widened mode reaches here is the target's refusal, which is reported; what it
-; does not do is quietly resolve to clearing nothing and say nothing.
-; DIAG: error: {{.*}}in function unrecognized_mode i32 (i32): "zero-call-used-regs" is not supported by this target
+; An unreadable mode is not "skip", it is "all", and on a target that can clear
+; its registers that is visible in what comes out: the general-purpose
+; registers the exit does not need and the whole of the vector file it is
+; allowed to touch. Resolving it to "skip" would leave the function looking
+; exactly like the one below.
+; ASM-LABEL: unrecognized_mode:
+; ASM:         vmov.i32 q0, #0x0
+; ASM:         mov r2, #0
+; ASM:         mov r3, #0
+; ASM:         mov r12, #0
+; ASM:         vmov.i32 q15, #0x0
+; ASM:         bx lr
 define i32 @unrecognized_mode(i32 %x) "zero-call-used-regs"="a-mode-from-the-future" {
   ret i32 %x
 }
 
-; A mode that says to skip is read and honored, on this target as on any other,
-; so it reaches no refusal.
-; DIAG-NOT: in function skips_explicitly
+; A mode that says to skip is read and honored, on this target as on any other.
+; This is the control for the case above: without it, that one would pass just
+; as well if every mode cleared everything.
+; ASM-LABEL: skips_explicitly:
+; ASM-NOT:     mov r{{[0-9]+}}, #0
+; ASM-NOT:     vmov
+; ASM:         bx lr
 define i32 @skips_explicitly(i32 %x) "zero-call-used-regs"="skip" {
   ret i32 %x
 }
