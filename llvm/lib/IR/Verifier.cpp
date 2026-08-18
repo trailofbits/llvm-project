@@ -2607,15 +2607,10 @@ void Verifier::verifyFunctionAttrs(FunctionType *FT, AttributeList Attrs,
                   V);
   }
 
-  // "zeroize-stack" selects how much of the frame is cleared, so it has to name
-  // a mode. A mode this version of LLVM does not recognize is deliberately not
-  // rejected: LangRef gives an unrecognized mode the meaning of "used", the
-  // widest mode, so that a producer using a mode a consumer has not learned yet
-  // clears more of the frame than it has to rather than less. No such reading
-  // is available when the value is absent, because nothing was named.
-  if (auto A = Attrs.getFnAttr("zeroize-stack"); A.isValid())
-    Check(!A.getValueAsString().empty(),
-          "\"zeroize-stack\" attribute must name a mode", V);
+  // "zeroize-stack" is deliberately not validated here, and a check for it
+  // should not be added: an absent, an empty, and an unrecognized value all
+  // mean "used", the widest mode, so a value this consumer cannot interpret
+  // clears more of the frame than it has to rather than less.
 
   if (auto A = Attrs.getFnAttr("vector-function-abi-variant"); A.isValid()) {
     StringRef S = A.getValueAsString();

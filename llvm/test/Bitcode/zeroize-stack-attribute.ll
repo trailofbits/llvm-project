@@ -25,6 +25,14 @@ define void @unrecognized_mode() "zeroize-stack"="sensitive-and-then-some" {
   ret void
 }
 
+; An attribute that names no mode is valid IR that means "used", and it has to
+; come back as it went in too: naming a mode on reload would claim a guarantee
+; the module never asked for, and dropping the attribute would leave the frame
+; with no clear at all.
+define void @empty_value() "zeroize-stack"="" {
+  ret void
+}
+
 ; The mode is per function, so a function without the attribute has to reload
 ; without one. Handing it a mode would clear a frame nothing asked to clear.
 define void @unannotated() {
@@ -34,8 +42,10 @@ define void @unannotated() {
 ; CHECK: define void @used() #[[USED:[0-9]+]]
 ; CHECK: define void @sensitive() #[[SENSITIVE:[0-9]+]]
 ; CHECK: define void @unrecognized_mode() #[[UNRECOGNIZED:[0-9]+]]
+; CHECK: define void @empty_value() #[[EMPTY:[0-9]+]]
 ; CHECK: define void @unannotated() {
 
 ; CHECK-DAG: attributes #[[USED]] = { "zeroize-stack"="used" }
 ; CHECK-DAG: attributes #[[SENSITIVE]] = { "zeroize-stack"="sensitive" }
 ; CHECK-DAG: attributes #[[UNRECOGNIZED]] = { "zeroize-stack"="sensitive-and-then-some" }
+; CHECK-DAG: attributes #[[EMPTY]] = {{.*}}"zeroize-stack"

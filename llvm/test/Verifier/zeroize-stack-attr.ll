@@ -1,23 +1,26 @@
-; The "zeroize-stack" attribute names how much of the frame is cleared, so it
-; has to carry a value. Both spellings of "no value" are the same attribute
-; once parsed, and neither names a mode.
+; The "zeroize-stack" attribute is accepted whatever it says, and that is the
+; intent rather than a gap: an absent value, an empty value, and a mode this
+; version of LLVM does not recognize all mean "used", the widest mode. A value
+; the IR cannot interpret therefore widens what is cleared instead of failing,
+; so a producer naming a mode a consumer has not learned loses no protection.
 ;
-; An unrecognized mode is deliberately not an error: LangRef gives it the
-; meaning of "used". llvm/test/Bitcode/zeroize-stack-attribute.ll covers that.
+; Both spellings of "no value" are the same attribute once parsed, so both
+; survive the round-trip and both land in the same attribute group.
+;
+; llvm/test/Bitcode/zeroize-stack-attribute.ll covers the unrecognized mode.
 
-; RUN: not llvm-as < %s -o /dev/null 2>&1 | FileCheck %s
+; RUN: llvm-as < %s | llvm-dis | FileCheck %s
 
-; CHECK: "zeroize-stack" attribute must name a mode
-; CHECK: ptr @no_value
+; CHECK: define void @no_value() #[[ATTRS:[0-9]+]]
 define void @no_value() #0 {
   ret void
 }
 
-; CHECK: "zeroize-stack" attribute must name a mode
-; CHECK: ptr @empty_value
+; CHECK: define void @empty_value() #[[ATTRS]]
 define void @empty_value() #1 {
   ret void
 }
 
+; CHECK: attributes #[[ATTRS]] = {{.*}}"zeroize-stack"
 attributes #0 = { "zeroize-stack" }
 attributes #1 = { "zeroize-stack"="" }
