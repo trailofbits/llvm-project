@@ -1,10 +1,10 @@
-; The rule that a function carrying "zeroize-stack" is not inlined into any
-; caller has to hold across module boundaries too, where the callee reaches the
-; inliner through the LTO link rather than through the module it was compiled
-; in. Both regular LTO, which merges the modules before optimizing, and ThinLTO,
-; which imports the definition into the caller's module, are checked. Inlining
-; an unannotated callee into an annotated caller must still happen, so that a
-; missing inline is evidence of the rule rather than of nothing being inlined.
+; The "zeroize-stack" inlining rule has to hold across module boundaries too,
+; where the callee reaches the inliner through the LTO link rather than through
+; the module it was compiled in. Both regular LTO, which merges the modules
+; before optimizing, and ThinLTO, which imports the definition into the caller's
+; module, are checked. Each direction of the rule is exercised across the link, so
+; that a missing inline is evidence of the rule rather than of nothing being
+; inlined at all.
 
 ; REQUIRES: x86-registered-target
 
@@ -14,7 +14,8 @@
 ; RUN: llvm-as %t/caller.ll -o %t/caller.bc
 ; RUN: llvm-as %t/callee.ll -o %t/callee.bc
 ; RUN: llvm-lto2 run %t/caller.bc %t/callee.bc -save-temps -o %t/lto \
-; RUN:   -r %t/caller.bc,call_zeroize,plx \
+; RUN:   -r %t/caller.bc,call_zeroize_unprotected,plx \
+; RUN:   -r %t/caller.bc,call_zeroize_protected,plx \
 ; RUN:   -r %t/caller.bc,call_plain,plx \
 ; RUN:   -r %t/caller.bc,zeroize_callee,l \
 ; RUN:   -r %t/caller.bc,plain_callee,l \
@@ -26,7 +27,8 @@
 ; RUN: opt -module-summary %t/caller.ll -o %t/caller.thin.bc
 ; RUN: opt -module-summary %t/callee.ll -o %t/callee.thin.bc
 ; RUN: llvm-lto2 run %t/caller.thin.bc %t/callee.thin.bc -save-temps -o %t/thin \
-; RUN:   -r %t/caller.thin.bc,call_zeroize,plx \
+; RUN:   -r %t/caller.thin.bc,call_zeroize_unprotected,plx \
+; RUN:   -r %t/caller.thin.bc,call_zeroize_protected,plx \
 ; RUN:   -r %t/caller.thin.bc,call_plain,plx \
 ; RUN:   -r %t/caller.thin.bc,zeroize_callee,l \
 ; RUN:   -r %t/caller.thin.bc,plain_callee,l \
@@ -34,12 +36,19 @@
 ; RUN:   -r %t/callee.thin.bc,plain_callee,plx
 ; RUN: llvm-dis %t/thin.1.4.opt.bc -o - | FileCheck %s
 
-;; The annotated callee is still called, from an annotated caller at that.
-; CHECK-LABEL: define {{.*}}@call_zeroize(
+;; Refused across the link: the caller carries nothing, so there is no clear for
+;; the callee's frame bytes to be folded into and the call survives.
+; CHECK-LABEL: define {{.*}}@call_zeroize_unprotected(
 ; CHECK: call i32 @zeroize_callee(
 ; CHECK-NOT: mul i32 %{{.*}}, 7
 
-;; The unannotated one is gone, its body folded into the annotated caller.
+;; Permitted across the link: an equally protected caller in the widest mode
+;; clears the bytes the callee promised to clear, so the body is folded in.
+; CHECK-LABEL: define {{.*}}@call_zeroize_protected(
+; CHECK-NOT: call i32 @zeroize_callee(
+; CHECK: mul i32 %{{.*}}, 7
+
+;; The unannotated callee is folded into the annotated caller as well.
 ; CHECK-LABEL: define {{.*}}@call_plain(
 ; CHECK-NOT: call i32 @plain_callee(
 ; CHECK: mul i32 %{{.*}}, 11
@@ -51,7 +60,12 @@ target triple = "x86_64-unknown-linux-gnu"
 declare i32 @zeroize_callee(i32)
 declare i32 @plain_callee(i32)
 
-define i32 @call_zeroize(i32 %x) "zeroize-stack"="used" {
+define i32 @call_zeroize_unprotected(i32 %x) {
+  %r = call i32 @zeroize_callee(i32 %x)
+  ret i32 %r
+}
+
+define i32 @call_zeroize_protected(i32 %x) "zeroize-stack"="used" {
   %r = call i32 @zeroize_callee(i32 %x)
   ret i32 %r
 }
