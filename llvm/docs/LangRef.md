@@ -2654,7 +2654,7 @@ fn -> other_fn -> other_fn ; fn is norecurse
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
     returning, so that data the frame held is not left readable to whatever
-    runs on those addresses next. It takes one required string value selecting
+    runs on those addresses next. It takes an optional string value selecting
     how much of the frame is cleared:
 
     - `"used"` clears every stack slot the function used.
@@ -2665,8 +2665,10 @@ fn -> other_fn -> other_fn ; fn is norecurse
       the callee-save area, and alignment padding can all hold copies of data
       that was not marked, and nothing records where those copies came from.
 
-    Any other value is treated as `"used"`. An unrecognized mode must not
-    clear less than a recognized one.
+    The value is optional: the attribute with no value means `"used"`, and any
+    value other than those above means `"used"` as well, because an
+    unrecognized mode must not clear less than a recognized one. Neither is
+    ever an error at the IR layer.
 
     `"sensitive"` is a request for precision, not a weaker guarantee: it
     narrows what a function clears relative to `"used"`, and only where the
