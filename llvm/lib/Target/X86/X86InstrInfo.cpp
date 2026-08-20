@@ -10820,6 +10820,13 @@ X86InstrInfo::getOutliningTypeImpl(const MachineModuleInfo &MMI,
   if (MI.isCFIInstruction())
     return outliner::InstrType::Illegal;
 
+  // llvm.zeroize guarantees the clear establishes no call frame, so it cannot
+  // be moved into an outlined function. The pseudo is unexpanded here so that
+  // this check has something to refuse: what it becomes is indistinguishable
+  // from a memset's rep;stosb, which is outlined freely.
+  if (MI.getOpcode() == X86::ZEROIZE64)
+    return outliner::InstrType::Illegal;
+
   return outliner::InstrType::Legal;
 }
 

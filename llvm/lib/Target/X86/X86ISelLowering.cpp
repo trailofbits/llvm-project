@@ -3314,6 +3314,18 @@ void X86TargetLowering::getTgtMemIntrinsic(
   const IntrinsicData* IntrData = getIntrinsicWithChain(Intrinsic);
   if (!IntrData) {
     switch (Intrinsic) {
+    case Intrinsic::zeroize:
+      // Lowering needs the destination address space, which an SDValue does not
+      // carry. Record it here. fallbackAddressSpace rather than ptrVal: nothing
+      // needs a location, and the region is as long as the count says.
+      Info.opc = ISD::INTRINSIC_VOID;
+      Info.fallbackAddressSpace =
+          I.getArgOperand(0)->getType()->getPointerAddressSpace();
+      Info.memVT = MVT::i8;
+      Info.align = Align(1);
+      Info.flags |= MachineMemOperand::MOStore;
+      Infos.push_back(Info);
+      return;
     case Intrinsic::x86_aesenc128kl:
     case Intrinsic::x86_aesdec128kl:
       Info.opc = ISD::INTRINSIC_W_CHAIN;
@@ -28140,28 +28152,22 @@ static SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, const X86Subtarget &Subtarget,
     switch (IntNo) {
 
     case Intrinsic::zeroize: {
-      // Only the LP64 sequence exists so far; 32-bit x86 keeps reporting the
-      // intrinsic as unlowered.
-      if (!Subtarget.isTarget64BitLP64())
-        return SDValue();
-
+      // combineINTRINSIC_VOID has already rejected everything this cannot
+      // lower, so only the cases with a sequence reach here.
       SDLoc dl(Op);
       SDValue Chain = Op.getOperand(0);
+      SDValue Dst = Op.getOperand(2);
 
-      // The count is overloaded on any integer width, while rep;stosb only
-      // reads %rcx. A count that does not fit is truncated rather than
-      // rejected: no such region can be stepped through anyway.
+      // rep;stosb reads all of %rcx, so a narrower count is zero-extended.
       SDValue Len = DAG.getZExtOrTrunc(Op.getOperand(3), dl, MVT::i64);
 
       SDValue InGlue;
       Chain = DAG.getCopyToReg(Chain, dl, X86::RCX, Len, InGlue);
       InGlue = Chain.getValue(1);
-      Chain = DAG.getCopyToReg(Chain, dl, X86::RDI, Op.getOperand(2), InGlue);
+      Chain = DAG.getCopyToReg(Chain, dl, X86::RDI, Dst, InGlue);
       InGlue = Chain.getValue(1);
 
-      // Emit the pseudo, not the clearing sequence itself. Everything the
-      // sequence is made of appears in X86ExpandPseudo, past every pass that
-      // deletes stores.
+      // Emit the pseudo, not the sequence. It stays opaque until emission.
       SDValue Ops[] = {Chain, InGlue};
       return SDValue(DAG.getMachineNode(X86::ZEROIZE64, dl, MVT::Other, Ops),
                      0);
@@ -63232,6 +63238,62 @@ static SDValue combineINTRINSIC_VOID(SDNode *N, SelectionDAG &DAG,
     return SDValue();
 
   unsigned IntNo = N->getConstantOperandVal(1);
+
+  // Everything llvm.zeroize cannot lower to is rejected here rather than in
+  // LowerINTRINSIC_W_CHAIN. The count is overloaded on any integer width, so a
+  // count with no register on this subtarget is an operand the type legalizer
+  // has to expand, and it has no rule for an intrinsic node: it dies before any
+  // lowering hook runs. This combine runs before it.
+  if (IntNo == Intrinsic::zeroize) {
+    unsigned AS = cast<MemIntrinsicSDNode>(N)->getAddressSpace();
+    SDValue Len = N->getOperand(3);
+    auto *LenC = dyn_cast<ConstantSDNode>(Len);
+    bool LenIsWide = Len.getValueType().bitsGT(MVT::i64);
+    const char *Unsupported = nullptr;
+
+    if (!DAG.getSubtarget<X86Subtarget>().isTarget64BitLP64())
+      Unsupported = "has no clearing sequence on this subtarget; it is "
+                    "currently implemented for x86-64 (LP64) only";
+    else if (AS == X86AS::GS || AS == X86AS::FS || AS == X86AS::SS)
+      // A string instruction writes ES:[RDI] and cannot override the
+      // destination segment, so no encoding of rep;stosb reaches one.
+      Unsupported = "cannot clear a segment-relative region: the clearing "
+                    "sequence writes the ES segment, which a string "
+                    "instruction cannot override";
+    else if (N->getOperand(2).getValueType() != MVT::i64)
+      // A PTR32 pointer is not an address until it is widened, and GlobalISel
+      // models p0 only, so it cannot widen one. Reject in both selectors
+      // rather than support the space in one and not the other.
+      Unsupported = "cannot clear a region whose pointer is not a 64-bit "
+                    "address";
+    else if (LenIsWide && (!LenC || !LenC->getAPIntValue().isIntN(64)))
+      // Reject rather than truncate: quietly clearing less than was asked for
+      // is the one answer this must not give. A constant that fits does not
+      // ask for more, and is narrowed below.
+      Unsupported = "cannot clear a region whose length does not fit in 64 "
+                    "bits, which is as far as the clearing sequence can count";
+
+    // The intrinsic promises a sequence, not just the bytes, so there is
+    // nothing weaker to fall back on. Drop the call; the error stands.
+    if (Unsupported) {
+      DAG.getContext()->diagnose(
+          DiagnosticInfoUnsupported(DAG.getMachineFunction().getFunction(),
+                                    Twine("llvm.zeroize ") + Unsupported,
+                                    SDLoc(N).getDebugLoc(), DS_Error));
+      return N->getOperand(0);
+    }
+
+    // Lowering could narrow the surviving wide constant just as well, but the
+    // type legalizer runs first and has no rule for expanding a wide operand
+    // of an intrinsic node, so it must not reach there.
+    if (LenIsWide) {
+      SDValue Ops[] = {
+          N->getOperand(0), N->getOperand(1), N->getOperand(2),
+          DAG.getConstant(LenC->getAPIntValue().trunc(64), SDLoc(N), MVT::i64)};
+      return SDValue(DAG.UpdateNodeOperands(N, Ops), 0);
+    }
+  }
+
   const IntrinsicData *IntrData = getIntrinsicWithChain(IntNo);
 
   if (IntrData && IntrData->Type == INTR_TYPE_CAST_MMX)

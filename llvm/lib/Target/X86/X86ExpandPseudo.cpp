@@ -280,16 +280,6 @@ bool X86ExpandPseudoImpl::expandMI(MachineBasicBlock &MBB,
   switch (Opcode) {
   default:
     return false;
-  case X86::ZEROIZE64: {
-    // Both the zero to store and the store itself are created here rather than
-    // by whichever selector produced the pseudo. This pass runs in
-    // addPreSched2, so the clear only becomes a store after every pass that
-    // could have recognized it as one and removed it.
-    BuildMI(MBB, MBBI, DL, TII->get(X86::MOV8ri), X86::AL).addImm(0);
-    BuildMI(MBB, MBBI, DL, TII->get(X86::REP_STOSB_64));
-    MBBI->eraseFromParent();
-    return true;
-  }
   case X86::TCRETURNdi:
   case X86::TCRETURNdicc:
   case X86::TCRETURNri:

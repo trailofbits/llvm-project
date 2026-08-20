@@ -16587,7 +16587,9 @@ control-flow paths when nothing in between can read the region, and may combine
 two calls covering adjacent or overlapping regions into one call covering their
 union.
 
-The clearing sequence a given target emits is specified separately.
+The clearing sequence a given target emits is specified separately. A target
+without one reports an error rather than clearing some other way, since the
+sequence is what the intrinsic adds.
 
 (int_sqrt)=
 

@@ -2323,6 +2323,23 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
     break;
   }
 
+  case X86::ZEROIZE64: {
+    // The clear stays an opaque pseudo for the whole machine pipeline and
+    // becomes instructions here, where nothing follows. Earlier, a pass could
+    // remove the store, or MachineOutliner could lift the sequence into a
+    // function reached by a call, which llvm.zeroize promises not to do.
+    // X86InstrInfo::getOutliningTypeImpl refuses the pseudo to get it here.
+    //
+    // rep;stosb reads only %al, but a byte move writes only the low eight bits
+    // and so depends on whatever produced %rax. The 32-bit move overwrites it.
+    // "xorl %eax, %eax" is shorter but writes EFLAGS, which the pseudo would
+    // then have to clobber.
+    EmitAndCountInstruction(
+        MCInstBuilder(X86::MOV32ri).addReg(X86::EAX).addImm(0));
+    EmitAndCountInstruction(MCInstBuilder(X86::REP_STOSB_64));
+    return;
+  }
+
   case X86::CATCHRET: {
     // Lower these as normal, but add some comments.
     OutStreamer->AddComment("CATCHRET");
