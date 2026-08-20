@@ -114,6 +114,11 @@ Makes programs 10x faster by doing Special New Thing.
 
 ### Changes to the X86 Backend
 
+* `llvm.zeroize` now lowers to a clearing sequence on x86-64 (LP64). Other
+  subtargets, segment-relative and 32-bit-pointer address spaces, and counts
+  that cannot be shown to fit are reported as unsupported rather than
+  reaching instruction selection.
+
 ### Changes to the OCaml bindings
 
 ### Changes to the Python bindings

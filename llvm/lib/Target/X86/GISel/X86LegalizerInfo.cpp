@@ -11,16 +11,19 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86LegalizerInfo.h"
+#include "X86.h"
 #include "X86Subtarget.h"
 #include "X86TargetMachine.h"
 #include "llvm/CodeGen/GlobalISel/GenericMachineInstrs.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerHelper.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
+#include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/IR/Type.h"
 
@@ -1054,32 +1057,67 @@ bool X86LegalizerInfo::legalizeGLOBAL_VALUE(MachineInstr &MI,
 bool X86LegalizerInfo::legalizeZeroize(MachineInstr &MI,
                                        MachineRegisterInfo &MRI,
                                        LegalizerHelper &Helper) const {
-  // Only the LP64 sequence exists so far; 32-bit x86 keeps reporting the
-  // intrinsic as unlowered.
-  if (!Subtarget.isTarget64BitLP64())
-    return false;
-
   MachineIRBuilder &MIRBuilder = Helper.MIRBuilder;
   const LLT S64 = LLT::scalar(64);
 
   Register Dst = MI.getOperand(1).getReg();
   Register Len = MI.getOperand(2).getReg();
 
-  // The count is overloaded on any integer width, while rep;stosb only reads
-  // %rcx. A count that does not fit is truncated rather than rejected: no such
-  // region can be stepped through anyway.
+  // The address space is on the register's type here, where the SelectionDAG
+  // path needs a memory operand to recover it.
+  LLT DstTy = MRI.getType(Dst);
   LLT LenTy = MRI.getType(Len);
-  if (LenTy.getSizeInBits() > 64)
-    Len = MIRBuilder.buildTrunc(S64, Len).getReg(0);
-  else if (LenTy.getSizeInBits() < 64)
+  unsigned AS = DstTy.getAddressSpace();
+  const char *Unsupported = nullptr;
+
+  if (!Subtarget.isTarget64BitLP64())
+    Unsupported = "has no clearing sequence on this subtarget; it is "
+                  "currently implemented for x86-64 (LP64) only";
+  else if (AS == X86AS::GS || AS == X86AS::FS || AS == X86AS::SS)
+    // A string instruction writes ES:[RDI] and cannot override the destination
+    // segment, so no encoding of rep;stosb reaches one.
+    Unsupported = "cannot clear a segment-relative region: the clearing "
+                  "sequence writes the ES segment, which a string instruction "
+                  "cannot override";
+  else if (DstTy.getSizeInBits() != 64)
+    // A PTR32 pointer is not an address until it is widened, and this
+    // legalizer models p0 only, so it cannot widen one. SelectionDAG rejects
+    // it too, so the two agree rather than one falling back to the other.
+    Unsupported = "cannot clear a region whose pointer is not a 64-bit "
+                  "address";
+  else if (LenTy.getSizeInBits() > 64 && ![&] {
+             auto C = getIConstantVRegVal(Len, MRI);
+             return C && C->isIntN(64);
+           }())
+    // Reject rather than truncate: quietly clearing less than was asked for is
+    // the one answer this must not give. A constant that fits does not ask for
+    // more, and is truncated below.
+    Unsupported = "cannot clear a region whose length does not fit in 64 "
+                  "bits, which is as far as the clearing sequence can count";
+
+  // Say so rather than reporting the intrinsic as unlegalizable, which reads as
+  // a compiler bug. Wording matches X86ISelLowering so one test covers both.
+  if (Unsupported) {
+    MachineFunction &MF = *MI.getMF();
+    MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported(
+        MF.getFunction(), Twine("llvm.zeroize ") + Unsupported,
+        MI.getDebugLoc(), DS_Error));
+    MI.eraseFromParent();
+    return true;
+  }
+
+  // rep;stosb reads all of %rcx, so a narrower count is zero-extended. A wider
+  // one only reaches here as a constant whose value fits, so truncating it
+  // loses nothing.
+  if (LenTy.getSizeInBits() < 64)
     Len = MIRBuilder.buildZExt(S64, Len).getReg(0);
+  else if (LenTy.getSizeInBits() > 64)
+    Len = MIRBuilder.buildTrunc(S64, Len).getReg(0);
 
   MIRBuilder.buildCopy(Register(X86::RCX), Len);
   MIRBuilder.buildCopy(Register(X86::RDI), Dst);
 
-  // Emit the pseudo, not the clearing sequence itself. Everything the sequence
-  // is made of appears in X86ExpandPseudo, past every pass that deletes
-  // stores.
+  // Emit the pseudo, not the sequence. It stays opaque until emission.
   MIRBuilder.buildInstr(X86::ZEROIZE64);
 
   MI.eraseFromParent();
