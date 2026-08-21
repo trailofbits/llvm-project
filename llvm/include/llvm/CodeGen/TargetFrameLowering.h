@@ -212,32 +212,25 @@ public:
   virtual void emitEpilogue(MachineFunction &MF,
                             MachineBasicBlock &MBB) const = 0;
 
-  /// supportsZeroCallUsedRegs - Returns true if this target implements
-  /// emitZeroCallUsedRegs. The default is false rather than true because the
-  /// emission hook does nothing by default: without a query to ask first, a
-  /// target that has not implemented it would drop the request silently, and
-  /// silence is indistinguishable from having zeroed the registers.
+  /// Returns true if this target implements emitZeroCallUsedRegs. Defaults to
+  /// false: the emission does nothing by default, so a target that has not
+  /// implemented it would otherwise drop the request silently.
   virtual bool supportsZeroCallUsedRegs(const MachineFunction &MF) const {
     return false;
   }
 
-  /// emitZeroCallUsedRegs - Zeros out call used registers. Only called on
-  /// targets whose supportsZeroCallUsedRegs returns true.
+  /// Zeros out call used registers. Only called when supportsZeroCallUsedRegs
+  /// returns true.
   virtual void emitZeroCallUsedRegs(BitVector RegsToZero,
                                     MachineBasicBlock &MBB,
                                     RegScavenger *RS) const {}
 
-  /// supportsZeroizeStack - Returns true if this target can clear the stack
-  /// frame of a function carrying the "zeroize-stack" attribute. The default is
-  /// false for the same reason as supportsZeroCallUsedRegs.
+  /// Returns true if this target can clear the stack frame of a function
+  /// carrying the "zeroize-stack" attribute. Defaults to false.
   ///
-  /// There is no emission hook paired with this query yet, so no target has
-  /// anything to answer true with: prologue-epilogue insertion reads it only to
-  /// warn that the attribute will not be honored, and every target currently
-  /// warns. The report is a warning rather than an error precisely because it
-  /// fires everywhere; it becomes an error once some target answers true.
-  /// Overriding this before the emission exists suppresses the warning without
-  /// clearing anything, which is the silence the query was added to prevent.
+  /// No emission hook is paired with this query yet, so nothing can honor a
+  /// true answer: PEI reads it only to warn, and every target warns. Overriding
+  /// it before the emission exists silences the warning and clears nothing.
   virtual bool supportsZeroizeStack(const MachineFunction &MF) const {
     return false;
   }

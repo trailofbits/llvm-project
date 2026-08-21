@@ -120,6 +120,7 @@ class PEIImpl {
   void insertPrologEpilogCode(MachineFunction &MF);
   void insertZeroCallUsedRegs(MachineFunction &MF);
   void diagnoseUnsupportedZeroizeRequests(MachineFunction &MF);
+  void diagnoseIgnoredZeroizeRequestsOnNakedFunction(MachineFunction &MF);
 
 public:
   PEIImpl(MachineOptimizationRemarkEmitter *ORE) : ORE(ORE) {}
@@ -249,10 +250,11 @@ bool PEIImpl::run(MachineFunction &MF) {
   // Calculate actual frame offsets for all abstract stack objects...
   calculateFrameObjectOffsets(MF);
 
-  // Report a clearing request the target cannot discharge. This is deliberately
-  // outside the Naked check below: a naked function gets no prologue but still
-  // carries the attribute, and dropping it there without a word is the silence
-  // the capability queries exist to prevent.
+  // Report a request no target could honor, before asking about target support.
+  diagnoseIgnoredZeroizeRequestsOnNakedFunction(MF);
+
+  // Report a request the target cannot discharge. Outside the Naked check
+  // below: a naked function gets no prologue but still carries the attribute.
   diagnoseUnsupportedZeroizeRequests(MF);
 
   // Add prolog and epilog code to the function.  This function is required
@@ -1207,8 +1209,7 @@ void PEIImpl::insertPrologEpilogCode(MachineFunction &MF) {
       TFI.adjustForHiPEPrologue(MF, *SaveBlock);
 }
 
-/// The clearing a function's "zero-call-used-regs" attribute asks for. A
-/// function without the attribute asks for nothing, which is what Skip means.
+/// The clearing "zero-call-used-regs" asks for. No attribute means Skip.
 static ZeroCallUsedRegs::ZeroCallUsedRegsKind
 getZeroCallUsedRegsKind(const Function &F) {
   using namespace ZeroCallUsedRegs;
@@ -1239,10 +1240,8 @@ void PEIImpl::insertZeroCallUsedRegs(MachineFunction &MF) {
   if (ZeroRegsKind == ZeroCallUsedRegsKind::Skip)
     return;
 
-  // A target that cannot discharge the request has already been told so by
-  // diagnoseUnsupportedZeroizeRequests, so stop before working out what to
-  // clear: emitZeroCallUsedRegs does nothing by default, and the registers
-  // the attribute exists to destroy keep their values either way.
+  // Already reported by diagnoseUnsupportedZeroizeRequests;
+  // emitZeroCallUsedRegs would do nothing, so skip working out what to clear.
   const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
   if (!TFI.supportsZeroCallUsedRegs(MF))
     return;
@@ -1367,33 +1366,63 @@ void PEIImpl::insertZeroCallUsedRegs(MachineFunction &MF) {
       TFI.emitZeroCallUsedRegs(RegsToZero, MBB, RS);
 }
 
-/// diagnoseUnsupportedZeroizeRequests - Report a request to clear registers or
-/// the stack that the target cannot discharge. Asking the target first is the
-/// point: emitZeroCallUsedRegs does nothing by default and stack clearing has
-/// no emission at all, so a request the target cannot meet would otherwise be
-/// dropped without a word, and silence is indistinguishable from having done
-/// the clearing.
+/// Report a clearing request dropped because the function is naked. PEI lays
+/// out no frame and writes no epilogue for one, so "zeroize-stack" has nothing
+/// to clear and "zero-call-used-regs", emitted into the epilogue, has nowhere
+/// to go. Neither can be honored on any target, so the message names the
+/// attribute rather than the target and stays true once one implements
+/// clearing. Warnings, not errors: a request that cannot be met is no reason to
+/// refuse to compile.
+void PEIImpl::diagnoseIgnoredZeroizeRequestsOnNakedFunction(
+    MachineFunction &MF) {
+  const Function &F = MF.getFunction();
+
+  if (!F.hasFnAttribute(Attribute::Naked))
+    return;
+
+  if (F.hasFnAttribute("zeroize-stack"))
+    F.getContext().diagnose(DiagnosticInfoUnsupported{
+        F,
+        "\"zeroize-stack\" ignored on a \"naked\" function: no frame is "
+        "generated to clear",
+        DiagnosticLocation(), DS_Warning});
+
+  using namespace ZeroCallUsedRegs;
+
+  // "skip" asks for no clearing, so nothing is ignored. It must stay silent:
+  // the attribute is often set to "skip" wholesale, which would otherwise make
+  // naked functions unwritable in a translation unit that opts out.
+  if (getZeroCallUsedRegsKind(F) != ZeroCallUsedRegsKind::Skip)
+    F.getContext().diagnose(DiagnosticInfoUnsupported{
+        F,
+        "\"zero-call-used-regs\" ignored on a \"naked\" function: no epilogue "
+        "is generated to clear in",
+        DiagnosticLocation(), DS_Warning});
+}
+
+/// Report a clearing request the target cannot discharge. The emissions are
+/// empty or absent by default, so an unmet request would otherwise be dropped
+/// silently, and silence looks the same as having done the clearing.
 void PEIImpl::diagnoseUnsupportedZeroizeRequests(MachineFunction &MF) {
   const Function &F = MF.getFunction();
   const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
 
+  // Already reported against the function above; the target is not the reason.
+  const bool IsNaked = F.hasFnAttribute(Attribute::Naked);
+
   using namespace ZeroCallUsedRegs;
 
   // "skip" asks for nothing, so there is nothing for the target to discharge.
-  if (getZeroCallUsedRegsKind(F) != ZeroCallUsedRegsKind::Skip &&
+  if (!IsNaked && getZeroCallUsedRegsKind(F) != ZeroCallUsedRegsKind::Skip &&
       !TFI.supportsZeroCallUsedRegs(MF))
     F.getContext().diagnose(DiagnosticInfoUnsupported{
         F, "\"zero-call-used-regs\" is not supported by this target"});
 
-  // Stack clearing is a warning rather than an error, unlike the registers
-  // above. No target implements it, so an error would leave the attribute
-  // impossible to compile anywhere rather than merely unavailable somewhere,
-  // and refusing every use of an attribute is how you remove one, not how you
-  // report it. The warning still breaks the silence, which is what matters
-  // while the emission is being written. Promote it to an error once a target
-  // clears the frame, so that asking an unsupported target then reads the same
-  // as asking one for registers it cannot clear.
-  if (F.hasFnAttribute("zeroize-stack") && !TFI.supportsZeroizeStack(MF))
+  // A warning, not an error like the registers above: no target implements
+  // clearing, so an error would make the attribute impossible to compile
+  // anywhere. Promote it once some target answers true.
+  if (!IsNaked && F.hasFnAttribute("zeroize-stack") &&
+      !TFI.supportsZeroizeStack(MF))
     F.getContext().diagnose(DiagnosticInfoUnsupported{
         F, "\"zeroize-stack\" is not supported by this target",
         DiagnosticLocation(), DS_Warning});
