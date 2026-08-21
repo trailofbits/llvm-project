@@ -15,6 +15,15 @@ define i32 @all(i32 %x) "zero-call-used-regs"="all" {
   ret i32 %x
 }
 
+; A naked function gets no prologue, so there is nowhere to put the clearing,
+; but it still carries the attribute and the target still cannot discharge it.
+; Reporting only the functions that get a prologue would leave the request to
+; be dropped in silence, which is what the query exists to stop.
+; CHECK: error: {{.*}}in function naked void (): "zero-call-used-regs" is not supported by this target
+define void @naked() naked "zero-call-used-regs"="all" {
+  ret void
+}
+
 ; "skip" asks for nothing, so there is nothing for the target to discharge and
 ; nothing to report.
 ; CHECK-NOT: in function skip
