@@ -228,10 +228,16 @@ public:
                                     RegScavenger *RS) const {}
 
   /// supportsZeroizeStack - Returns true if this target can clear the stack
-  /// frame of a function carrying the "zeroize-stack" attribute, that is, if
-  /// it implements emitZeroizeStack. The default is false for the same reason
-  /// as supportsZeroCallUsedRegs. No target implements the emission yet, so
-  /// every target currently reports the attribute as unsupported.
+  /// frame of a function carrying the "zeroize-stack" attribute. The default is
+  /// false for the same reason as supportsZeroCallUsedRegs.
+  ///
+  /// There is no emission hook paired with this query yet, so no target has
+  /// anything to answer true with: prologue-epilogue insertion reads it only to
+  /// warn that the attribute will not be honored, and every target currently
+  /// warns. The report is a warning rather than an error precisely because it
+  /// fires everywhere; it becomes an error once some target answers true.
+  /// Overriding this before the emission exists suppresses the warning without
+  /// clearing anything, which is the silence the query was added to prevent.
   virtual bool supportsZeroizeStack(const MachineFunction &MF) const {
     return false;
   }

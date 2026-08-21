@@ -119,7 +119,7 @@ class PEIImpl {
 
   void insertPrologEpilogCode(MachineFunction &MF);
   void insertZeroCallUsedRegs(MachineFunction &MF);
-  void diagnoseUnsupportedZeroizeStack(MachineFunction &MF);
+  void diagnoseUnsupportedZeroizeRequests(MachineFunction &MF);
 
 public:
   PEIImpl(MachineOptimizationRemarkEmitter *ORE) : ORE(ORE) {}
@@ -248,6 +248,12 @@ bool PEIImpl::run(MachineFunction &MF) {
 
   // Calculate actual frame offsets for all abstract stack objects...
   calculateFrameObjectOffsets(MF);
+
+  // Report a clearing request the target cannot discharge. This is deliberately
+  // outside the Naked check below: a naked function gets no prologue but still
+  // carries the attribute, and dropping it there without a word is the silence
+  // the capability queries exist to prevent.
+  diagnoseUnsupportedZeroizeRequests(MF);
 
   // Add prolog and epilog code to the function.  This function is required
   // to align the stack frame as necessary for any stack variables or
@@ -1179,10 +1185,6 @@ void PEIImpl::insertPrologEpilogCode(MachineFunction &MF) {
   // Zero call used registers before restoring callee-saved registers.
   insertZeroCallUsedRegs(MF);
 
-  // Stack clearing is not emitted by any target yet, so a function asking for
-  // it can only be told that it will not happen.
-  diagnoseUnsupportedZeroizeStack(MF);
-
   for (MachineBasicBlock *SaveBlock : SaveBlocks)
     TFI.inlineStackProbe(MF, *SaveBlock);
 
@@ -1205,42 +1207,45 @@ void PEIImpl::insertPrologEpilogCode(MachineFunction &MF) {
       TFI.adjustForHiPEPrologue(MF, *SaveBlock);
 }
 
+/// The clearing a function's "zero-call-used-regs" attribute asks for. A
+/// function without the attribute asks for nothing, which is what Skip means.
+static ZeroCallUsedRegs::ZeroCallUsedRegsKind
+getZeroCallUsedRegsKind(const Function &F) {
+  using namespace ZeroCallUsedRegs;
+
+  if (!F.hasFnAttribute("zero-call-used-regs"))
+    return ZeroCallUsedRegsKind::Skip;
+
+  return StringSwitch<ZeroCallUsedRegsKind>(
+             F.getFnAttribute("zero-call-used-regs").getValueAsString())
+      .Case("skip", ZeroCallUsedRegsKind::Skip)
+      .Case("used-gpr-arg", ZeroCallUsedRegsKind::UsedGPRArg)
+      .Case("used-gpr", ZeroCallUsedRegsKind::UsedGPR)
+      .Case("used-arg", ZeroCallUsedRegsKind::UsedArg)
+      .Case("used", ZeroCallUsedRegsKind::Used)
+      .Case("all-gpr-arg", ZeroCallUsedRegsKind::AllGPRArg)
+      .Case("all-gpr", ZeroCallUsedRegsKind::AllGPR)
+      .Case("all-arg", ZeroCallUsedRegsKind::AllArg)
+      .Case("all", ZeroCallUsedRegsKind::All);
+}
+
 /// insertZeroCallUsedRegs - Zero out call used registers.
 void PEIImpl::insertZeroCallUsedRegs(MachineFunction &MF) {
   const Function &F = MF.getFunction();
 
-  if (!F.hasFnAttribute("zero-call-used-regs"))
-    return;
-
   using namespace ZeroCallUsedRegs;
 
-  ZeroCallUsedRegsKind ZeroRegsKind =
-      StringSwitch<ZeroCallUsedRegsKind>(
-          F.getFnAttribute("zero-call-used-regs").getValueAsString())
-          .Case("skip", ZeroCallUsedRegsKind::Skip)
-          .Case("used-gpr-arg", ZeroCallUsedRegsKind::UsedGPRArg)
-          .Case("used-gpr", ZeroCallUsedRegsKind::UsedGPR)
-          .Case("used-arg", ZeroCallUsedRegsKind::UsedArg)
-          .Case("used", ZeroCallUsedRegsKind::Used)
-          .Case("all-gpr-arg", ZeroCallUsedRegsKind::AllGPRArg)
-          .Case("all-gpr", ZeroCallUsedRegsKind::AllGPR)
-          .Case("all-arg", ZeroCallUsedRegsKind::AllArg)
-          .Case("all", ZeroCallUsedRegsKind::All);
-
+  ZeroCallUsedRegsKind ZeroRegsKind = getZeroCallUsedRegsKind(F);
   if (ZeroRegsKind == ZeroCallUsedRegsKind::Skip)
     return;
 
-  // Ask the target whether it can discharge the request before computing what
-  // to clear. A target that cannot has to say so: emitZeroCallUsedRegs does
-  // nothing by default, so going ahead would leave the registers holding the
-  // values the attribute exists to destroy, with nothing to tell the caller
-  // that they still do.
+  // A target that cannot discharge the request has already been told so by
+  // diagnoseUnsupportedZeroizeRequests, so stop before working out what to
+  // clear: emitZeroCallUsedRegs does nothing by default, and the registers
+  // the attribute exists to destroy keep their values either way.
   const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
-  if (!TFI.supportsZeroCallUsedRegs(MF)) {
-    F.getContext().diagnose(DiagnosticInfoUnsupported{
-        F, "\"zero-call-used-regs\" is not supported by this target"});
+  if (!TFI.supportsZeroCallUsedRegs(MF))
     return;
-  }
 
   const bool OnlyGPR = static_cast<unsigned>(ZeroRegsKind) & ONLY_GPR;
   const bool OnlyUsed = static_cast<unsigned>(ZeroRegsKind) & ONLY_USED;
@@ -1362,20 +1367,36 @@ void PEIImpl::insertZeroCallUsedRegs(MachineFunction &MF) {
       TFI.emitZeroCallUsedRegs(RegsToZero, MBB, RS);
 }
 
-/// diagnoseUnsupportedZeroizeStack - Report a stack clearing request that the
-/// target cannot discharge.
-void PEIImpl::diagnoseUnsupportedZeroizeStack(MachineFunction &MF) {
+/// diagnoseUnsupportedZeroizeRequests - Report a request to clear registers or
+/// the stack that the target cannot discharge. Asking the target first is the
+/// point: emitZeroCallUsedRegs does nothing by default and stack clearing has
+/// no emission at all, so a request the target cannot meet would otherwise be
+/// dropped without a word, and silence is indistinguishable from having done
+/// the clearing.
+void PEIImpl::diagnoseUnsupportedZeroizeRequests(MachineFunction &MF) {
   const Function &F = MF.getFunction();
-
-  if (!F.hasFnAttribute("zeroize-stack"))
-    return;
-
   const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
-  if (TFI.supportsZeroizeStack(MF))
-    return;
 
-  F.getContext().diagnose(DiagnosticInfoUnsupported{
-      F, "\"zeroize-stack\" is not supported by this target"});
+  using namespace ZeroCallUsedRegs;
+
+  // "skip" asks for nothing, so there is nothing for the target to discharge.
+  if (getZeroCallUsedRegsKind(F) != ZeroCallUsedRegsKind::Skip &&
+      !TFI.supportsZeroCallUsedRegs(MF))
+    F.getContext().diagnose(DiagnosticInfoUnsupported{
+        F, "\"zero-call-used-regs\" is not supported by this target"});
+
+  // Stack clearing is a warning rather than an error, unlike the registers
+  // above. No target implements it, so an error would leave the attribute
+  // impossible to compile anywhere rather than merely unavailable somewhere,
+  // and refusing every use of an attribute is how you remove one, not how you
+  // report it. The warning still breaks the silence, which is what matters
+  // while the emission is being written. Promote it to an error once a target
+  // clears the frame, so that asking an unsupported target then reads the same
+  // as asking one for registers it cannot clear.
+  if (F.hasFnAttribute("zeroize-stack") && !TFI.supportsZeroizeStack(MF))
+    F.getContext().diagnose(DiagnosticInfoUnsupported{
+        F, "\"zeroize-stack\" is not supported by this target",
+        DiagnosticLocation(), DS_Warning});
 }
 
 /// Replace all FrameIndex operands with physical register references and actual
