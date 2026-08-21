@@ -12,9 +12,17 @@
 ; prologue/epilogue insertion, so this is defence in depth rather than a fix
 ; for something the compiler does today; running it by hand is how the property
 ; gets checked rather than assumed.
+;
+; -save-temp-labels on that line is what lets the MIR be read back at all. The
+; EH labels around the invoke below are temporary symbols, and a temporary
+; symbol is unnamed unless that flag is passed; the MIR printer writes an
+; unnamed one as "<mcsymbol >", and the parser then asks MCContext for a symbol
+; by the empty name and asserts. The flag only makes those symbols carry the
+; .Ltmp names that hand-written MIR already spells out. It says nothing about
+; what is selected or emitted, and the first and third RUN lines go without it.
 
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu -mattr=+avx -stop-after=prolog-epilog < %s | FileCheck %s --check-prefix=MIR
-; RUN: llc -mtriple=x86_64-unknown-linux-gnu -mattr=+avx -stop-after=prolog-epilog < %s | llc -mtriple=x86_64-unknown-linux-gnu -mattr=+avx -x mir -run-pass=dead-mi-elimination -o - | FileCheck %s --check-prefix=DCE
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu -mattr=+avx -save-temp-labels -stop-after=prolog-epilog < %s | llc -mtriple=x86_64-unknown-linux-gnu -mattr=+avx -x mir -run-pass=dead-mi-elimination -o - | FileCheck %s --check-prefix=DCE
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu -mattr=+avx < %s | FileCheck %s --check-prefix=ASM
 
 declare void @sink()
@@ -85,17 +93,29 @@ lpad:
   resume { ptr, i32 } %l
 }
 
-; What is named on the return is the target's to choose. X86 answers a cleared
-; YMM register with its 128-bit part, because X86InsertVZeroUpper reads a YMM
-; or ZMM register on a return as a return that carries a vector value and drops
-; the vzeroupper in front of it. The 128-bit part keeps the clear alive just as
-; well, a definition being live as soon as any part of it is.
+; What is named on the return is the register the clear writes, read back off
+; the instruction that was emitted rather than taken from the set the clear was
+; asked to cover, and the two differ for a vector register here. X86 clears a
+; YMM register by writing its 128-bit part: a VEX-encoded xorps zeroes bits
+; 128 and up for free, so one shorter instruction does the whole register. The
+; register that exists to be named is therefore $xmm0, and it is enough --
+; a definition is live as soon as any part of it is.
+;
+; Naming the narrower register is also the only thing that would do here.
+; X86InsertVZeroUpper reads a YMM or ZMM register on a return as a return that
+; carries a vector value and drops the vzeroupper in front of it, so a YMM on
+; this return would hand the caller an AVX-to-SSE transition to pay -- which is
+; what TargetFrameLowering::getClearedRegExitAnchor exists to let a target
+; avoid, and what the ASM check below holds. X86's override of it has nothing
+; to narrow on this path, because what buildClearRegister emits for a vector
+; register is already the 128-bit write; it is the guard for a clear that ever
+; does define the full-width register.
 ; MIR-LABEL: name: vector_anchor
-; MIR:         $ymm0 = AVX_SET0
+; MIR:         $xmm0 = V_SET0
 ; MIR-NEXT:    RET 0, implicit $xmm0
 
 ; DCE-LABEL: name: vector_anchor
-; DCE:         $ymm0 = AVX_SET0
+; DCE:         $xmm0 = V_SET0
 ; DCE-NEXT:    RET 0, implicit $xmm0
 
 ; The vzeroupper the function had before any of this is still emitted.
