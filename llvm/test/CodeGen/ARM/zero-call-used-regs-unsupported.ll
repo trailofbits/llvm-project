@@ -1,9 +1,7 @@
 ; RUN: not llc -mtriple=armv7-unknown-linux-gnueabi < %s -o /dev/null 2>&1 | FileCheck %s
 
-; ARM does not implement emitZeroCallUsedRegs, so it answers
-; supportsZeroCallUsedRegs with false and the request is reported. Before the
-; query existed the empty default emission ran and the attribute was dropped
-; without a word, leaving the registers holding what it asked to have cleared.
+; ARM does not implement emitZeroCallUsedRegs, so supportsZeroCallUsedRegs is
+; false and the request is reported. Before the query it was dropped silently.
 
 ; CHECK: error: {{.*}}in function used_gpr i32 (i32): "zero-call-used-regs" is not supported by this target
 define i32 @used_gpr(i32 %x) "zero-call-used-regs"="used-gpr" {
@@ -15,17 +13,10 @@ define i32 @all(i32 %x) "zero-call-used-regs"="all" {
   ret i32 %x
 }
 
-; A naked function gets no prologue, so there is nowhere to put the clearing,
-; but it still carries the attribute and the target still cannot discharge it.
-; Reporting only the functions that get a prologue would leave the request to
-; be dropped in silence, which is what the query exists to stop.
-; CHECK: error: {{.*}}in function naked void (): "zero-call-used-regs" is not supported by this target
-define void @naked() naked "zero-call-used-regs"="all" {
-  ret void
-}
+; The naked case is reported against the function rather than the target, so it
+; lives in zeroize-naked.ll. This file's message is about the target.
 
-; "skip" asks for nothing, so there is nothing for the target to discharge and
-; nothing to report.
+; "skip" asks for nothing, so there is nothing to report.
 ; CHECK-NOT: in function skip
 define i32 @skip(i32 %x) "zero-call-used-regs"="skip" {
   ret i32 %x

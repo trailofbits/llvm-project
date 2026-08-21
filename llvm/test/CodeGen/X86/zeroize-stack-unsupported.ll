@@ -2,10 +2,8 @@
 ; RUN: llc -mtriple=i386-unknown-linux-gnu < %s -o /dev/null 2>&1 | FileCheck %s
 
 ; No target clears the stack frame yet, so every "zeroize-stack" request is
-; reported rather than compiled into a function that leaves the frame intact.
-; The report is a warning, and llc is run without "not" to pin that: an error
-; would fire on every target and leave the attribute impossible to compile
-; anywhere, which removes it rather than reports it.
+; reported. llc runs without "not" to pin that it warns: an error would fire
+; everywhere and leave the attribute impossible to compile at all.
 
 ; CHECK: warning: {{.*}}in function used i32 (i32): "zeroize-stack" is not supported by this target
 define i32 @used(i32 %x) "zeroize-stack"="used" {
@@ -17,17 +15,11 @@ define i32 @sensitive(i32 %x) "zeroize-stack"="sensitive" {
   ret i32 %x
 }
 
-; A naked function has no frame the compiler lays out, but it still carries the
-; attribute, so it is told the request will not be met rather than left to
-; assume it was.
-; CHECK: warning: {{.*}}in function naked void (): "zeroize-stack" is not supported by this target
-define void @naked() naked "zeroize-stack"="used" {
-  ret void
-}
+; The naked case is reported against the function rather than the target, so it
+; lives in zeroize-naked.ll. This file's message is about the target.
 
-; The two capabilities are answered separately: x86 clears call-used registers,
-; so that request is still discharged rather than swept up by the one it cannot
-; satisfy.
+; The two capabilities are answered separately: x86 still clears call-used
+; registers rather than being swept up by the request it cannot satisfy.
 ; CHECK-NOT: in function regs
 define i32 @regs(i32 %x) "zero-call-used-regs"="used-gpr" {
   ret i32 %x
