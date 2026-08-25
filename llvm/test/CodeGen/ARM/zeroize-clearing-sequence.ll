@@ -8,7 +8,7 @@
 
 declare i32 @callee(i32)
 
-; CHECK: error: {{.*}}in function both i32 (i32): "zeroize-stack" is not supported by this target
+; CHECK: warning: {{.*}}in function both i32 (i32): "zeroize-stack" is not supported by this target
 ; CHECK: error: {{.*}}in function both i32 (i32): "zero-call-used-regs" is not supported by this target
 ; CHECK-LABEL: clearing sequence for function 'both':
 ; CHECK-NEXT:  %bb.0 return: clear-stack=unsupported clear-registers=unsupported clear-flags=unimplemented

@@ -1674,7 +1674,8 @@ ClearingDisposition PEIImpl::planClearStack(MachineFunction &MF) {
   const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
   if (!TFI.supportsZeroizeStack(MF)) {
     F.getContext().diagnose(DiagnosticInfoUnsupported{
-        F, "\"zeroize-stack\" is not supported by this target"});
+        F, "\"zeroize-stack\" is not supported by this target",
+        DiagnosticLocation(), DS_Warning});
     return ClearingDisposition::Unsupported;
   }
 
