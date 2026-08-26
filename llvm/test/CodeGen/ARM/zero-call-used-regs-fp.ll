@@ -11,12 +11,16 @@
 
 ; D8-D15 are callee-saved, so the vector registers built out of them are the
 ; caller's and are not cleared: on NEON that leaves q0-q3 and q8-q15, and the
-; gap where q4-q7 would be is the point.
+; gap where q4-q7 would be is the point. Every register in the gap is named,
+; not a sample of it. Clearing one of these is an ABI violation, and a guard
+; that covers some of a set is one a violation can walk between.
 ; NEON-LABEL: all_regs:
 ; NEON:         vmov.i32 q0, #0x0
 ; NEON-NEXT:    mov r0, #0
 ; NEON:         vmov.i32 q3, #0x0
 ; NEON-NOT:     vmov.i32 q4,
+; NEON-NOT:     vmov.i32 q5,
+; NEON-NOT:     vmov.i32 q6,
 ; NEON-NOT:     vmov.i32 q7,
 ; NEON:         vmov.i32 q8, #0x0
 ; NEON:         vmov.i32 q15, #0x0
@@ -31,6 +35,13 @@
 ; VFP:         vmov d0, r0, r0
 ; VFP:         vmov d7, r0, r0
 ; VFP-NOT:     vmov d8,
+; VFP-NOT:     vmov d9,
+; VFP-NOT:     vmov d10,
+; VFP-NOT:     vmov d11,
+; VFP-NOT:     vmov d12,
+; VFP-NOT:     vmov d13,
+; VFP-NOT:     vmov d14,
+; VFP-NOT:     vmov d15,
 ; VFP:         bx lr
 ;
 ; MVE reaches q0-q7 and, unlike NEON, has a predicate register that is neither
