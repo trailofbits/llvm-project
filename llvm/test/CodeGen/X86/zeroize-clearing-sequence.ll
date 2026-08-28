@@ -73,8 +73,9 @@ lpad:
   resume { ptr, i32 } %l
 }
 
-; A tail call is in scope, and stays in scope: what it needs on top of this is
-; trailofbits/vspells-ct-internal-notes#22.
+; A tail call is in scope, and stays in scope. What a tail call needs beyond
+; being reached is left for a later change; this pins only that the exit is
+; classified and that the sequence runs at it.
 ; CHECK-LABEL: clearing sequence for function 'tail_call':
 ; CHECK-NEXT:  %bb.0 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
 ; CHECK-NEXT:  end clearing sequence for function 'tail_call'

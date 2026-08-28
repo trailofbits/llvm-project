@@ -79,10 +79,9 @@ using MBBVector = SmallVector<MachineBasicBlock *, 4>;
 STATISTIC(NumLeafFuncWithSpills, "Number of leaf functions with CSRs");
 STATISTIC(NumFuncSeen, "Number of functions seen in PEI");
 
-// The sequence the clearing runs as. Printing it is not conditional on
-// assertions or on statistics being built in, because the order the steps run
-// in is what is being enforced, so a sequence that decides what gets destroyed
-// has to be checkable in the configurations a release compiler is built in.
+// Prints the clearing sequence at each in-scope exit. Not gated on assertions
+// or statistics: the order is the property being enforced, so it has to be
+// checkable in the configuration a release compiler ships in.
 static cl::opt<bool> PrintClearingSequence(
     "pei-print-clearing-sequence", cl::Hidden,
     cl::desc("Print the clearing sequence emitted at each in-scope exit, in "
@@ -93,65 +92,43 @@ namespace {
 //===----------------------------------------------------------------------===//
 // The clearing sequence.
 //
-// A function that has been told to destroy what it leaves behind has more than
-// one thing to destroy, and the pieces are not independent: clearing the frame
-// needs registers to do it with, and everything that runs writes the flags. So
-// what is emitted at an exit is not a set of steps that happen to share a
-// pass, it is one sequence with an order, run once at every exit the
-// classification calls in scope, and the order is part of what is enforced.
+// A function told to destroy what it leaves behind has several things to clear,
+// and they are not independent: clearing the frame needs registers, and every
+// step writes the flags. So an exit emits one ordered sequence, run at every
+// in-scope exit, not a set of independent steps; the order is enforced.
 //
-// The order is ClearStack, then ClearRegisters, then ClearFlags, and each step
-// is where it is for a reason that outlives whichever implementation is behind
-// it:
+// The order is ClearStack, then ClearRegisters, then ClearFlags. Each position
+// has a reason that outlives whichever implementation sits behind it:
 //
-//  - Clearing the stack is first because it cannot be done without registers.
-//    The value being stored and the address being stored through are both in
-//    registers while it runs, and both are derived from the frame it is
-//    destroying, so it ends leaving in registers what it has just taken out of
-//    memory. A register clear placed in front of it would be undone by it.
-//    Which registers those are, and making sure the register clear covers
-//    them, is trailofbits/vspells-ct-internal-notes#20; the clearing itself is
-//    trailofbits/vspells-ct-internal-notes#26.
+//  - ClearStack is first because it needs registers: the value and the address
+//    it stores through are live in registers derived from the frame, so it
+//    leaves in registers what it took out of memory, and a register clear in
+//    front of it would be undone. No target implements it yet; whoever does
+//    must name those registers so the following register clear covers them.
 //
-//  - Clearing the registers is after every step that needs a register to work
-//    with and before every step that does not, which is what makes it the step
-//    that sees the final state of the registers. Anything added later that
-//    computes an address, a length or a value has to go in front of it for the
-//    same reason the stack clear does.
+//  - ClearRegisters is after every step that needs a register and before every
+//    step that does not, so it sees the registers' final state. Anything added
+//    later that computes an address, length or value must go in front of it.
 //
-//  - Clearing the flags is last because every other step writes them. A
-//    register is cleared on x86 by exclusive-oring it with itself, which sets
-//    them from the value that was in the register, and a stack clear that
-//    loops sets them from the count. A flag clear anywhere else in the
-//    sequence is overwritten by the step after it, which is why the design
-//    fixes it at the end of the x86 sequence rather than leaving it to the
-//    target.
+//  - ClearFlags is last because every other step writes the flags (an x86
+//    register clear xors; a looping stack clear sets them from the count), so a
+//    flag clear placed earlier would be overwritten.
 //
-// The order is over the emitted code, not over insertion points. Every step
-// implemented today emits at the exit's insertion point, which is in front of
-// the instruction control leaves through and so after the epilogue has
-// restored the callee-saved registers and released the frame. A step that has
-// to run earlier in the block than that will not emit there: clearing the
-// frame has to happen before the epilogue moves the stack pointer, because
-// after that the frame is no longer addressable as the frame. It still has to
-// leave every later step behind it in program order, which is what the order
-// is over.
+// The order is over the emitted code, not over one insertion point. Today every
+// step emits at the exit's insertion point, after the epilogue. A step that has
+// to run earlier (a frame clear, before the epilogue moves SP and the frame
+// stops being addressable) still has to leave every later step behind it in
+// program order.
 //
-// Two properties hold of the sequence as a whole, and a step added later has
-// to keep both:
+// Two whole-sequence invariants a later step must keep:
 //
-//  - It is emitted at the exits a sequence can be placed at, and only there.
-//    Which blocks those are is decided by getEnforceableExit(), once, rather
-//    than by each step looking for somewhere to put itself; a step that
-//    cannot be placed at an exit that is in scope is a gap to record, not a
-//    reason for the step to pick its own sites.
+//  - It runs only at the exits getEnforceableExit() picks, decided once rather
+//    than per step. A step that cannot be placed at an in-scope exit is a gap to
+//    record, not a licence to pick its own sites.
 //
-//  - It does not depend on secret values. Which steps run is decided from the
-//    function's attributes and the target's capabilities, and where they run
-//    from the shape of the control flow; nothing in it is chosen by a value
-//    the function computed. Two runs of a protected function therefore execute
-//    the same sequence, so the sequence itself tells an observer nothing about
-//    what it is clearing.
+//  - It does not depend on secret values: which steps run comes from attributes
+//    and target capabilities, where they run from control-flow shape. Two runs
+//    of a protected function execute the same sequence.
 //
 //===----------------------------------------------------------------------===//
 
@@ -1456,27 +1433,21 @@ static bool isUnwindResumeCall(const MachineInstr &MI) {
 }
 
 /// The instruction control leaves \p MBB through, if a clearing sequence can be
-/// placed at it, or null if it cannot.
+/// placed at it, or null if it cannot. Only what the exit does with the frame
+/// decides this.
 ///
-/// What decides this is what the exit does with the frame, and nothing else,
-/// because that is what decides whether a sequence can be placed at it. Almost
-/// every exit that can be is a return block, and isReturnBlock() is the whole
-/// of that test: a plain return, a tail call, cleanupret and catchret all carry
-/// isReturn in the instruction description, so the four are one case rather
-/// than four kinds, and the walk over return blocks that register clearing has
-/// always done already reached every one of them. The exception is a landing
-/// pad that has run its cleanups and leaves by calling the routine that resumes
-/// unwinding: it ends in a call rather than a return, so no existing predicate
-/// reaches it, and that is the one exit this has to recognise itself.
+/// Almost every placeable exit is a return block, and isReturnBlock() is the
+/// whole test: a plain return, a tail call, cleanupret and catchret all carry
+/// isReturn, so they are one case, and the walk over return blocks that register
+/// clearing has always done already reached them all. The one exception is a
+/// landing pad that has run its cleanups and leaves by calling the routine that
+/// resumes unwinding: it ends in a call, not a return, so no existing predicate
+/// reaches it and this has to recognise it itself.
 ///
-/// The exits this returns null for are out of scope rather than overlooked, and
-/// for the same reason in each case: the frame is abandoned rather than
-/// released, so there is no position at which a sequence could run and still be
-/// the last thing to touch it. A call that does not return here hands the
-/// caller's context back through the unwinder or through a jump with nothing of
-/// ours in between; a non-local jump does the same by reloading another frame's
-/// stack and frame pointers; and a trap, or an empty block left behind by an
-/// unreachable, does not transfer out of the frame at all.
+/// Null means out of scope, not overlooked: a call that does not return, a
+/// non-local jump that reloads another frame's pointers, and a trap all abandon
+/// the frame rather than release it, so no position in the block is the last to
+/// touch the frame.
 static MachineInstr *getEnforceableExit(MachineBasicBlock &MBB) {
   if (MBB.isReturnBlock())
     return &*MBB.getFirstTerminator();
@@ -1496,13 +1467,9 @@ static MachineInstr *getEnforceableExit(MachineBasicBlock &MBB) {
   return nullptr;
 }
 
-/// A short stable name for the exit \p ExitMI leaves through, as printed by
-/// -pei-print-clearing-sequence.
-///
-/// This is a name for the print, not a classification the emission runs off:
-/// what the sequence needs to know about an exit is where it is, which is
-/// getEnforceableExit()'s answer, and every exit that reaches here is one it
-/// said yes to.
+/// A short stable name for the exit \p ExitMI leaves through, for the print
+/// only. The emission does not classify exits; it only needs their position,
+/// which getEnforceableExit() gives.
 static StringRef getExitKindName(const MachineInstr &ExitMI) {
   if (ExitMI.isEHScopeReturn())
     return "eh-scope-return";
@@ -1511,16 +1478,12 @@ static StringRef getExitKindName(const MachineInstr &ExitMI) {
   return "unwind-resume";
 }
 
-/// Where the clearing sequence goes at the exit \p ExitMI of \p MBB.
-///
-/// Every step of the sequence is emitted here, so that the order the steps are
-/// emitted in is the order they run in. The whole terminator run of a block
-/// stays together and stays last, so at an exit that leaves through a
-/// terminator the sequence goes in front of the first of them, which is where
-/// register clearing has always been placed and is after the epilogue. An exit
-/// that leaves through a call, that is, one that resumes unwinding, has no
-/// terminator to sit in front of; there the sequence goes in front of the call
-/// itself, because after it is after the function.
+/// Where the clearing sequence goes at \p ExitMI of \p MBB. Every step emits
+/// here, so the emit order is the run order. At an exit that leaves through a
+/// terminator it goes in front of the first terminator (after the epilogue,
+/// where register clearing has always gone). An exit that leaves through a call,
+/// one that resumes unwinding, has no terminator, so it goes in front of the
+/// call: after it is after the function.
 static MachineBasicBlock::iterator
 getClearingInsertPoint(MachineBasicBlock &MBB, MachineInstr &ExitMI) {
   if (ExitMI.isTerminator())
@@ -1528,17 +1491,13 @@ getClearingInsertPoint(MachineBasicBlock &MBB, MachineInstr &ExitMI) {
   return MachineBasicBlock::iterator(ExitMI);
 }
 
-/// The registers to clear at \p Exit, given the set \p RegsToZero computed for
-/// the function as a whole.
-///
-/// A register the exit itself reads or writes has to come through the sequence
-/// intact: the call that resumes unwinding takes the exception object in an
-/// argument register, and clearing it would leave the unwinder with nothing to
-/// resume. The function-wide set is already computed with the registers used
-/// by the function's returns removed, so this only ever takes something out at
-/// an exit that is not one of them. Computing the set per exit, rather than
-/// narrowing one computed for the whole function, is
-/// trailofbits/vspells-ct-internal-notes#27.
+/// The registers to clear at \p ExitMI, narrowed from the function-wide
+/// \p RegsToZero. A register the exit reads or writes must survive: the resume
+/// call takes the exception object in an argument register, and clearing it
+/// would leave the unwinder nothing to resume. The function-wide set already
+/// drops registers used by the function's returns, so this only removes
+/// something at a non-return exit. A true per-exit computation is left for a
+/// later change.
 static BitVector getRegsToClearAtExit(const BitVector &RegsToZero,
                                       const MachineInstr &ExitMI,
                                       const TargetRegisterInfo &TRI) {
@@ -1563,11 +1522,9 @@ static BitVector getRegsToClearAtExit(const BitVector &RegsToZero,
 /// This is the one place the steps are ordered and the one place they are
 /// emitted; see the comment on ClearingSequence for what the order is and why.
 void PEIImpl::insertClearingSequences(MachineFunction &MF) {
-  // The plan is made once for the function: what a step does cannot depend on
-  // which exit it is being emitted at, or the sequence would not be one
-  // sequence. It is also made before anything is emitted, so that a request
-  // the target cannot discharge is reported whether or not the function has an
-  // exit to emit at.
+  // Plan once for the function: a step's disposition cannot depend on which
+  // exit it emits at, and planning before emission reports an unsupported
+  // request whether or not the function has an exit to emit at.
   ExitClearingPlan Plan;
   planClearingSequence(MF, Plan);
 
@@ -1632,8 +1589,7 @@ void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
     // Nothing emits here yet: no target can clear the frame, so planning has
     // already refused every request for it and this step never reaches
     // emission. It is first in the order because it needs registers to run,
-    // and the register clear after it is what destroys those;
-    // trailofbits/vspells-ct-internal-notes#26.
+    // and the register clear after it is what destroys those.
     break;
 
   case ClearingStep::ClearRegisters:
@@ -1679,8 +1635,8 @@ ClearingDisposition PEIImpl::planClearStack(MachineFunction &MF) {
     return ClearingDisposition::Unsupported;
   }
 
-  // A target answering that it can clear the frame has nothing to clear it
-  // with yet: trailofbits/vspells-ct-internal-notes#26.
+  // No target implements the step yet, so a supported request reports
+  // unimplemented rather than silently emitting nothing.
   return ClearingDisposition::Unimplemented;
 }
 
