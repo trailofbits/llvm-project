@@ -174,24 +174,21 @@ enum class ClearingDisposition {
   Emit,
 };
 
-/// What each step of the sequence does in one function, decided once for the
-/// function and before any of it is emitted, because the sequence has to be
-/// the same at every exit.
+/// What each step of the sequence does in one function, decided once and before
+/// any of it is emitted, because the sequence must be the same at every exit.
 ///
-/// Which steps run is a property of the function. What one of them operates on
-/// need not be: the registers a clear can cover are the ones dead at the exit
-/// it runs at, and that differs between exits. So the plan holds the part of
-/// the register set the function's mode decides, and the rest is decided at
-/// each exit; see computeRegsToClearAtExit.
+/// Which steps run is the function's to decide. What a step covers is not: a
+/// clear can only cover registers dead where it runs, and that differs per
+/// exit. So the plan holds just the mode's function-wide choice of registers;
+/// the rest is settled per exit. See computeRegsToClearAtExit.
 struct ExitClearingPlan {
   ClearingDisposition Stack = ClearingDisposition::NotRequested;
   ClearingDisposition Registers = ClearingDisposition::NotRequested;
   ClearingDisposition Flags = ClearingDisposition::NotRequested;
 
-  /// The registers ClearRegisters is allowed to clear anywhere in the
-  /// function: what its mode selects, less what the function has to preserve
-  /// wherever it leaves. It is not what is cleared at any one exit, which is
-  /// this set less what that exit needs.
+  /// The registers ClearRegisters may clear anywhere in the function: what the
+  /// mode selects, less what the function must preserve at every exit. Not the
+  /// set cleared at any one exit, which is this less what that exit needs.
   BitVector CandidateRegsToZero;
 
   ClearingDisposition dispositionOf(ClearingStep Step) const {
@@ -1445,26 +1442,29 @@ static bool isUnwindResumeCall(const MachineInstr &MI) {
 /// placed at it, or null if it cannot. Only what the exit does with the frame
 /// decides this.
 ///
-/// Almost every placeable exit is a return block, and isReturnBlock() is the
-/// whole test: a plain return, a tail call, cleanupret and catchret all carry
-/// isReturn, so they are one case, and the walk over return blocks that register
-/// clearing has always done already reached them all. The one exception is a
-/// landing pad that has run its cleanups and leaves by calling the routine that
-/// resumes unwinding: it ends in a call, not a return, so no existing predicate
-/// reaches it and this has to recognise it itself.
+/// A block with a successor continues in the function, so it is never an exit,
+/// and that is tested first. isReturn alone is not enough: catchret carries it
+/// but only leaves the exception scope, resuming the function at the block it
+/// names, so its registers are still the function's and clearing belongs at the
+/// real exit downstream. Clearing at it would also destroy the resumption
+/// address the funclet ABI returns.
 ///
-/// Null means out of scope, not overlooked: a call that does not return, a
-/// non-local jump that reloads another frame's pointers, and a trap all abandon
-/// the frame rather than release it, so no position in the block is the last to
-/// touch the frame.
+/// Otherwise a return block is the whole of it: plain return, tail call and
+/// cleanupret-to-caller all carry isReturn, and the usual return-block walk
+/// reaches them. The one it misses is a landing pad that resumes unwinding by a
+/// call, not a return; no existing predicate reaches it, so this does.
+///
+/// Null means out of scope, not overlooked: a non-returning call, a non-local
+/// jump that reloads another frame's pointers, and a trap all abandon the frame
+/// rather than release it, so nothing in the block is the last to touch it.
 static MachineInstr *getEnforceableExit(MachineBasicBlock &MBB) {
-  if (MBB.isReturnBlock())
-    return &*MBB.getFirstTerminator();
-
-  // Everything else that leaves the function leaves it for good, so the block
-  // it leaves from has nowhere else to go.
+  // A block with a successor continues in the function, so it is not an exit
+  // however its terminator reads; catchret reaches here carrying isReturn.
   if (!MBB.succ_empty())
     return nullptr;
+
+  if (MBB.isReturnBlock())
+    return &*MBB.getFirstTerminator();
 
   // Labels, CFI and the rest of the meta instructions carry no control flow, so
   // the shape of the exit is decided by what is underneath them.
@@ -1500,26 +1500,24 @@ getClearingInsertPoint(MachineBasicBlock &MBB, MachineInstr &ExitMI) {
   return MachineBasicBlock::iterator(ExitMI);
 }
 
-/// The registers to clear at the exit the sequence is being emitted at, from
-/// the candidates \p Candidates the function's mode allows.
+/// The registers to clear at this exit, from the candidates \p Candidates the
+/// mode allows. What an exit still needs is the exit's to decide, not the
+/// function's. The sequence is emitted at \p InsertPt, so what runs after it is
+/// the rest of \p MBB: a return and its return-value registers, a tail call and
+/// its outgoing-argument registers, or an unwind-resume call and the argument
+/// register holding the exception object. Those are spared; the rest of the
+/// mode's set is dead here and cleared.
 ///
-/// A register still needed where the sequence runs has to come through it
-/// intact, and what is still needed is decided by the exit, not by the
-/// function. The sequence is emitted at \p InsertPt, so what runs after it is
-/// the rest of \p MBB: the return and the registers it carries the return
-/// value in, the jump of a tail call and the registers it leaves the outgoing
-/// arguments in, or the call that resumes unwinding and the argument register
-/// it takes the exception object in. Those are what the exit needs; everything
-/// else the mode selected is dead by then and gets cleared.
-///
-/// Asking the exit is what makes the answer an exit's answer. Taking the union
-/// over the function's returns instead, as this did when there was one set for
-/// the whole function, leaves every return's live-out registers uncleared at
-/// every other return, where they are dead and hold whatever the function last
-/// put in them.
+/// Asking the exit is what makes the answer per-exit. The old function-wide set
+/// took the union over the returns instead, leaving each return's live-out
+/// registers uncleared at every other return, dead and holding a value.
 static BitVector computeRegsToClearAtExit(
     const BitVector &Candidates, const MachineBasicBlock &MBB,
     MachineBasicBlock::const_iterator InsertPt, const TargetRegisterInfo &TRI) {
+  // Only the rest of the block runs after the sequence, and only because the
+  // block does not continue in the function; getEnforceableExit() ensures that.
+  assert(MBB.succ_empty() && "exit block continues in the function");
+
   BitVector RegsToZero = Candidates;
 
   for (const MachineInstr &MI : make_range(InsertPt, MBB.end())) {
@@ -1531,12 +1529,12 @@ static BitVector computeRegsToClearAtExit(
       if (!Reg)
         continue;
 
-      // This picks up sibling registers (e.q. %al -> %ah).
-      // FIXME: Mixing physical registers and register units is likely a bug.
-      // Kept as it was when the return-value exclusion was computed for the
-      // whole function: it only ever spares registers, so correcting it would
-      // widen what is cleared, which is a change to what the existing
-      // "zero-call-used-regs" modes emit.
+      // This picks up sibling registers (e.g. %al -> %ah).
+      // FIXME: mixing physical registers and register units is likely a bug,
+      // and it does over-spare (a dead sibling can survive a clear). Kept all
+      // the same: it also spares siblings a clear would widen into a live
+      // register (%ah into %al on x86), and no target-agnostic rule keeps both
+      // that and AArch64's independently-cleared register tuples correct.
       if (MI.isReturn())
         for (MCRegUnit Unit : TRI.regunits(Reg))
           RegsToZero.reset(static_cast<unsigned>(Unit));
@@ -1555,12 +1553,11 @@ static BitVector computeRegsToClearAtExit(
 /// This is the one place the steps are ordered and the one place they are
 /// emitted; see the comment on ClearingSequence for what the order is and why.
 void PEIImpl::insertClearingSequences(MachineFunction &MF) {
-  // The plan is made once for the function: which steps run cannot depend on
-  // which exit they are being emitted at, or the sequence would not be one
-  // sequence. What a step covers is another matter, and the register clear
-  // settles that at each exit. The plan is also made before anything is
-  // emitted, so that a request the target cannot discharge is reported whether
-  // or not the function has an exit to emit at.
+  // Plan once for the function: which steps run cannot depend on the exit, or
+  // the sequence would not be one sequence (what a step covers can, and the
+  // register clear settles that per exit). Planning before emission also
+  // reports a request the target cannot discharge whether or not the function
+  // has an exit to emit at.
   ExitClearingPlan Plan;
   planClearingSequence(MF, Plan);
 
@@ -1681,11 +1678,11 @@ ClearingDisposition PEIImpl::planClearStack(MachineFunction &MF) {
 /// planClearRegisters - Decide what the ClearRegisters step does in \p MF, and
 /// compute the registers it is allowed to clear.
 ///
-/// What comes out is the candidate set, not the set cleared at any exit. Two
-/// things about a register decide whether it can be cleared: whether the mode
-/// selects it, which is a question about the function, and whether it is dead
-/// where the sequence runs, which is a question about one exit. This answers
-/// the first; computeRegsToClearAtExit answers the second at each exit.
+/// What comes out is the candidate set, not the set cleared at any exit.
+/// Whether a register can be cleared turns on two things: whether the mode
+/// selects it (a question about the function, answered here) and whether it is
+/// dead where the sequence runs (a question about one exit, answered by
+/// computeRegsToClearAtExit).
 ClearingDisposition
 PEIImpl::planClearRegisters(MachineFunction &MF,
                             BitVector &CandidateRegsToZero) {
@@ -1774,14 +1771,13 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
     CandidateRegsToZero.set(Reg.id());
   }
 
-  // Registers still needed where the sequence runs are taken out at each exit
-  // rather than here. Doing it here means doing it for the function, which
-  // means the union over its exits, and a register the function needs at one
-  // exit is left holding a value at every other one.
+  // Registers still needed where the sequence runs are taken out per exit, not
+  // here: doing it here means the union over the exits, which leaves a register
+  // one exit needs holding a value at every other one.
 
-  // Don't clear registers that must be preserved. This is the function's to
-  // decide: a callee-saved register has to hold what the caller left in it
-  // wherever the function leaves, so no exit can clear one.
+  // Callee-saved registers are the function's to preserve, though: one has to
+  // hold what the caller left in it wherever the function leaves, so no exit
+  // can clear it.
   for (const MCPhysReg *CSRegs = TRI.getCalleeSavedRegs(&MF);
        MCPhysReg CSReg = *CSRegs; ++CSRegs)
     for (MCRegister Reg : TRI.sub_and_superregs_inclusive(CSReg))
