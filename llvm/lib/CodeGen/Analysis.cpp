@@ -545,7 +545,7 @@ bool llvm::isInTailCallPosition(const CallBase &Call, const TargetMachine &TM,
   // rejected in the Verifier (a caller cannot drop it); suppressing it here too
   // is a backstop for unverified IR, failing closed into the backend's musttail
   // error rather than a protected function that keeps its frame.
-  if (Call.getCaller()->hasFnAttribute("zeroize-stack"))
+  if (Call.getCaller()->hasZeroizeStack())
     return false;
 
   const BasicBlock *ExitBB = Call.getParent();

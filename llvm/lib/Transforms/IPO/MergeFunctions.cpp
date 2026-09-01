@@ -464,7 +464,7 @@ static bool isEligibleForMerging(Function &F) {
          // to clear a frame it no longer owns, and a musttail thunk (swifttailcc)
          // cannot clear one at all. Keep protected functions whole, as inlining
          // already does.
-         !F.hasFnAttribute("zeroize-stack") &&
+         !F.hasZeroizeStack() &&
          !hasDistinctMetadataIntrinsic(F);
 }
 

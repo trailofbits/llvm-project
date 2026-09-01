@@ -517,6 +517,21 @@ public:
     return AttributeSets.getParamNoFPClass(ArgNo);
   }
 
+  /// The "zeroize-stack" attribute: the function's undertaking to clear its own
+  /// stack frame before it returns. Named once here so the enforcement sites
+  /// spread across CodeGen, the Verifier and the IPO passes cannot drift, and a
+  /// misspelling fails to compile rather than silently dropping the guarantee.
+  static constexpr StringRef ZeroizeStackAttrName = "zeroize-stack";
+
+  /// Return true if the function carries the "zeroize-stack" attribute.
+  bool hasZeroizeStack() const { return hasFnAttribute(ZeroizeStackAttrName); }
+
+  /// Return the "zeroize-stack" mode, or an empty string if the attribute is
+  /// absent. An empty or unrecognized value means the widest mode; see LangRef.
+  StringRef getZeroizeStackMode() const {
+    return getFnAttribute(ZeroizeStackAttrName).getValueAsString();
+  }
+
   /// Determine if the function is presplit coroutine.
   bool isPresplitCoroutine() const {
     return hasFnAttribute(Attribute::PresplitCoroutine);

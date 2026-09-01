@@ -2621,12 +2621,12 @@ static bool checkZeroizeStack(const Function &Caller, const Function &Callee) {
   // frame would have sat below the stack pointer at the caller's return, where
   // no clear reaches it, and inlining turns those bytes into frame bytes the
   // caller does clear.
-  if (!Callee.hasFnAttribute("zeroize-stack"))
+  if (!Callee.hasZeroizeStack())
     return true;
 
   // Otherwise the caller has to carry the attribute too, or there is no clear
   // for the callee's frame bytes to be folded into.
-  if (!Caller.hasFnAttribute("zeroize-stack"))
+  if (!Caller.hasZeroizeStack())
     return false;
 
   // Both are protected, so the caller must not ask for less of its frame than
@@ -2637,10 +2637,8 @@ static bool checkZeroizeStack(const Function &Caller, const Function &Callee) {
   // An absent, an empty, and an unrecognized value all mean "used", so a value
   // this consumer cannot interpret clears more of the frame than it must,
   // never less. See llvm/test/Transforms/Inline/zeroize-stack.ll.
-  return Caller.getFnAttribute("zeroize-stack").getValueAsString() !=
-             ZeroizeStackNarrowestMode ||
-         Callee.getFnAttribute("zeroize-stack").getValueAsString() ==
-             ZeroizeStackNarrowestMode;
+  return Caller.getZeroizeStackMode() != ZeroizeStackNarrowestMode ||
+         Callee.getZeroizeStackMode() == ZeroizeStackNarrowestMode;
 }
 
 template<typename AttrClass>
