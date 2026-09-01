@@ -66,6 +66,12 @@ bool TargetLowering::isInTailCallPosition(SelectionDAG &DAG, SDNode *Node,
   if (F.getFnAttribute("disable-tail-calls").getValueAsBool())
     return false;
 
+  // A protected function cannot clear its frame after a tail call. This is a
+  // legalizer libcall being folded into one, refused for the same reason as a
+  // tail call in the IR (see isInTailCallPosition in Analysis.cpp).
+  if (F.hasZeroizeStack())
+    return false;
+
   // Conservatively require the attributes of the call to match those of
   // the return. Ignore following attributes because they don't affect the
   // call sequence.

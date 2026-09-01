@@ -3115,6 +3115,15 @@ void Verifier::visitFunction(const Function &F) {
     for (const Argument &Arg : F.args())
       Check(Arg.use_empty(), "cannot use argument of naked function", &Arg);
 
+  // CoroSplit lowers a presplit coroutine into resume/destroy clones that hand
+  // off with musttail calls (symmetric transfer, and the async coro.end) and
+  // copies the coroutine's function attributes onto those clones. A protected
+  // coroutine would become a protected function holding a musttail call, which
+  // verifyMustTailCall rejects, so reject it here before the split for the same
+  // reason: the frame the attribute must clear is handed off and never cleared.
+  Check(!F.isPresplitCoroutine() || !F.hasZeroizeStack(),
+        "cannot use the \"zeroize-stack\" attribute on a coroutine", &F);
+
   // Check that this function meets the restrictions on this calling convention.
   // Sometimes varargs is used for perfectly forwarding thunks, so some of these
   // restrictions can be lifted.
@@ -4214,6 +4223,16 @@ void Verifier::verifyMustTailCall(CallInst &CI) {
   Check(!CI.isInlineAsm(), "cannot use musttail call with inline asm", &CI);
 
   Function *F = CI.getParent()->getParent();
+
+  // "zeroize-stack" clears the frame before returning; musttail replaces the
+  // frame and never returns here to clear it. An ordinary tail call is an
+  // optimization and is suppressed, but musttail is a requirement the caller
+  // cannot drop, so the two together describe a function that cannot exist.
+  Check(!F->hasZeroizeStack(),
+        "cannot use musttail call in a function with the \"zeroize-stack\" "
+        "attribute",
+        &CI);
+
   FunctionType *CallerTy = F->getFunctionType();
   FunctionType *CalleeTy = CI.getFunctionType();
   Check(CallerTy->isVarArg() == CalleeTy->isVarArg(),
