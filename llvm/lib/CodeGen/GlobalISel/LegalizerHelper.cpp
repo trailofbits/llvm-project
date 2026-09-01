@@ -534,6 +534,13 @@ static bool isLibCallInTailPosition(const CallLowering::ArgInfo &Result,
   MachineBasicBlock &MBB = *MI.getParent();
   const Function &F = MBB.getParent()->getFunction();
 
+  // A protected function cannot clear its frame after a tail call. This is the
+  // GlobalISel analog of the check in TargetLowering::isInTailCallPosition: a
+  // legalizer libcall folded into a tail call replaces the frame just the same,
+  // and is refused for the same reason.
+  if (F.hasZeroizeStack())
+    return false;
+
   // Conservatively require the attributes of the call to match those of
   // the return. Ignore NoAlias and NonNull because they don't affect the
   // call sequence.

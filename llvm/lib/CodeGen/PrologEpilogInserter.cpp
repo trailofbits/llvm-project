@@ -1659,7 +1659,7 @@ void PEIImpl::planClearingSequence(MachineFunction &MF,
 ClearingDisposition PEIImpl::planClearStack(MachineFunction &MF) {
   const Function &F = MF.getFunction();
 
-  if (!F.hasFnAttribute("zeroize-stack"))
+  if (!F.hasZeroizeStack())
     return ClearingDisposition::NotRequested;
 
   const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
@@ -1800,7 +1800,7 @@ void PEIImpl::diagnoseIgnoredZeroizeRequestsOnNakedFunction(
   if (!F.hasFnAttribute(Attribute::Naked))
     return;
 
-  if (F.hasFnAttribute("zeroize-stack"))
+  if (F.hasZeroizeStack())
     F.getContext().diagnose(DiagnosticInfoUnsupported{
         F,
         "\"zeroize-stack\" ignored on a \"naked\" function: no frame is "
