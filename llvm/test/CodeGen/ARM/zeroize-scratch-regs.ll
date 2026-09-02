@@ -1,35 +1,49 @@
 ; The register clear is what finishes the stack clear's work: it destroys the
-; registers the stack clear read the frame through. A target that cannot clear
-; registers therefore cannot clear the frame either, and has to say so rather
-; than emit the half of the sequence it can do. ARM implements neither, so it
-; is where that can be pinned.
+; registers the stack clear read the frame through. So a function that asked
+; only for its frame to be cleared gets a register clear it did not ask for,
+; covering exactly the registers the stack clear used.
 ;
 ; As in the X86 test, -pei-stack-clear-scratch-regs stands in for the step that
 ; clears the frame, which no target implements
 ; (trailofbits/vspells-ct-internal-notes#26).
+;
+; The register named has to be one the exit does not need. r4 would not do:
+; it is callee-saved under AAPCS, and a step may not declare as scratch a
+; register whose value at the exit something depends on. r12 is the call-used
+; register with no role at a return, which is what %r11 is in the X86 test.
 
-; RUN: not llc -mtriple=armv7-unknown-linux-gnueabi -pei-stack-clear-scratch-regs=r4 < %s -o /dev/null 2>&1 | FileCheck %s
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -pei-stack-clear-scratch-regs=r12 < %s | FileCheck %s
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -pei-stack-clear-scratch-regs=r12 -pei-print-clearing-sequence < %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=SEQ
 
-; The function asked for its frame to be cleared and said nothing about its
-; registers, so the register clear it gets is one it did not ask for. It is
-; still a register clear, and this target cannot do one, so the request to
-; clear the frame cannot be discharged.
-; CHECK: error: {{.*}}in function stack_only i32 (i32): clearing the stack needs the registers it uses to be cleared afterwards, which is not supported by this target
+; This function said nothing about its registers. The clear it gets is the one
+; the stack clear needs, and it covers the declared scratch and nothing else.
+; CHECK-LABEL: stack_only:
+; CHECK:         mov r12, #0
+; CHECK-NEXT:    bx lr
+; SEQ-LABEL: clearing sequence for function 'stack_only':
+; SEQ-NEXT:   %bb.0 return: clear-stack=emitted clear-registers=emitted clear-flags=unimplemented scratch=R12
 define i32 @stack_only(i32 %x) "zeroize-stack"="used" {
   ret i32 %x
 }
 
-; A function that did ask for its registers to be cleared is refused on its own
-; terms, by the query that has always answered that request, rather than being
-; refused twice or reported as something it did not ask for.
-; CHECK: error: {{.*}}in function asked_for_both i32 (i32): "zero-call-used-regs" is not supported by this target
-; CHECK-NOT: in function asked_for_both {{.*}}clearing the stack needs
+; A function that did ask for its registers to be cleared gets one clear, not
+; two: the scratch the stack clear declared joins the set the request already
+; named rather than being cleared separately.
+; CHECK-LABEL: asked_for_both:
+; CHECK:         mov r12, #0
+; CHECK-NEXT:    bx lr
+; SEQ-LABEL: clearing sequence for function 'asked_for_both':
+; SEQ-NEXT:   %bb.0 return: clear-stack=emitted clear-registers=emitted clear-flags=unimplemented scratch=R12
 define i32 @asked_for_both(i32 %x) "zeroize-stack"="used" "zero-call-used-regs"="used-gpr" {
   ret i32 %x
 }
 
 ; A function that asked for neither is not dragged into any of this.
-; CHECK-NOT: in function untouched
+; CHECK-LABEL: untouched:
+; CHECK-NOT:     mov r12, #0
+; CHECK:         bx lr
+; SEQ-LABEL: clearing sequence for function 'untouched':
+; SEQ-NEXT:   %bb.0 return: clear-stack=not-requested clear-registers=not-requested clear-flags=unimplemented
 define i32 @untouched(i32 %x) {
   ret i32 %x
 }

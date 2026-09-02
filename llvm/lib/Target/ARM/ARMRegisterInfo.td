@@ -652,3 +652,21 @@ def DQuadSpc : RegisterClass<"ARM", [v4i64], 64, (add Tuples3DSpc)>;
 
 // FP context payload
 def FPCXTRegs : RegisterClass<"ARM", [i32], 32, (add FPCXTNS)>;
+
+//===----------------------------------------------------------------------===//
+// Register categories.
+//
+
+// GPR spans R0-R12, SP, LR and PC. SP and PC are reserved and so never reach
+// the consumers of this category, which all start from the allocatable set.
+def GeneralPurposeRegisters : RegisterCategory<[GPR]>;
+
+// Registers that hold status rather than data, and that a request to clear the
+// call-used registers therefore does not name. CPSR and the FPSCR halves are
+// condition flags, which are cleared by a step of their own and not by this
+// one. FPCXTNS holds the floating-point context the security extension saves
+// and restores across a non-secure call; overwriting it would destroy state
+// the caller is entitled to get back, which is not what clearing a call-used
+// register means. VPR is deliberately absent: an MVE predicate is data.
+def FixedRegisters : RegisterCategory<[CCR, cl_FPSCR_NZCV, FP_STATUS_REGS,
+                                       FPCXTRegs]>;

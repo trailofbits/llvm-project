@@ -121,6 +121,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/CFIInstBuilder.h"
+#include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -138,6 +139,7 @@
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
@@ -1574,6 +1576,248 @@ void ARMFrameLowering::emitEpilogue(MachineFunction &MF,
     BuildMI(MBB, MBB.end(), dl, TII.get(ARM::SEH_EpilogEnd))
         .setMIFlag(MachineInstr::FrameDestroy);
   }
+}
+
+//===----------------------------------------------------------------------===//
+// Clearing the call-used registers.
+//
+// The set arrives holding every allocatable register the exit does not need,
+// named through every class that contains it, so R0 arrives alongside R0_R1
+// and S0 alongside D0 and Q0. The first job is to reduce that to one register
+// per piece of state, and the second is to pick an instruction for each.
+//
+// Widening is where ARM differs from the targets that already do this. On
+// AArch64 the floating-point registers nest in a single chain per number, so a
+// request for S0 can be discharged by clearing Q0 and nothing else is touched.
+// Here D0 holds two S registers, so clearing D0 to discharge a request for S1
+// would also destroy S0 -- which the exit may be returning in. So a wider
+// register is only used when every part of it was asked for.
+//===----------------------------------------------------------------------===//
+
+/// Whether \p Reg is one of the registers this step sorts into the
+/// floating-point half of the work.
+///
+/// Asked of the leaves rather than of a list of classes, because the tuple
+/// classes the vector load and store instructions need are numerous, are
+/// spaced as well as consecutive, and are not what anything else here is
+/// written in terms of. What makes a register floating-point is what it is
+/// made of.
+static bool isFPOrNEONReg(const TargetRegisterInfo &TRI, MCRegister Reg) {
+  bool AnyLeaf = false;
+  for (MCPhysReg Sub : TRI.subregs_inclusive(Reg)) {
+    if (!TRI.subregs(Sub).empty())
+      continue;
+    AnyLeaf = true;
+    if (!ARM::SPRRegClass.contains(Sub) && !ARM::DPRRegClass.contains(Sub))
+      return false;
+  }
+  return AnyLeaf;
+}
+
+/// Record in \p Used what is live at \p MBBI, which is what the clearing
+/// sequence at this exit may not write.
+static void computeLiveUnitsAt(LiveRegUnits &Used, const MachineBasicBlock &MBB,
+                               MachineBasicBlock::const_iterator MBBI) {
+  // addLiveOuts rather than addLiveOutsNoPristines: a callee-saved register the
+  // function never touched holds the caller's value here, and writing it would
+  // hand the caller something else back.
+  Used.addLiveOuts(MBB);
+  for (auto I = MBB.end(); I != MBBI;) {
+    --I;
+    if (I->isDebugInstr())
+      continue;
+    Used.stepBackward(*I);
+  }
+}
+
+void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
+                                            MachineBasicBlock &MBB,
+                                            MachineBasicBlock::iterator MBBI,
+                                            RegScavenger *) const {
+  MachineFunction &MF = *MBB.getParent();
+  const Function &F = MF.getFunction();
+  const ARMBaseRegisterInfo &TRI = *STI.getRegisterInfo();
+  const ARMBaseInstrInfo &TII = *STI.getInstrInfo();
+
+  DebugLoc DL;
+  if (MBBI != MBB.end())
+    DL = MBBI->getDebugLoc();
+
+  auto report = [&](const Twine &Message) {
+    F.getContext().diagnose(DiagnosticInfoUnsupported{F, Message});
+  };
+
+  // Sort the request into the general-purpose registers and the leaves of the
+  // floating-point register file. A leaf is a register with no sub-registers,
+  // which is what identifies one piece of state exactly once: S0 through S31,
+  // and D16 through D31 on a subtarget whose D registers go that far.
+  BitVector GPRs(TRI.getNumRegs());
+  BitVector FPLeaves(TRI.getNumRegs());
+  for (MCRegister Reg : RegsToZero.set_bits()) {
+    if (TRI.isGeneralPurposeRegister(MF, Reg)) {
+      GPRs.set(Reg.id());
+    } else if (ARM::GPRPairRegClass.contains(Reg)) {
+      for (MCPhysReg Sub : TRI.subregs(Reg))
+        GPRs.set(Sub);
+    } else if (isFPOrNEONReg(TRI, Reg)) {
+      // Without floating-point registers there is no instruction that can put
+      // a value in one, so there is nothing in them to destroy and nothing to
+      // report. This is the one skip here that is not a gap.
+      if (!STI.hasFPRegs())
+        continue;
+      for (MCPhysReg Sub : TRI.subregs_inclusive(Reg))
+        if (TRI.subregs(Sub).empty())
+          FPLeaves.set(Sub);
+    } else if (Reg != ARM::VPR) {
+      report("clearing the call-used registers reached " +
+             Twine(TRI.getRegAsmName(Reg)) +
+             ", which this target does not know how to clear");
+    }
+  }
+  const bool ClearVPR = RegsToZero.test(ARM::VPR) && STI.hasMVEIntegerOps();
+
+  // Reduce the leaves to the widest register that covers only leaves that were
+  // asked for. Q first, then D, and whatever is left stays an S.
+  auto coversOnlyRequested = [&](MCRegister Reg) {
+    bool AnyLeaf = false;
+    for (MCPhysReg Sub : TRI.subregs_inclusive(Reg)) {
+      if (!TRI.subregs(Sub).empty())
+        continue;
+      AnyLeaf = true;
+      if (!FPLeaves.test(Sub))
+        return false;
+    }
+    return AnyLeaf;
+  };
+  auto takeLeaves = [&](MCRegister Reg) {
+    for (MCPhysReg Sub : TRI.subregs_inclusive(Reg))
+      if (TRI.subregs(Sub).empty())
+        FPLeaves.reset(Sub);
+  };
+
+  SmallVector<MCRegister, 16> WideFPRegs;  // cleared by one instruction
+  SmallVector<MCRegister, 16> PairedFPRegs; // cleared from two zeroed halves
+  SmallVector<MCRegister, 32> SingleFPRegs; // cleared from one zeroed half
+
+  const bool HasVectorImm = STI.hasNEON() || STI.hasMVEIntegerOps();
+  if (HasVectorImm)
+    for (MCRegister Reg : ARM::QPRRegClass)
+      if ((STI.hasNEON() || ARM::MQPRRegClass.contains(Reg)) &&
+          coversOnlyRequested(Reg)) {
+        WideFPRegs.push_back(Reg);
+        takeLeaves(Reg);
+      }
+  for (MCRegister Reg : ARM::DPRRegClass)
+    if (coversOnlyRequested(Reg)) {
+      if (STI.hasNEON())
+        WideFPRegs.push_back(Reg);
+      else
+        PairedFPRegs.push_back(Reg);
+      takeLeaves(Reg);
+    }
+  for (MCRegister Reg : FPLeaves.set_bits()) {
+    // Anything still here is an S register: a D register above D15 has no S
+    // sub-registers, so the loop above took it whole or not at all.
+    assert(ARM::SPRRegClass.contains(Reg) && "unreduced floating-point leaf");
+    SingleFPRegs.push_back(Reg);
+  }
+
+  // A register holding zero is needed where the instruction that writes the
+  // destination reads one: a Thumb-1 high register, a floating-point register
+  // on a subtarget with no vector immediate, and the vector predicate.
+  const bool NeedThumb1ZeroSrc =
+      STI.isThumb1Only() && !STI.hasV8MBaselineOps() && GPRs.any();
+  const bool NeedZeroSrc = NeedThumb1ZeroSrc || !PairedFPRegs.empty() ||
+                           !SingleFPRegs.empty() || ClearVPR;
+
+  // In Thumb-1 the source has to be one tMOVi8 can write, which is a low
+  // register; everywhere else any general-purpose register will do.
+  const TargetRegisterClass &ZeroSrcRC =
+      STI.isThumb1Only() ? ARM::tGPRRegClass : ARM::GPRRegClass;
+  MCRegister ZeroSrc;
+  if (NeedZeroSrc) {
+    // Prefer one that is being cleared anyway. It is dead by construction, and
+    // it ends holding what it was asked to hold, so it costs nothing.
+    for (MCRegister Reg : GPRs.set_bits())
+      if (ZeroSrcRC.contains(Reg)) {
+        ZeroSrc = Reg;
+        break;
+      }
+
+    // Otherwise take one that is free here. Not the register scavenger: the
+    // frame is finalized by the time this runs, so a scavenge that has to spill
+    // has nowhere to spill to and aborts. What is wanted is a register that
+    // needs no spill, which is what asking for the live ones and taking a
+    // register that is not among them gives.
+    if (!ZeroSrc) {
+      const MachineRegisterInfo &MRI = MF.getRegInfo();
+      LiveRegUnits Used(TRI);
+      computeLiveUnitsAt(Used, MBB, MBBI);
+      for (MCRegister Reg : ZeroSrcRC)
+        if (!MRI.isReserved(Reg) && Used.available(Reg)) {
+          ZeroSrc = Reg;
+          break;
+        }
+    }
+
+    if (!ZeroSrc) {
+      report("clearing the call-used registers needs a register to hold zero "
+             "and none is free at this exit");
+      return;
+    }
+  }
+
+  // Thumb-1 below v8-M Baseline writes the flags whichever instruction it uses
+  // to materialize the zero, and there is no form that does not. Refuse rather
+  // than change what a predicated return does.
+  if (NeedThumb1ZeroSrc) {
+    LiveRegUnits Used(TRI);
+    computeLiveUnitsAt(Used, MBB, MBBI);
+    if (!Used.available(ARM::CPSR)) {
+      report("clearing the call-used registers writes the condition flags on "
+             "this subtarget, and they are live at this exit");
+      return;
+    }
+  }
+
+  // The general-purpose registers first, so that the zero source is in place
+  // for the steps below that read it.
+  if (NeedThumb1ZeroSrc) {
+    // One materialized zero, then a flags-free copy of it into everything
+    // else. This is the only Thumb-1 sequence that reaches a high register,
+    // and using it for the low ones too keeps the flag writes down to one.
+    TII.buildClearRegister(ZeroSrc, MBB, MBBI, DL);
+    for (MCRegister Reg : GPRs.set_bits()) {
+      if (Reg == ZeroSrc)
+        continue;
+      BuildMI(MBB, MBBI, DL, TII.get(ARM::tMOVr), Reg)
+          .addReg(ZeroSrc)
+          .add(predOps(ARMCC::AL));
+    }
+  } else {
+    for (MCRegister Reg : GPRs.set_bits())
+      TII.buildClearRegister(Reg, MBB, MBBI, DL);
+    // A scavenged source is not in the set, so it has not been zeroed yet.
+    if (NeedZeroSrc && !GPRs.test(ZeroSrc.id()))
+      TII.buildClearRegister(ZeroSrc, MBB, MBBI, DL);
+  }
+
+  for (MCRegister Reg : WideFPRegs)
+    TII.buildClearRegister(Reg, MBB, MBBI, DL);
+  for (MCRegister Reg : PairedFPRegs)
+    BuildMI(MBB, MBBI, DL, TII.get(ARM::VMOVDRR), Reg)
+        .addReg(ZeroSrc)
+        .addReg(ZeroSrc)
+        .add(predOps(ARMCC::AL));
+  for (MCRegister Reg : SingleFPRegs)
+    BuildMI(MBB, MBBI, DL, TII.get(ARM::VMOVSR), Reg)
+        .addReg(ZeroSrc)
+        .add(predOps(ARMCC::AL));
+
+  if (ClearVPR)
+    BuildMI(MBB, MBBI, DL, TII.get(ARM::VMSR_VPR))
+        .addReg(ZeroSrc)
+        .add(predOps(ARMCC::AL));
 }
 
 /// getFrameIndexReference - Provide a base+offset reference to an FI slot for
