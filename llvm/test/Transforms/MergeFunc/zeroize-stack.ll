@@ -38,13 +38,13 @@ define void @protected_b(i32 %x) "zeroize-stack"="used" {
 ; CHECK-NEXT: add i32 %x, 11
 define swifttailcc void @protected_swift_a(i32 %x) "zeroize-stack"="used" {
   %y = add i32 %x, 11
-  tail call swifttailcc void @swiftsink(i32 %y)
+  call swifttailcc void @swiftsink(i32 %y)
   ret void
 }
 
 define swifttailcc void @protected_swift_b(i32 %x) "zeroize-stack"="used" {
   %y = add i32 %x, 11
-  tail call swifttailcc void @swiftsink(i32 %y)
+  call swifttailcc void @swiftsink(i32 %y)
   ret void
 }
 

@@ -13,7 +13,6 @@
 ; zeroize-stack-unsupported.ll is about and are not matched here.
 
 declare i32 @callee(i32)
-declare tailcc i32 @tcallee(i32)
 
 ; The call is marked `tail` and is in tail position, so it would be turned into
 ; a jump. It stays a call, and the function returns through its own epilogue.
@@ -32,18 +31,6 @@ define i32 @protected(i32 %x) "zeroize-stack"="used" {
 ; CHECK:         jmp callee@PLT # TAILCALL
 define i32 @unprotected(i32 %x) {
   %r = tail call i32 @callee(i32 %x)
-  ret i32 %r
-}
-
-; tailcc exists to guarantee the optimization rather than to permit it, and the
-; guarantee is over the frame the protected function is undertaking to clear.
-; The suppression covers it too, so a protected function does not get the
-; guarantee by choosing the convention.
-; CHECK-LABEL: protected_tailcc:
-; CHECK-NOT:     TAILCALL
-; CHECK:         callq tcallee@PLT
-define tailcc i32 @protected_tailcc(i32 %x) "zeroize-stack"="used" {
-  %r = tail call tailcc i32 @tcallee(i32 %x)
   ret i32 %r
 }
 

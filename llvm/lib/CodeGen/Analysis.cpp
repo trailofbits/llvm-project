@@ -541,10 +541,10 @@ bool llvm::isInTailCallPosition(const CallBase &Call, const TargetMachine &TM,
   // A tail call replaces the caller's frame and jumps away, so a function that
   // promised to clear its frame before returning never gets to. Suppress it at
   // this one target-independent point, which SelectionDAGBuilder, FastISel,
-  // GlobalISel, and memcpy/memmove/memset folding all reach. musttail is
-  // rejected in the Verifier (a caller cannot drop it); suppressing it here too
-  // is a backstop for unverified IR, failing closed into the backend's musttail
-  // error rather than a protected function that keeps its frame.
+  // GlobalISel, and memcpy/memmove/memset folding all reach. Guaranteed tail
+  // calls are rejected in the Verifier (a caller cannot drop them); suppressing
+  // them here too is a backstop for unverified IR, failing closed rather than
+  // leaving a protected function that keeps its frame.
   if (Call.getCaller()->hasZeroizeStack())
     return false;
 

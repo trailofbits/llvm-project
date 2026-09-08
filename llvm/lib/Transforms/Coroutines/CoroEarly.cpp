@@ -154,6 +154,11 @@ void Lowerer::lowerEarlyIntrinsics(Function &F) {
       case Intrinsic::coro_id_retcon:
       case Intrinsic::coro_id_retcon_once:
       case Intrinsic::coro_id_async:
+        if (F.hasZeroizeStack()) {
+          F.getContext().emitError(
+              CB, "cannot use the \"zeroize-stack\" attribute on a coroutine");
+          return;
+        }
         F.setPresplitCoroutine();
         break;
       case Intrinsic::coro_resume:
