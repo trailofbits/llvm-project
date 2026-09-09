@@ -21,6 +21,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
@@ -538,16 +539,6 @@ static bool nextRealType(SmallVectorImpl<Type *> &SubTypes,
 /// This function only tests target-independent requirements.
 bool llvm::isInTailCallPosition(const CallBase &Call, const TargetMachine &TM,
                                 bool ReturnsFirstArg) {
-  // A tail call replaces the caller's frame and jumps away, so a function that
-  // promised to clear its frame before returning never gets to. Suppress it at
-  // this one target-independent point, which SelectionDAGBuilder, FastISel,
-  // GlobalISel, and memcpy/memmove/memset folding all reach. Guaranteed tail
-  // calls are rejected in the Verifier (a caller cannot drop them); suppressing
-  // them here too is a backstop for unverified IR, failing closed rather than
-  // leaving a protected function that keeps its frame.
-  if (Call.getCaller()->hasZeroizeStack())
-    return false;
-
   const BasicBlock *ExitBB = Call.getParent();
   const Instruction *Term = ExitBB->getTerminator();
   const ReturnInst *Ret = dyn_cast<ReturnInst>(Term);
@@ -590,9 +581,25 @@ bool llvm::isInTailCallPosition(const CallBase &Call, const TargetMachine &TM,
   }
 
   const Function *F = ExitBB->getParent();
-  return returnTypeIsEligibleForTailCall(
-      F, &Call, Ret, *TM.getSubtargetImpl(*F)->getTargetLowering(),
-      ReturnsFirstArg);
+  if (!returnTypeIsEligibleForTailCall(
+          F, &Call, Ret, *TM.getSubtargetImpl(*F)->getTargetLowering(),
+          ReturnsFirstArg))
+    return false;
+
+  if (!F->hasZeroizeStack())
+    return true;
+
+  // Protected functions must return through their own epilogues. Unlike
+  // musttail, a tail marker is only a guarantee in an eligible position, which
+  // optimization may expose. Diagnose that conflict here rather than making
+  // IR validity depend on whether an optimizer has simplified the return path.
+  CallingConv::ID CC = Call.getCallingConv();
+  if (Call.isTailCall() && F->getCallingConv() == CC &&
+      (CC == CallingConv::Tail || CC == CallingConv::SwiftTail))
+    Call.getContext().emitError(
+        &Call, "cannot use guaranteed tail call in a function with the "
+               "\"zeroize-stack\" attribute");
+  return false;
 }
 
 bool llvm::attributesPermitTailCall(const Function *F, const Instruction *I,
