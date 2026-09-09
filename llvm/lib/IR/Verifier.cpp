@@ -4306,18 +4306,6 @@ void Verifier::verifyMustTailCall(CallInst &CI) {
 void Verifier::visitCallInst(CallInst &CI) {
   visitCallBase(CI);
 
-  const Function *F = CI.getFunction();
-  CallingConv::ID CC = CI.getCallingConv();
-  bool HasGuaranteedTailCallConvention =
-      F->getCallingConv() == CC &&
-      (CC == CallingConv::Tail || CC == CallingConv::SwiftTail);
-  if (CI.isTailCall() && !CI.isMustTailCall() &&
-      HasGuaranteedTailCallConvention)
-    Check(!F->hasZeroizeStack(),
-          "cannot use guaranteed tail call in a function with the "
-          "\"zeroize-stack\" attribute",
-          &CI);
-
   if (CI.isMustTailCall())
     verifyMustTailCall(CI);
 }

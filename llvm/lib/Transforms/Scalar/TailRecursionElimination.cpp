@@ -233,7 +233,10 @@ struct AllocaDerivedValueTracker {
 
 static bool markTails(Function &F, OptimizationRemarkEmitter *ORE,
                       ProfileSummaryInfo *PSI, BlockFrequencyInfo *BFI) {
-  if (F.callsFunctionThatReturnsTwice())
+  // CodeGen suppresses tail calls in protected functions. Marking a call here
+  // would create a conflicting guaranteed-tail-call request for tailcc or
+  // swifttailcc.
+  if (F.hasZeroizeStack() || F.callsFunctionThatReturnsTwice())
     return false;
 
   // The local stack holds all alloca instructions and all byval arguments.
