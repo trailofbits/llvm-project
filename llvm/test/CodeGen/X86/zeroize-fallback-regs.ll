@@ -1,20 +1,11 @@
-; The set of registers a "used" mode clears is a narrowing: it drops the
-; registers the function never touched. A narrowing has to be able to justify
-; every register it drops, and this one could not. Registers an instruction
-; touches implicitly were not counted as touched, so they were dropped from the
-; set and kept their contents past the return.
-;
-; Inline assembly is the case that made it visible, because every register an
-; asm block names reaches the machine layer as an implicit operand: a function
-; whose only register traffic was an asm block cleared nothing at all.
-;
+; The "used" modes clear only registers the function touched. Registers an
+; instruction touches implicitly were not counted, so an asm clobber or a
+; physical-register output kept its contents past the return.
 ; trailofbits/vspells-ct-internal-notes#24.
 
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu %s -o - | FileCheck %s
 
-; The asm writes a secret into a call-used argument register and declares it in
-; the clobber list, which is the whole of what the compiler can know about it.
-; That declaration is the function's only mention of %rdi, and it is implicit.
+; The clobber list is the function's only mention of %rdi, and it is implicit.
 ; CHECK-LABEL: asm_clobber:
 ; CHECK:       #APP
 ; CHECK:       #NO_APP
@@ -26,8 +17,7 @@ define void @asm_clobber() "zero-call-used-regs"="used-gpr" {
   ret void
 }
 
-; An output bound to a physical register is written down the same way, so it
-; was missed the same way even though the asm block has a result in the IR.
+; An output bound to a physical register is an implicit operand too.
 ; CHECK-LABEL: asm_output:
 ; CHECK:       #APP
 ; CHECK:       #NO_APP
@@ -39,10 +29,7 @@ define void @asm_output() "zero-call-used-regs"="used-gpr" {
   ret void
 }
 
-; Not only inline assembly: an instruction that defines a register on the side
-; is opaque here in the same way. rdtsc leaves the counter in %eax and %edx and
-; names neither, and the result is discarded, so nothing else in the function
-; mentions them either.
+; rdtsc defines %eax and %edx without naming them, and the result is discarded.
 ; CHECK-LABEL: rdtsc_discarded:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:  rdtsc
@@ -54,10 +41,7 @@ define void @rdtsc_discarded() "zero-call-used-regs"="used-gpr" {
   ret void
 }
 
-; The mode is still a narrowing, and this is what keeps the change honest: a
-; function that touches no call-used register still clears none. Counting
-; implicit operands widened "used" towards "all"; it did not collapse it into
-; it.
+; A function that touches no call-used register still clears none.
 ; CHECK-LABEL: touches_nothing:
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:  retq
