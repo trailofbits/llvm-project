@@ -1746,6 +1746,14 @@ void FPS::handleSpecialFP(MachineBasicBlock::iterator &Inst) {
         Op.setReg(X86::ST0 + FPReg);
     }
 
+    // Record every entry live across the asm as an ST use, so that the asm
+    // names the whole live stack the way a return does: a clearing sequence
+    // placed in front of it reads the depth from these operands.
+    for (unsigned i = 0; i < StackTop; ++i)
+      if (!MI.readsRegister(X86::ST0 + i, /*TRI=*/nullptr))
+        MI.addOperand(MachineOperand::CreateReg(X86::ST0 + i, /*isDef=*/false,
+                                                /*isImp=*/true));
+
     // Simulate the inline asm popping its inputs and pushing its outputs.
     StackTop -= NumSTPopped;
 

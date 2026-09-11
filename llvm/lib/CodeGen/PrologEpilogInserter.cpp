@@ -1396,7 +1396,10 @@ getZeroCallUsedRegsKind(const Function &F) {
       .Case("all-gpr-arg", ZeroCallUsedRegsKind::AllGPRArg)
       .Case("all-gpr", ZeroCallUsedRegsKind::AllGPR)
       .Case("all-arg", ZeroCallUsedRegsKind::AllArg)
-      .Case("all", ZeroCallUsedRegsKind::All);
+      .Case("all", ZeroCallUsedRegsKind::All)
+      // An unrecognized mode means the widest one, as LangRef fixes for an
+      // unrecognized "zeroize-stack" mode: it must not clear less than asked.
+      .Default(ZeroCallUsedRegsKind::All);
 }
 
 /// The name of the callee of \p MI, for a call to a known symbol, or the empty
@@ -1455,8 +1458,12 @@ static bool isUnwindResumeCall(const MachineInstr &MI) {
 /// call, not a return; no existing predicate reaches it, so this does.
 ///
 /// Null means out of scope, not overlooked: a non-returning call, a non-local
-/// jump that reloads another frame's pointers, and a trap all abandon the frame
-/// rather than release it, so nothing in the block is the last to touch it.
+/// jump that reloads another frame's pointers, a trap, and an empty block all
+/// abandon the frame rather than release it, so nothing in the block is the
+/// last to touch it. Anything else that ends a block with no successors is in
+/// scope: an instruction this cannot classify may leave the function, and a
+/// dead sequence costs less than an uncleared exit. Instructions that cannot
+/// transfer control are skipped so that the exit is the one that can.
 static MachineInstr *getEnforceableExit(MachineBasicBlock &MBB) {
   // A block with a successor continues in the function, so it is not an exit
   // however its terminator reads; catchret reaches here carrying isReturn.
@@ -1471,7 +1478,25 @@ static MachineInstr *getEnforceableExit(MachineBasicBlock &MBB) {
   for (MachineInstr &MI : reverse(MBB.instrs())) {
     if (MI.isMetaInstruction())
       continue;
-    return MI.isCall() && isUnwindResumeCall(MI) ? &MI : nullptr;
+    // Only a call, a terminator, a branch, a trap or inline asm can transfer
+    // control; anything else does not decide the exit. A target may leave
+    // such an instruction after the one that does: X86FloatingPoint pops a
+    // dead inline asm input after the asm.
+    if (!MI.isInlineAsm() && !MI.isCall() && !MI.isTerminator() &&
+        !MI.isBranch() && !MI.getDesc().isTrap())
+      continue;
+    // A call that does not resume unwinding does not come back here.
+    if (MI.isCall())
+      return isUnwindResumeCall(MI) ? &MI : nullptr;
+    // A longjmp is an indirect branch once the jump buffer is reloaded, or a
+    // barrier pseudo that expands to one.
+    if (MI.isIndirectBranch() ||
+        (MI.isTerminator() && MI.isBarrier() && !MI.isBranch()))
+      return nullptr;
+    if (MI.getDesc().isTrap())
+      return nullptr;
+    // Anything else, inline asm included, may leave the function.
+    return &MI;
   }
   return nullptr;
 }
@@ -1484,7 +1509,9 @@ static StringRef getExitKindName(const MachineInstr &ExitMI) {
     return "eh-scope-return";
   if (ExitMI.isReturn())
     return ExitMI.isCall() ? "tail-call" : "return";
-  return "unwind-resume";
+  if (ExitMI.isCall())
+    return "unwind-resume";
+  return "unknown";
 }
 
 /// Where the clearing sequence goes at \p ExitMI of \p MBB. Every step emits
@@ -1578,10 +1605,17 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
     // An exit that is in scope is one the sequence can be placed at, so it has
     // a position by construction. Emitting at the end of the block instead
     // would put the sequence after the instruction control leaves through.
+    // Nothing reaches this today; it fails the compilation rather than leave
+    // an exit silently uncleared.
     MachineBasicBlock::iterator InsertPt = getClearingInsertPoint(MBB, *ExitMI);
-    assert(InsertPt != MBB.end() && "in-scope exit with nowhere to emit");
-    if (InsertPt == MBB.end())
+    if (InsertPt == MBB.end()) {
+      if (Plan.anyStepEmits())
+        MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+            MF.getFunction(),
+            "clearing sequence could not be placed at an exit of this "
+            "function"});
       continue;
+    }
 
     if (PrintClearingSequence)
       OS << "  " << printMBBReference(MBB) << " "
@@ -1716,7 +1750,11 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
   const BitVector AllocatableSet(TRI.getAllocatableSet(MF));
 
-  // Mark all used registers.
+  // Mark all used registers. Implicit operands count too: an inline asm's
+  // clobbers and physical-register outputs, a call's argument and result
+  // registers, and whatever a target instruction defines on the side reach
+  // here only as implicit operands, and a register the function touched must
+  // not be dropped from the set.
   BitVector UsedRegs(TRI.getNumRegs());
   if (OnlyUsed)
     for (const MachineBasicBlock &MBB : MF)
@@ -1730,8 +1768,7 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
             continue;
 
           MCRegister Reg = MO.getReg();
-          if (AllocatableSet[Reg.id()] && !MO.isImplicit() &&
-              (MO.isDef() || MO.isUse()))
+          if (AllocatableSet[Reg.id()] && (MO.isDef() || MO.isUse()))
             UsedRegs.set(Reg.id());
         }
       }
@@ -1781,6 +1818,18 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
   for (const MCPhysReg *CSRegs = TRI.getCalleeSavedRegs(&MF);
        MCPhysReg CSReg = *CSRegs; ++CSRegs)
     for (MCRegister Reg : TRI.sub_and_superregs_inclusive(CSReg))
+      CandidateRegsToZero.reset(Reg.id());
+
+  // The return address is not the function's to clear either, and the loop
+  // above does not always take it out. A target's return instruction may read
+  // it without naming it as an operand -- RISC-V's PseudoRET declares no Uses
+  // and expands to `jalr x0, x1, 0` -- so computeRegsToClearAtExit cannot see
+  // it at the exit, and a calling convention that preserves nothing, such as
+  // CallingConv::GHC, leaves it out of the callee-saved list. Counting a call
+  // pseudo's implicit definition of it then puts it in the used set, and a
+  // `used` mode clears the register the return is about to jump through.
+  if (MCRegister RAReg = TRI.getRARegister())
+    for (MCRegister Reg : TRI.sub_and_superregs_inclusive(RAReg))
       CandidateRegsToZero.reset(Reg.id());
 
   return ClearingDisposition::Emit;
