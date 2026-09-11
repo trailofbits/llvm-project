@@ -1,10 +1,8 @@
-; Two of the fallbacks are decided before any target is asked, so they show on
-; a target that cannot clear anything. trailofbits/vspells-ct-internal-notes#24.
+; Exit scope and unreadable modes are resolved before asking the target.
+; trailofbits/vspells-ct-internal-notes#24.
 
-; Both runs are under "not": the widened mode reaches this target's refusal,
-; and llc exits non-zero for it.
-; RUN: not llc -mtriple=armv7-unknown-linux-gnueabi -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck --check-prefix=SEQ %s
-; RUN: not llc -mtriple=armv7-unknown-linux-gnueabi %s -o /dev/null 2>&1 | FileCheck --check-prefix=DIAG %s
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck --check-prefix=SEQ %s
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi %s -o - | FileCheck --check-prefix=ASM %s
 
 @g = external global i32
 
@@ -30,15 +28,23 @@ define void @traps() {
   unreachable
 }
 
-; An unreadable mode is not "skip": it widens to "all", which this target
-; refuses and reports.
-; DIAG: error: {{.*}}in function unrecognized_mode i32 (i32): "zero-call-used-regs" is not supported by this target
+; An unreadable mode widens to "all", clearing the registers the exit can spare.
+; ASM-LABEL: unrecognized_mode:
+; ASM:         vmov.i32 q0, #0x0
+; ASM:         mov r2, #0
+; ASM:         mov r3, #0
+; ASM:         mov r12, #0
+; ASM:         vmov.i32 q15, #0x0
+; ASM:         bx lr
 define i32 @unrecognized_mode(i32 %x) "zero-call-used-regs"="a-mode-from-the-future" {
   ret i32 %x
 }
 
-; "skip" is honored and reaches no refusal.
-; DIAG-NOT: in function skips_explicitly
+; "skip" is honored and clears no registers.
+; ASM-LABEL: skips_explicitly:
+; ASM-NOT:     mov r{{[0-9]+}}, #0
+; ASM-NOT:     vmov
+; ASM:         bx lr
 define i32 @skips_explicitly(i32 %x) "zero-call-used-regs"="skip" {
   ret i32 %x
 }

@@ -673,6 +673,25 @@ void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
     TII.buildClearRegister(Reg, MBB, MBBI, DL);
 }
 
+MCRegister
+X86FrameLowering::getClearedRegExitAnchor(const MachineFunction &MF,
+                                          MCRegister Reg) const {
+  // A YMM or ZMM register named on a return is read by X86InsertVZeroUpper as
+  // a return that carries a vector value, and it skips the vzeroupper it would
+  // otherwise put in front of that return. Recording that the sequence cleared
+  // the register is not a claim about vector state, and it must not turn into
+  // one: the caller would pay an AVX-to-SSE transition for it.
+  //
+  // The 128-bit part of the register says as much as is needed. What the
+  // record is for is keeping the clear from being removed for defining nothing
+  // live, and a definition is live as soon as any part of it is.
+  if (X86::VR256RegClass.contains(Reg) || X86::VR512RegClass.contains(Reg))
+    if (MCRegister Sub = TRI->getSubReg(Reg, X86::sub_xmm))
+      return Sub;
+
+  return Reg;
+}
+
 void X86FrameLowering::emitStackProbe(
     MachineFunction &MF, MachineBasicBlock &MBB,
     MachineBasicBlock::iterator MBBI, const DebugLoc &DL, bool InProlog,
