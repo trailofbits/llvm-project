@@ -1397,17 +1397,8 @@ getZeroCallUsedRegsKind(const Function &F) {
       .Case("all-gpr", ZeroCallUsedRegsKind::AllGPR)
       .Case("all-arg", ZeroCallUsedRegsKind::AllArg)
       .Case("all", ZeroCallUsedRegsKind::All)
-      // A mode this version of LLVM does not recognize means the widest
-      // one. The modes are a scale from "skip" to "all", and a name off
-      // the end of what is known here is either a mode added later, whose
-      // author selected it over the ones that already existed, or a
-      // mistake. "all" is the only answer that is safe under both
-      // readings, and it is the reading LangRef already fixes for an
-      // unrecognized "zeroize-stack" mode.
-      //
-      // Without this the switch runs off its end: an assertion in a build
-      // that has them, and in a release compiler an uninitialized mode
-      // that decides what gets cleared. Neither is a decision.
+      // An unrecognized mode means the widest one, as LangRef fixes for an
+      // unrecognized "zeroize-stack" mode: it must not clear less than asked.
       .Default(ZeroCallUsedRegsKind::All);
 }
 
@@ -1466,21 +1457,12 @@ static bool isUnwindResumeCall(const MachineInstr &MI) {
 /// reaches them. The one it misses is a landing pad that resumes unwinding by a
 /// call, not a return; no existing predicate reaches it, so this does.
 ///
-/// The exits this returns null for are out of scope rather than overlooked, and
-/// for the same reason in each case: the frame is abandoned rather than
-/// released, so there is no position at which a sequence could run and still be
-/// the last thing to touch it. A call that does not return here hands the
-/// caller's context back through the unwinder or through a jump with nothing of
-/// ours in between; a non-local jump does the same by reloading another frame's
-/// stack and frame pointers; and a trap, or an empty block left behind by an
-/// unreachable, does not transfer out of the frame at all.
-///
-/// A block that ends in none of those is in scope, not out of it. Failing to
-/// recognise an instruction is not the same as knowing what it does, and the
-/// two errors are not symmetric: an opaque instruction that does leave the
-/// function takes the frame and the registers with it, while one that does not
-/// costs a dead sequence in a block nothing reaches. The uncertainty is
-/// resolved towards clearing.
+/// Null means out of scope, not overlooked: a non-returning call, a non-local
+/// jump that reloads another frame's pointers, a trap, and an empty block all
+/// abandon the frame rather than release it, so nothing in the block is the
+/// last to touch it. Anything else that ends a block with no successors is in
+/// scope: an instruction this cannot classify may leave the function, and a
+/// dead sequence costs less than an uncleared exit.
 static MachineInstr *getEnforceableExit(MachineBasicBlock &MBB) {
   // A block with a successor continues in the function, so it is not an exit
   // however its terminator reads; catchret reaches here carrying isReturn.
@@ -1495,34 +1477,19 @@ static MachineInstr *getEnforceableExit(MachineBasicBlock &MBB) {
   for (MachineInstr &MI : reverse(MBB.instrs())) {
     if (MI.isMetaInstruction())
       continue;
-
-    // A call either resumes unwinding, which is an exit a sequence goes in
-    // front of, or does not come back here at all, which abandons the frame.
+    // A call that does not resume unwinding does not come back here.
     if (MI.isCall())
       return isUnwindResumeCall(MI) ? &MI : nullptr;
-
-    // A jump with no successor in this function is a jump out of it. Targets
-    // spell a longjmp either as an indirect branch, once the jump buffer has
-    // been reloaded, or as a barrier pseudo that expands to one later.
+    // A longjmp is an indirect branch once the jump buffer is reloaded, or a
+    // barrier pseudo that expands to one.
     if (MI.isIndirectBranch() ||
         (MI.isTerminator() && MI.isBarrier() && !MI.isBranch()))
       return nullptr;
-
-    // A trap is where control stops, not where it goes: the target has said so
-    // by marking the instruction, and it is the one shape left here that can be
-    // ruled out rather than merely not recognised.
     if (MI.getDesc().isTrap())
       return nullptr;
-
-    // Nothing else is known about this block, and not knowing has to be
-    // recorded as not knowing. Inline assembly can jump, can issue a system
-    // call that does not come back, and can return into another frame, and
-    // nothing here can establish that it does not; calling such a block one
-    // control stops in is the one answer that leaves the frame alone.
+    // Anything else, inline asm included, may leave the function.
     return &MI;
   }
-
-  // A block with nothing left in it has nothing that could transfer anywhere.
   return nullptr;
 }
 
@@ -1630,14 +1597,8 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
     // An exit that is in scope is one the sequence can be placed at, so it has
     // a position by construction. Emitting at the end of the block instead
     // would put the sequence after the instruction control leaves through.
-    //
-    // If that construction ever fails, the compilation fails with it. Carrying
-    // on past an exit the sequence could not be placed at produces the one
-    // output the attribute exists to rule out: a function that reports itself
-    // protected and leaves through a point at which nothing was cleared, with
-    // nothing said about it. There is no way to reach this from IR today; it
-    // is here so that a later change which introduces one is stopped rather
-    // than absorbed.
+    // Nothing reaches this today; it fails the compilation rather than leave
+    // an exit silently uncleared.
     MachineBasicBlock::iterator InsertPt = getClearingInsertPoint(MBB, *ExitMI);
     if (InsertPt == MBB.end()) {
       if (Plan.anyStepEmits())
@@ -1781,24 +1742,11 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
   const BitVector AllocatableSet(TRI.getAllocatableSet(MF));
 
-  // Mark all used registers.
-  //
-  // Every register operand counts, whether the instruction names it or carries
-  // it implicitly. An implicit operand is how the machine layer writes down a
-  // register an instruction touches without being told to, which is exactly
-  // the case where a narrowing this set drives cannot be justified: the
-  // register was written, the value is there, and the mode's promise is that
-  // what the function touched does not outlive it.
-  //
-  // Inline assembly is the case that made this visible. Every register an asm
-  // block names -- its clobber list and its physical-register outputs alike --
-  // reaches the machine layer as an implicit operand of the INLINEASM
-  // instruction, so skipping implicit operands made an asm block invisible
-  // here. A function whose only register traffic was an asm block cleared
-  // nothing at all under a "used" mode, and the asm's registers carried their
-  // contents past the return. Opaque target operations behave the same way for
-  // the same reason: a division's remainder register, a return value that no
-  // longer has a copy naming it, anything a pseudo defines on the side.
+  // Mark all used registers. Implicit operands count too: an inline asm's
+  // clobbers and physical-register outputs, a call's argument and result
+  // registers, and whatever a target instruction defines on the side reach
+  // here only as implicit operands, and a register the function touched must
+  // not be dropped from the set.
   BitVector UsedRegs(TRI.getNumRegs());
   if (OnlyUsed)
     for (const MachineBasicBlock &MBB : MF)

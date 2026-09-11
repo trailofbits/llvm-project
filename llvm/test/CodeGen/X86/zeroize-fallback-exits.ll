@@ -1,11 +1,6 @@
-; A block with no successors that ends in something the emission cannot account
-; for used to be passed over, which is the claim that control stops there and
-; nothing needs clearing. Not recognizing an instruction is not the same as
-; knowing what it does, and the two answers are not symmetric: an opaque
-; instruction that does leave the function takes the frame and the registers
-; with it, while one that does not costs a dead sequence in a block nothing
-; reaches. The uncertainty resolves towards clearing.
-;
+; A block with no successors that ends in an instruction the exit classifier
+; cannot account for is in scope: it may leave the function, and a dead
+; sequence costs less than an uncleared exit.
 ; trailofbits/vspells-ct-internal-notes#24.
 
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck --check-prefix=SEQ %s
@@ -15,17 +10,11 @@
 
 declare void @llvm.trap()
 
-; Inline assembly at the end of a block with no successors. It can jump, it can
-; issue a system call that does not come back, and nothing here can tell.
+; Inline asm ending the block may jump or not come back. The sequence goes in
+; front of it and spares the registers the asm declares.
 ; SEQ-LABEL: clearing sequence for function 'opaque_asm':
 ; SEQ-NEXT:  %bb.0 unknown: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
 ; SEQ-NEXT:  end clearing sequence for function 'opaque_asm'
-;
-; The sequence goes in front of the asm, because after it is after the
-; function. The registers the earlier computation used are cleared there; the
-; ones the asm declares are left alone, the same as at any other exit, because
-; an exit cannot be given a sequence that breaks the instruction it leaves
-; through.
 ; CHECK-LABEL: opaque_asm:
 ; CHECK:       xorl %eax, %eax
 ; CHECK-NEXT:  xorl %edi, %edi
@@ -39,14 +28,10 @@ define void @opaque_asm(i64 %a, i64 %b) "zero-call-used-regs"="used-gpr" {
   unreachable
 }
 
-; A trap is still out of scope, and this is what keeps the change from being a
-; blanket "clear everywhere". The target has marked the instruction as a trap,
-; so control stopping in the block is something known rather than something
-; that could not be ruled out. The list is pinned between the two lines that
-; bracket it, so an exit that started being emitted at would show up here.
+; A trap is marked by the target as where control stops, so it stays out of
+; scope.
 ; SEQ-LABEL: clearing sequence for function 'traps':
 ; SEQ-NEXT:  end clearing sequence for function 'traps'
-;
 ; CHECK-LABEL: traps:
 ; CHECK-NOT:   xorl
 ; CHECK:       ud2
@@ -57,8 +42,7 @@ define void @traps(i64 %a, i64 %b) "zero-call-used-regs"="used-gpr" {
   unreachable
 }
 
-; So is a block with nothing left in it: there is no instruction to be unsure
-; about. The return is the only exit the sequence runs at.
+; An empty block has nothing to be unsure about; the return is the only exit.
 ; SEQ-LABEL: clearing sequence for function 'empty_unreachable':
 ; SEQ-NEXT:  %bb.1 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
 ; SEQ-NEXT:  end clearing sequence for function 'empty_unreachable'
@@ -74,10 +58,7 @@ bad:
   unreachable
 }
 
-; And a call that does not return stays out of scope for a reason of its own:
-; the frame is abandoned rather than left, so there is no point at which a
-; sequence would run and still be the last thing to touch it. That reason
-; survives; only the blocks that had no reason at all have moved.
+; A call that does not return abandons the frame and stays out of scope.
 ; SEQ-LABEL: clearing sequence for function 'calls_noreturn':
 ; SEQ-NEXT:  end clearing sequence for function 'calls_noreturn'
 define void @calls_noreturn() "zero-call-used-regs"="used-gpr" {
