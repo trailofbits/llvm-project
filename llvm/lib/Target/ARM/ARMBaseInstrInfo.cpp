@@ -877,6 +877,82 @@ void ARMBaseInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     Mov->addRegisterKilled(SrcReg, TRI);
 }
 
+void ARMBaseInstrInfo::buildClearRegister(Register Reg,
+                                          MachineBasicBlock &MBB,
+                                          MachineBasicBlock::iterator Iter,
+                                          DebugLoc &DL,
+                                          bool AllowSideEffects) const {
+  if (ARM::GPRRegClass.contains(Reg)) {
+    if (!Subtarget.isThumb()) {
+      // The S bit is an operand rather than a separate opcode, and passing no
+      // register for it is what makes this a MOV and not a MOVS.
+      BuildMI(MBB, Iter, DL, get(ARM::MOVi), Reg)
+          .addImm(0)
+          .add(predOps(ARMCC::AL))
+          .add(condCodeOp());
+      return;
+    }
+
+    // Thumb-2 reaches R0-R12 and LR with a flags-free move of an immediate.
+    if (Subtarget.isThumb2()) {
+      BuildMI(MBB, Iter, DL, get(ARM::t2MOVi), Reg)
+          .addImm(0)
+          .add(predOps(ARMCC::AL))
+          .add(condCodeOp());
+      return;
+    }
+
+    // On v8-M Baseline the 16-bit-immediate move is the flags-free one, and it
+    // reaches the same registers, so prefer it over tMOVi8 whether or not side
+    // effects are allowed: it is the only Thumb-1 form that reaches a high
+    // register at all.
+    if (Subtarget.hasV8MBaselineOps()) {
+      BuildMI(MBB, Iter, DL, get(ARM::t2MOVi16), Reg)
+          .addImm(0)
+          .add(predOps(ARMCC::AL));
+      return;
+    }
+
+    // Classic Thumb-1 has only tMOVi8, which reaches R0-R7 and always writes
+    // the flags. The CPSR definition is an out operand of the instruction, so
+    // it comes before the immediate.
+    if (ARM::tGPRRegClass.contains(Reg) && AllowSideEffects) {
+      BuildMI(MBB, Iter, DL, get(ARM::tMOVi8), Reg)
+          .add(t1CondCodeOp())
+          .addImm(0)
+          .add(predOps(ARMCC::AL));
+      return;
+    }
+  } else if (ARM::DPRRegClass.contains(Reg)) {
+    if (Subtarget.hasNEON()) {
+      BuildMI(MBB, Iter, DL, get(ARM::VMOVv2i32), Reg)
+          .addImm(0)
+          .add(predOps(ARMCC::AL));
+      return;
+    }
+  } else if (ARM::QPRRegClass.contains(Reg)) {
+    if (Subtarget.hasNEON()) {
+      BuildMI(MBB, Iter, DL, get(ARM::VMOVv4i32), Reg)
+          .addImm(0)
+          .add(predOps(ARMCC::AL));
+      return;
+    }
+    if (Subtarget.hasMVEIntegerOps() && ARM::MQPRRegClass.contains(Reg)) {
+      MachineInstrBuilder MIB =
+          BuildMI(MBB, Iter, DL, get(ARM::MVE_VMOVimmi32), Reg).addImm(0);
+      addUnpredicatedMveVpredROp(MIB, Reg);
+      return;
+    }
+  }
+
+  // Everything else needs a register already holding zero to read from, which
+  // this cannot obtain, or has no zeroing form on this subtarget at all. Say
+  // so rather than return having emitted nothing: a caller cannot tell the
+  // difference between a register that was cleared and one that was skipped.
+  reportFatalInternalError("buildClearRegister is not implemented for " +
+                           getRegisterInfo().getRegAsmName(Reg));
+}
+
 std::optional<DestSourcePair>
 ARMBaseInstrInfo::isCopyInstrImpl(const MachineInstr &MI) const {
   // VMOVRRD is also a copy instruction but it requires
