@@ -28,6 +28,7 @@
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/WinEHFuncInfo.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
@@ -640,13 +641,24 @@ void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
     if (!X86::RFP80RegClass.contains(Reg))
       continue;
 
-    // Do not push zeros over x87 return values. X86FloatingPoint records
-    // returned values as implicit ST0/ST1 uses on the return instruction.
-    unsigned NumFPRegs = 8;
-    if (MBBI->hasRegisterImplicitUseOperand(X86::ST0))
-      --NumFPRegs;
-    if (MBBI->hasRegisterImplicitUseOperand(X86::ST1))
-      --NumFPRegs;
+    // The exit instruction records the live x87 stack: X86FloatingPoint puts
+    // returned values on a return as implicit ST0/ST1 uses and every entry
+    // live across an inline asm as ST uses, and the ABI leaves the stack empty
+    // at a call. Push zeros into the free slots only; pushing over a live
+    // entry overflows the stack and turns the entry into NaN.
+    if (!MBBI->isReturn() && !MBBI->isCall() && !MBBI->isInlineAsm()) {
+      MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+          MF.getFunction(),
+          "x87 registers not cleared at an exit whose stack depth is unknown",
+          DiagnosticLocation(), DS_Warning});
+      break;
+    }
+
+    unsigned NumLive = 0;
+    for (const MachineOperand &MO : MBBI->operands())
+      if (MO.isReg() && MO.isUse() && X86::RSTRegClass.contains(MO.getReg()))
+        NumLive = std::max(NumLive, unsigned(MO.getReg().id() - X86::ST0) + 1);
+    unsigned NumFPRegs = 8 - NumLive;
 
     for (unsigned i = 0; i != NumFPRegs; ++i)
       BuildMI(MBB, MBBI, DL, TII.get(X86::LD_F0));
