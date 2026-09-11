@@ -1820,6 +1820,18 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
     for (MCRegister Reg : TRI.sub_and_superregs_inclusive(CSReg))
       CandidateRegsToZero.reset(Reg.id());
 
+  // The return address is not the function's to clear either, and the loop
+  // above does not always take it out. A target's return instruction may read
+  // it without naming it as an operand -- RISC-V's PseudoRET declares no Uses
+  // and expands to `jalr x0, x1, 0` -- so computeRegsToClearAtExit cannot see
+  // it at the exit, and a calling convention that preserves nothing, such as
+  // CallingConv::GHC, leaves it out of the callee-saved list. Counting a call
+  // pseudo's implicit definition of it then puts it in the used set, and a
+  // `used` mode clears the register the return is about to jump through.
+  if (MCRegister RAReg = TRI.getRARegister())
+    for (MCRegister Reg : TRI.sub_and_superregs_inclusive(RAReg))
+      CandidateRegsToZero.reset(Reg.id());
+
   return ClearingDisposition::Emit;
 }
 
