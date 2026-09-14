@@ -1632,13 +1632,13 @@ static void computeLiveUnitsAt(LiveRegUnits &Used, const MachineBasicBlock &MBB,
 
 void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
                                             MachineBasicBlock &MBB,
+                                            MachineBasicBlock::iterator MBBI,
                                             RegScavenger *) const {
   MachineFunction &MF = *MBB.getParent();
   const Function &F = MF.getFunction();
   const ARMBaseRegisterInfo &TRI = *STI.getRegisterInfo();
   const ARMBaseInstrInfo &TII = *STI.getInstrInfo();
 
-  MachineBasicBlock::iterator MBBI = MBB.getFirstTerminator();
   DebugLoc DL;
   if (MBBI != MBB.end())
     DL = MBBI->getDebugLoc();
