@@ -1459,9 +1459,9 @@ static bool isUnwindResumeCall(const MachineInstr &MI) {
 ///
 /// Non-returning calls, non-local jumps that reload another frame's pointers,
 /// and traps are out of scope. A fallback trap or call must not hide an earlier
-/// opaque asm exit. In a block without successors, treat an unclassified control
-/// transfer as an exit; skip instructions that cannot transfer control. Return
-/// null if no in-scope exit is found.
+/// opaque asm exit. In a block without successors, treat an unclassified
+/// control transfer as an exit; skip instructions that cannot transfer control.
+/// Return null if no in-scope exit is found.
 static MachineInstr *getEnforceableExit(MachineBasicBlock &MBB) {
   // A block with a successor continues in the function, so it is not an exit
   // however its terminator reads; catchret reaches here carrying isReturn.
