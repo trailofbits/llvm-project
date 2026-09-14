@@ -15,8 +15,6 @@ define i32 @both(i32 %x) "zeroize-stack"="used" "zero-call-used-regs"="used-gpr"
 
 ; ARM classifies its own tail-call returns as exits: nothing about which blocks
 ; are in scope is x86's. The tail call needs r0, so nothing is left to clear.
-declare i32 @callee(i32)
-
 ; CHECK-LABEL: clearing sequence for function 'exits':
 ; CHECK-NEXT:  %bb.0 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
 ; CHECK-NEXT:  end clearing sequence for function 'exits'

@@ -1713,10 +1713,8 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
       for (MCPhysReg Sub : TRI.subregs(Reg))
         GPRs.set(Sub);
     } else if (isFPOrNEONReg(TRI, Reg)) {
-      // Skip FP registers when they are unavailable in the current instruction
-      // set. Thumb-1 cannot access them even when the CPU has VFP hardware, so
-      // values an ARM or Thumb-2 callee left there survive; the release notes
-      // say so.
+      // FP registers are unavailable in these instruction sets. The capability
+      // query rejects Thumb-1 requests that could require clearing VFP state.
       if (!STI.hasFPRegs() || STI.isThumb1Only())
         continue;
       // Non-M-class interrupts share FP state with the interrupted code.
@@ -1756,6 +1754,16 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
                                         /*isUndef=*/!IsSignedReturn));
     }
   }
+
+  // PEI excludes subregisters and superregisters of live exit operands, but a
+  // partially overlapping tuple can survive that exclusion. Expanding it above
+  // can therefore reintroduce live leaves (for example, D0_D2 overlaps a Q0
+  // return value). Remove those leaves before choosing the clearing widths.
+  LiveRegUnits LiveUnits(TRI);
+  computeLiveUnitsAt(LiveUnits, MBB, MBBI);
+  for (MCRegister Reg : FPLeaves.set_bits())
+    if (!LiveUnits.available(Reg))
+      FPLeaves.reset(Reg);
 
   // Reduce the leaves to the widest register that covers only leaves that were
   // asked for. Q first, then D, and whatever is left stays an S.
