@@ -4,10 +4,10 @@
 ; register when there is neither, and nothing at all when the registers do not
 ; exist.
 
-; RUN: llc -mtriple=armv7-unknown-linux-gnueabihf %s -o - | FileCheck %s --check-prefix=NEON
-; RUN: llc -mtriple=thumbv8m.main -mattr=+fp-armv8d16sp %s -o - | FileCheck %s --check-prefix=VFP
-; RUN: llc -mtriple=thumbv8.1m.main -mattr=+mve %s -o - | FileCheck %s --check-prefix=MVE
-; RUN: llc -mtriple=thumbv7m-none-eabi %s -o - | FileCheck %s --check-prefix=NOFP
+; RUN: llc -verify-machineinstrs -mtriple=armv7-unknown-linux-gnueabihf %s -o - | FileCheck %s --check-prefix=NEON
+; RUN: llc -verify-machineinstrs -mtriple=thumbv8m.main -mattr=+fp-armv8d16sp %s -o - | FileCheck %s --check-prefix=VFP
+; RUN: llc -verify-machineinstrs -mtriple=thumbv8.1m.main -mattr=+mve %s -o - | FileCheck %s --check-prefix=MVE
+; RUN: llc -verify-machineinstrs -mtriple=thumbv7m-none-eabi %s -o - | FileCheck %s --check-prefix=NOFP
 
 ; D8-D15 are callee-saved, so the vector registers built out of them are the
 ; caller's and are not cleared: on NEON that leaves q0-q3 and q8-q15, and the

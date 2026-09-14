@@ -1517,7 +1517,8 @@ getClearingInsertPoint(MachineBasicBlock &MBB, MachineInstr &ExitMI) {
 /// registers uncleared at every other return, dead and holding a value.
 static BitVector computeRegsToClearAtExit(
     const BitVector &Candidates, const MachineBasicBlock &MBB,
-    MachineBasicBlock::const_iterator InsertPt, const TargetRegisterInfo &TRI) {
+    MachineBasicBlock::const_iterator InsertPt, const TargetRegisterInfo &TRI,
+    const TargetFrameLowering &TFI) {
   // Only the rest of the block runs after the sequence, and only because the
   // block does not continue in the function; getEnforceableExit() ensures that.
   assert(MBB.succ_empty() && "exit block continues in the function");
@@ -1539,7 +1540,7 @@ static BitVector computeRegsToClearAtExit(
       // the same: it also spares siblings a clear would widen into a live
       // register (%ah into %al on x86), and no target-agnostic rule keeps both
       // that and AArch64's independently-cleared register tuples correct.
-      if (MI.isReturn())
+      if (MI.isReturn() && !TFI.zeroCallUsedRegsPreservesUnrequestedSiblings())
         for (MCRegUnit Unit : TRI.regunits(Reg))
           RegsToZero.reset(static_cast<unsigned>(Unit));
 
@@ -1640,6 +1641,7 @@ void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
                                MachineBasicBlock::iterator InsertPt,
                                BitVector &ScratchRegs) {
   MachineFunction &MF = *MBB.getParent();
+  const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
 
   switch (Step) {
@@ -1650,7 +1652,7 @@ void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
   case ClearingStep::ClearRegisters: {
     // Filter the mode's candidates using this exit's register requirements.
     BitVector RegsToZero =
-        computeRegsToClearAtExit(Plan.CandidateRegsToZero, MBB, InsertPt, TRI);
+        computeRegsToClearAtExit(Plan.CandidateRegsToZero, MBB, InsertPt, TRI, TFI);
 
     // Add scratch after mode filtering: these registers were dirtied by the
     // clearing sequence and need not have been used by the function.

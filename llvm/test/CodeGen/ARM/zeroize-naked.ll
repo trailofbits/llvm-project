@@ -50,7 +50,3 @@ define void @naked_skip() naked "zero-call-used-regs"="skip" {
   call void asm sideeffect "nop", ""()
   ret void
 }
-
-; The non-naked control for this attribute lives in
-; zero-call-used-regs-unsupported.ll: ARM errors there, which would make llc
-; exit non-zero and destroy what these RUN lines pin.

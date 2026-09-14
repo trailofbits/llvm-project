@@ -32,6 +32,7 @@ define dso_local i32 @used_gpr_arg(i32 noundef %a, i32 noundef %b, i32 noundef %
 ; ARM:       @ %bb.0: @ %entry
 ; ARM-NEXT:    mul r0, r1, r0
 ; ARM-NEXT:    orr r0, r0, r2
+; ARM-NEXT:    mov r1, #0
 ; ARM-NEXT:    mov r2, #0
 ; ARM-NEXT:    bx lr
 ;
@@ -39,6 +40,7 @@ define dso_local i32 @used_gpr_arg(i32 noundef %a, i32 noundef %b, i32 noundef %
 ; THUMB2:       @ %bb.0: @ %entry
 ; THUMB2-NEXT:    muls r0, r1, r0
 ; THUMB2-NEXT:    orrs r0, r2
+; THUMB2-NEXT:    movs r1, #0
 ; THUMB2-NEXT:    movs r2, #0
 ; THUMB2-NEXT:    bx lr
 ;
@@ -46,7 +48,8 @@ define dso_local i32 @used_gpr_arg(i32 noundef %a, i32 noundef %b, i32 noundef %
 ; THUMB1:       @ %bb.0: @ %entry
 ; THUMB1-NEXT:    muls r0, r1, r0
 ; THUMB1-NEXT:    orrs r0, r2
-; THUMB1-NEXT:    movs r2, #0
+; THUMB1-NEXT:    movs r1, #0
+; THUMB1-NEXT:    mov r2, r1
 ; THUMB1-NEXT:    bx lr
 entry:
   %mul = mul nsw i32 %b, %a
@@ -59,6 +62,7 @@ define dso_local i32 @used_gpr(i32 noundef %a, i32 noundef %b, i32 noundef %c) l
 ; ARM:       @ %bb.0: @ %entry
 ; ARM-NEXT:    mul r0, r1, r0
 ; ARM-NEXT:    orr r0, r0, r2
+; ARM-NEXT:    mov r1, #0
 ; ARM-NEXT:    mov r2, #0
 ; ARM-NEXT:    bx lr
 ;
@@ -66,6 +70,7 @@ define dso_local i32 @used_gpr(i32 noundef %a, i32 noundef %b, i32 noundef %c) l
 ; THUMB2:       @ %bb.0: @ %entry
 ; THUMB2-NEXT:    muls r0, r1, r0
 ; THUMB2-NEXT:    orrs r0, r2
+; THUMB2-NEXT:    movs r1, #0
 ; THUMB2-NEXT:    movs r2, #0
 ; THUMB2-NEXT:    bx lr
 ;
@@ -73,7 +78,8 @@ define dso_local i32 @used_gpr(i32 noundef %a, i32 noundef %b, i32 noundef %c) l
 ; THUMB1:       @ %bb.0: @ %entry
 ; THUMB1-NEXT:    muls r0, r1, r0
 ; THUMB1-NEXT:    orrs r0, r2
-; THUMB1-NEXT:    movs r2, #0
+; THUMB1-NEXT:    movs r1, #0
+; THUMB1-NEXT:    mov r2, r1
 ; THUMB1-NEXT:    bx lr
 entry:
   %mul = mul nsw i32 %b, %a
@@ -86,6 +92,7 @@ define dso_local i32 @used_arg(i32 noundef %a, i32 noundef %b, i32 noundef %c) l
 ; ARM:       @ %bb.0: @ %entry
 ; ARM-NEXT:    mul r0, r1, r0
 ; ARM-NEXT:    orr r0, r0, r2
+; ARM-NEXT:    mov r1, #0
 ; ARM-NEXT:    mov r2, #0
 ; ARM-NEXT:    bx lr
 ;
@@ -93,6 +100,7 @@ define dso_local i32 @used_arg(i32 noundef %a, i32 noundef %b, i32 noundef %c) l
 ; THUMB2:       @ %bb.0: @ %entry
 ; THUMB2-NEXT:    muls r0, r1, r0
 ; THUMB2-NEXT:    orrs r0, r2
+; THUMB2-NEXT:    movs r1, #0
 ; THUMB2-NEXT:    movs r2, #0
 ; THUMB2-NEXT:    bx lr
 ;
@@ -100,7 +108,8 @@ define dso_local i32 @used_arg(i32 noundef %a, i32 noundef %b, i32 noundef %c) l
 ; THUMB1:       @ %bb.0: @ %entry
 ; THUMB1-NEXT:    muls r0, r1, r0
 ; THUMB1-NEXT:    orrs r0, r2
-; THUMB1-NEXT:    movs r2, #0
+; THUMB1-NEXT:    movs r1, #0
+; THUMB1-NEXT:    mov r2, r1
 ; THUMB1-NEXT:    bx lr
 entry:
   %mul = mul nsw i32 %b, %a
@@ -113,6 +122,7 @@ define dso_local i32 @used(i32 noundef %a, i32 noundef %b, i32 noundef %c) local
 ; ARM:       @ %bb.0: @ %entry
 ; ARM-NEXT:    mul r0, r1, r0
 ; ARM-NEXT:    orr r0, r0, r2
+; ARM-NEXT:    mov r1, #0
 ; ARM-NEXT:    mov r2, #0
 ; ARM-NEXT:    bx lr
 ;
@@ -120,6 +130,7 @@ define dso_local i32 @used(i32 noundef %a, i32 noundef %b, i32 noundef %c) local
 ; THUMB2:       @ %bb.0: @ %entry
 ; THUMB2-NEXT:    muls r0, r1, r0
 ; THUMB2-NEXT:    orrs r0, r2
+; THUMB2-NEXT:    movs r1, #0
 ; THUMB2-NEXT:    movs r2, #0
 ; THUMB2-NEXT:    bx lr
 ;
@@ -127,7 +138,8 @@ define dso_local i32 @used(i32 noundef %a, i32 noundef %b, i32 noundef %c) local
 ; THUMB1:       @ %bb.0: @ %entry
 ; THUMB1-NEXT:    muls r0, r1, r0
 ; THUMB1-NEXT:    orrs r0, r2
-; THUMB1-NEXT:    movs r2, #0
+; THUMB1-NEXT:    movs r1, #0
+; THUMB1-NEXT:    mov r2, r1
 ; THUMB1-NEXT:    bx lr
 entry:
   %mul = mul nsw i32 %b, %a
@@ -139,6 +151,7 @@ define dso_local i32 @all_gpr_arg(i32 noundef %a, i32 noundef %b, i32 noundef %c
 ; ARM-LABEL: all_gpr_arg:
 ; ARM:       @ %bb.0: @ %entry
 ; ARM-NEXT:    mul r0, r1, r0
+; ARM-NEXT:    mov r1, #0
 ; ARM-NEXT:    mov r3, #0
 ; ARM-NEXT:    mov r12, #0
 ; ARM-NEXT:    orr r0, r0, r2
@@ -148,6 +161,7 @@ define dso_local i32 @all_gpr_arg(i32 noundef %a, i32 noundef %b, i32 noundef %c
 ; THUMB2-LABEL: all_gpr_arg:
 ; THUMB2:       @ %bb.0: @ %entry
 ; THUMB2-NEXT:    muls r0, r1, r0
+; THUMB2-NEXT:    movs r1, #0
 ; THUMB2-NEXT:    movs r3, #0
 ; THUMB2-NEXT:    mov.w r12, #0
 ; THUMB2-NEXT:    orrs r0, r2
@@ -158,9 +172,10 @@ define dso_local i32 @all_gpr_arg(i32 noundef %a, i32 noundef %b, i32 noundef %c
 ; THUMB1:       @ %bb.0: @ %entry
 ; THUMB1-NEXT:    muls r0, r1, r0
 ; THUMB1-NEXT:    orrs r0, r2
-; THUMB1-NEXT:    movs r2, #0
-; THUMB1-NEXT:    mov r3, r2
-; THUMB1-NEXT:    mov r12, r2
+; THUMB1-NEXT:    movs r1, #0
+; THUMB1-NEXT:    mov r2, r1
+; THUMB1-NEXT:    mov r3, r1
+; THUMB1-NEXT:    mov r12, r1
 ; THUMB1-NEXT:    bx lr
 entry:
   %mul = mul nsw i32 %b, %a
@@ -172,6 +187,7 @@ define dso_local i32 @all_gpr(i32 noundef %a, i32 noundef %b, i32 noundef %c) lo
 ; ARM-LABEL: all_gpr:
 ; ARM:       @ %bb.0: @ %entry
 ; ARM-NEXT:    mul r0, r1, r0
+; ARM-NEXT:    mov r1, #0
 ; ARM-NEXT:    mov r3, #0
 ; ARM-NEXT:    mov r12, #0
 ; ARM-NEXT:    orr r0, r0, r2
@@ -181,6 +197,7 @@ define dso_local i32 @all_gpr(i32 noundef %a, i32 noundef %b, i32 noundef %c) lo
 ; THUMB2-LABEL: all_gpr:
 ; THUMB2:       @ %bb.0: @ %entry
 ; THUMB2-NEXT:    muls r0, r1, r0
+; THUMB2-NEXT:    movs r1, #0
 ; THUMB2-NEXT:    movs r3, #0
 ; THUMB2-NEXT:    mov.w r12, #0
 ; THUMB2-NEXT:    orrs r0, r2
@@ -191,12 +208,42 @@ define dso_local i32 @all_gpr(i32 noundef %a, i32 noundef %b, i32 noundef %c) lo
 ; THUMB1:       @ %bb.0: @ %entry
 ; THUMB1-NEXT:    muls r0, r1, r0
 ; THUMB1-NEXT:    orrs r0, r2
-; THUMB1-NEXT:    movs r2, #0
-; THUMB1-NEXT:    mov r3, r2
-; THUMB1-NEXT:    mov r12, r2
+; THUMB1-NEXT:    movs r1, #0
+; THUMB1-NEXT:    mov r2, r1
+; THUMB1-NEXT:    mov r3, r1
+; THUMB1-NEXT:    mov r12, r1
 ; THUMB1-NEXT:    bx lr
 entry:
   %mul = mul nsw i32 %b, %a
   %or = or i32 %mul, %c
   ret i32 %or
+}
+
+; The remaining argument-only mode includes every eligible argument register,
+; not just registers used by this function.
+define i32 @all_arg(i32 %x) "zero-call-used-regs"="all-arg" {
+; ARM-LABEL: all_arg:
+; ARM:       @ %bb.0:
+; ARM-NEXT:    mov r1, #0
+; ARM-NEXT:    mov r2, #0
+; ARM-NEXT:    mov r3, #0
+; ARM-NEXT:    mov r12, #0
+; ARM-NEXT:    bx lr
+;
+; THUMB2-LABEL: all_arg:
+; THUMB2:       @ %bb.0:
+; THUMB2-NEXT:    movs r1, #0
+; THUMB2-NEXT:    movs r2, #0
+; THUMB2-NEXT:    movs r3, #0
+; THUMB2-NEXT:    mov.w r12, #0
+; THUMB2-NEXT:    bx lr
+;
+; THUMB1-LABEL: all_arg:
+; THUMB1:       @ %bb.0:
+; THUMB1-NEXT:    movs r1, #0
+; THUMB1-NEXT:    mov r2, r1
+; THUMB1-NEXT:    mov r3, r1
+; THUMB1-NEXT:    mov r12, r1
+; THUMB1-NEXT:    bx lr
+  ret i32 %x
 }
