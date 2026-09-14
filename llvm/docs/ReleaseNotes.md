@@ -86,9 +86,9 @@ Makes programs 10x faster by doing Special New Thing.
 ### Changes to the ARM Backend
 
 * Added support for the `zero-call-used-regs` function attribute on 32-bit Arm,
-  including ARM, Thumb-1, and Thumb-2 code generation. Thumb-1 functions do not clear VFP
-  registers, which the Thumb-1 instruction set cannot write, even on cores
-  that have them.
+  including ARM, Thumb-1, and Thumb-2 code generation. Thumb-1 targets with VFP
+  registers support only general-purpose-register modes; other modes are
+  diagnosed because Thumb-1 cannot write VFP registers.
 
 ### Changes to the AVR Backend
 

@@ -1,0 +1,61 @@
+# RUN: split-file %s %t
+# RUN: not llc -mtriple=thumbv6m-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %t/flags.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=FLAGS
+# RUN: llc -mtriple=thumbv7m-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %t/flags.mir -o - | FileCheck %s --check-prefix=THUMB2
+# RUN: llc -mtriple=thumbv8m.base-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %t/flags.mir -o - | FileCheck %s --check-prefix=BASELINE
+# RUN: not llc -mtriple=thumbv6m-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %t/scratch.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=SCRATCH
+# RUN: not llc -mtriple=armv7-none-eabihf -run-pass=prolog-epilog -verify-machineinstrs %t/return-address.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=SCRATCH
+
+# Classic Thumb-1 needs a flag-setting instruction to materialize zero. A
+# predicated exit must retain its flags. Thumb-2 and v8-M Baseline can use a
+# flag-preserving move instead.
+# FLAGS: error: {{.*}}clearing the call-used registers writes the condition flags on this subtarget, and they are live at this exit
+# THUMB2-LABEL: name: live_flags
+# THUMB2: $r12 = t2MOVi 0, 14{{.*}}$noreg, $noreg
+# THUMB2: tBX_RET 0{{.*}}$cpsr, implicit $r0
+# BASELINE-LABEL: name: live_flags
+# BASELINE: $r12 = t2MOVi16 0, 14{{.*}}$noreg
+# BASELINE: tBX_RET 0{{.*}}$cpsr, implicit $r0
+
+# All caller-saved low registers are live. Clearing r12 must not borrow a
+# callee-saved register or overwrite a live result to obtain a low zero source.
+# SCRATCH: error: {{.*}}clearing the call-used registers needs a register to hold zero and none is free at this exit
+
+#--- flags.mir
+--- |
+  define void @live_flags() "zero-call-used-regs"="all-gpr" { ret void }
+...
+---
+name: live_flags
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0, $cpsr
+    tBX_RET 0, $cpsr, implicit $r0
+...
+
+#--- scratch.mir
+--- |
+  define void @no_scratch() "zero-call-used-regs"="all-gpr" { ret void }
+...
+---
+name: no_scratch
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0, $r1, $r2, $r3
+    tBX_RET 14, $noreg, implicit $r0, implicit $r1, implicit $r2, implicit $r3
+...
+
+#--- return-address.mir
+--- |
+  define ghccc void @no_scratch_lr() "zero-call-used-regs"="used" { ret void }
+...
+---
+name: no_scratch_lr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0, $r1, $r2, $r3, $r4, $r5, $r6, $r7, $r8, $r9, $r10, $r11, $r12
+    $s1 = VMOVS undef $s2, 14, $noreg
+    BX_RET 14, $noreg, implicit $r0, implicit $r1, implicit $r2, implicit $r3, implicit $r4, implicit $r5, implicit $r6, implicit $r7, implicit $r8, implicit $r9, implicit $r10, implicit $r11, implicit $r12
+...
