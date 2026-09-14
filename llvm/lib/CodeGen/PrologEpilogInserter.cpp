@@ -1457,13 +1457,11 @@ static bool isUnwindResumeCall(const MachineInstr &MI) {
 /// reaches them. The one it misses is a landing pad that resumes unwinding by a
 /// call, not a return; no existing predicate reaches it, so this does.
 ///
-/// Null means out of scope, not overlooked: a non-returning call, a non-local
-/// jump that reloads another frame's pointers, a trap, and an empty block all
-/// abandon the frame rather than release it, so nothing in the block is the
-/// last to touch it. Anything else that ends a block with no successors is in
-/// scope: an instruction this cannot classify may leave the function, and a
-/// dead sequence costs less than an uncleared exit. Instructions that cannot
-/// transfer control are skipped so that the exit is the one that can.
+/// Non-returning calls, non-local jumps that reload another frame's pointers,
+/// and traps are out of scope. A fallback trap or call must not hide an earlier
+/// opaque asm exit. In a block without successors, treat an unclassified control
+/// transfer as an exit; skip instructions that cannot transfer control. Return
+/// null if no in-scope exit is found.
 static MachineInstr *getEnforceableExit(MachineBasicBlock &MBB) {
   // A block with a successor continues in the function, so it is not an exit
   // however its terminator reads; catchret reaches here carrying isReturn.
@@ -1485,15 +1483,19 @@ static MachineInstr *getEnforceableExit(MachineBasicBlock &MBB) {
     if (!MI.isInlineAsm() && !MI.isCall() && !MI.isTerminator() &&
         !MI.isBranch() && !MI.getDesc().isTrap())
       continue;
-    // A call that does not resume unwinding does not come back here.
-    if (MI.isCall())
-      return isUnwindResumeCall(MI) ? &MI : nullptr;
+    // A trap or noreturn fallback does not rule out an earlier opaque asm
+    // exit. Neither fallback itself requires clearing.
+    if (MI.isCall()) {
+      if (isUnwindResumeCall(MI))
+        return &MI;
+      continue;
+    }
+    if (MI.getDesc().isTrap())
+      continue;
     // A longjmp is an indirect branch once the jump buffer is reloaded, or a
     // barrier pseudo that expands to one.
     if (MI.isIndirectBranch() ||
         (MI.isTerminator() && MI.isBarrier() && !MI.isBranch()))
-      return nullptr;
-    if (MI.getDesc().isTrap())
       return nullptr;
     // Anything else, inline asm included, may leave the function.
     return &MI;
@@ -1768,7 +1770,7 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
             continue;
 
           MCRegister Reg = MO.getReg();
-          if (AllocatableSet[Reg.id()] && (MO.isDef() || MO.isUse()))
+          if (AllocatableSet[Reg.id()])
             UsedRegs.set(Reg.id());
         }
       }

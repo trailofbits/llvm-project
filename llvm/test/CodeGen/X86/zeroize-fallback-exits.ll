@@ -3,8 +3,8 @@
 ; sequence costs less than an uncleared exit.
 ; trailofbits/vspells-ct-internal-notes#24.
 
-; RUN: llc -mtriple=x86_64-unknown-linux-gnu -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck --check-prefix=SEQ %s
-; RUN: llc -mtriple=x86_64-unknown-linux-gnu %s -o - | FileCheck %s
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu -verify-machineinstrs -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck --check-prefix=SEQ %s
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu -verify-machineinstrs %s -o - | FileCheck %s
 
 @g = external global i64
 
@@ -25,6 +25,40 @@ define void @opaque_asm(i64 %a, i64 %b) "zero-call-used-regs"="used-gpr" {
   %s = add i64 %a, %b
   store i64 %s, ptr @g
   call void asm sideeffect "hlt", "~{memory}"()
+  unreachable
+}
+
+; A fallback trap must not hide the opaque asm exit before it.
+; SEQ-LABEL: clearing sequence for function 'opaque_asm_then_trap':
+; SEQ-NEXT:  %bb.0 unknown: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:  end clearing sequence for function 'opaque_asm_then_trap'
+; CHECK-LABEL: opaque_asm_then_trap:
+; CHECK:       xorl %r10d, %r10d
+; CHECK-NEXT:  #APP
+; CHECK-NEXT:  jmp opaque_exit
+; CHECK:       ud2
+define void @opaque_asm_then_trap() "zero-call-used-regs"="used-gpr" {
+  call void asm sideeffect "", "~{r10}"()
+  call void asm sideeffect "jmp opaque_exit", "~{memory}"()
+  call void @llvm.trap()
+  unreachable
+}
+
+; A fallback noreturn call must not hide the asm, or lose its own argument.
+; SEQ-LABEL: clearing sequence for function 'opaque_asm_then_noreturn':
+; SEQ-NEXT:  %bb.0 unknown: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:  end clearing sequence for function 'opaque_asm_then_noreturn'
+; CHECK-LABEL: opaque_asm_then_noreturn:
+; CHECK-NOT:   xorl %edi, %edi
+; CHECK:       xorl %r10d, %r10d
+; CHECK-NEXT:  #APP
+; CHECK-NEXT:  jmp opaque_exit
+; CHECK-NOT:   xorl %edi, %edi
+; CHECK:       callq die
+define void @opaque_asm_then_noreturn(i64 %x) "zero-call-used-regs"="used-gpr" {
+  call void asm sideeffect "", "~{r10}"()
+  call void asm sideeffect "jmp opaque_exit", "~{memory}"()
+  call void @die(i64 %x)
   unreachable
 }
 
@@ -67,3 +101,4 @@ define void @calls_noreturn() "zero-call-used-regs"="used-gpr" {
 }
 
 declare void @abort() noreturn
+declare void @die(i64) noreturn

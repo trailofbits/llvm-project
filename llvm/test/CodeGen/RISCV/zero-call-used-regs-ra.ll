@@ -1,3 +1,8 @@
+; ghccc has no callee-saved registers, and PseudoRET has no explicit ra operand.
+; A call's implicit ra definition must not make the clearer erase the return
+; address. Cover used modes and all, which does not depend on the used set.
+; Regression for trailofbits/vspells-ct-internal-notes#24.
+
 ; RUN: llc -mtriple=riscv32 -mattr=+d -verify-machineinstrs < %s | FileCheck %s
 ; RUN: llc -mtriple=riscv64 -mattr=+d -verify-machineinstrs < %s | FileCheck %s
 
