@@ -1690,6 +1690,16 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
   }
   const bool ClearVPR = RegsToZero.test(ARM::VPR) && STI.hasMVEIntegerOps();
 
+  // PEI excludes subregisters and superregisters of live exit operands, but a
+  // partially overlapping tuple can survive that exclusion. Expanding it above
+  // can therefore reintroduce live leaves (for example, D0_D2 overlaps a Q0
+  // return value). Remove those leaves before choosing the clearing widths.
+  LiveRegUnits LiveUnits(TRI);
+  computeLiveUnitsAt(LiveUnits, MBB, MBBI);
+  for (MCRegister Reg : FPLeaves.set_bits())
+    if (!LiveUnits.available(Reg))
+      FPLeaves.reset(Reg);
+
   // Reduce the leaves to the widest register that covers only leaves that were
   // asked for. Q first, then D, and whatever is left stays an S.
   auto coversOnlyRequested = [&](MCRegister Reg) {
