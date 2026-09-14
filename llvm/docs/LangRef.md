@@ -2651,6 +2651,21 @@ fn -> other_fn -> other_fn ; fn is norecurse
 `"no-stack-arg-probe"`
 :   This attribute disables ABI-required stack probes, if any.
 
+`"zero-call-used-regs"`
+:   This attribute requests clearing of call-used registers at supported function exits.
+    Its string value selects the registers to clear:
+
+    - `"skip"` requests no register clearing.
+    - `"all"` selects all eligible call-used registers.
+    - `"used"` selects only registers used by the function, including implicit register operands such as inline-assembly clobbers and call arguments or results.
+    - Either `"all"` or `"used"` may have a `"-gpr"` suffix to select only general-purpose registers, an `"-arg"` suffix to select only argument registers, or `"-gpr-arg"` to apply both restrictions.
+
+    An absent attribute requests no register clearing. An attribute with an empty or omitted value, or any unrecognized value, is treated as `"all"`.
+    These values are accepted at the IR layer; a target that does not support register clearing diagnoses the resulting request as unsupported, just as for an explicit `"all"` request.
+    Use `"skip"` or omit the attribute to request no clearing.
+
+    Registers needed by the exit instruction, callee-saved registers, and the target's return-address register are excluded from clearing.
+
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
     returning, so that data the frame held is not left readable to whatever

@@ -2,7 +2,7 @@
 ; as LangRef fixes for an unrecognized "zeroize-stack" mode. The mode switch
 ; previously had no default. trailofbits/vspells-ct-internal-notes#24.
 
-; RUN: llc -mtriple=x86_64-unknown-linux-gnu %s -o - | FileCheck %s
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu -verify-machineinstrs %s -o - | FileCheck %s
 
 ; An unknown name clears the whole call-used set.
 ; CHECK-LABEL: unrecognized_mode:
@@ -21,6 +21,16 @@ define i32 @unrecognized_mode(i32 %x) "zero-call-used-regs"="used-gpr-and-a-mode
 ; CHECK:       xorps %xmm15, %xmm15
 ; CHECK-NEXT:  retq
 define i32 @empty_mode(i32 %x) "zero-call-used-regs"="" {
+  ret i32 %x
+}
+
+; Omitting the value also requests the widest mode.
+; CHECK-LABEL: valueless_mode:
+; CHECK:       fldz
+; CHECK:       xorl %ecx, %ecx
+; CHECK:       xorps %xmm15, %xmm15
+; CHECK-NEXT:  retq
+define i32 @valueless_mode(i32 %x) "zero-call-used-regs" {
   ret i32 %x
 }
 
@@ -50,5 +60,14 @@ define i32 @narrow_mode(i32 %x) "zero-call-used-regs"="used-gpr" {
 ; CHECK-NEXT:  movl %edi, %eax
 ; CHECK-NEXT:  retq
 define i32 @skip_mode(i32 %x) "zero-call-used-regs"="skip" {
+  ret i32 %x
+}
+
+; An absent attribute does not request clearing.
+; CHECK-LABEL: absent_mode:
+; CHECK:       # %bb.0:
+; CHECK-NEXT:  movl %edi, %eax
+; CHECK-NEXT:  retq
+define i32 @absent_mode(i32 %x) {
   ret i32 %x
 }
