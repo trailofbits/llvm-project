@@ -1589,6 +1589,20 @@ void ARMFrameLowering::emitEpilogue(MachineFunction &MF,
 // return value.
 //===----------------------------------------------------------------------===//
 
+bool ARMFrameLowering::supportsZeroCallUsedRegs(
+    const MachineFunction &MF) const {
+  // VFP registers may exist on a Thumb-1 target even though Thumb-1 has no
+  // instructions that can clear them. Keep core-only modes available, but do
+  // not advertise a request that may need floating-point clearing there.
+  if (!STI.isThumb1Only() || !STI.hasFPRegs())
+    return true;
+
+  StringRef Mode =
+      MF.getFunction().getFnAttribute("zero-call-used-regs").getValueAsString();
+  return Mode == "used-gpr-arg" || Mode == "used-gpr" ||
+         Mode == "all-gpr-arg" || Mode == "all-gpr";
+}
+
 /// Whether every leaf of \p Reg is an S or D register. Checking leaves covers
 /// the NEON tuple classes without listing them.
 static bool isFPOrNEONReg(const TargetRegisterInfo &TRI, MCRegister Reg) {
@@ -1818,7 +1832,9 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
       LiveRegUnits Used(TRI);
       computeLiveUnitsAt(Used, MBB, MBBI);
       for (MCRegister Reg : ZeroSrcRC)
-        if (!MRI.isReserved(Reg) && Used.available(Reg)) {
+        // A return can read LR without naming it as a machine operand, and
+        // not every calling convention lists it as callee-saved.
+        if (Reg != ARM::LR && !MRI.isReserved(Reg) && Used.available(Reg)) {
           ZeroSrc = Reg;
           break;
         }

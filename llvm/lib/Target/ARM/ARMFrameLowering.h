@@ -94,6 +94,8 @@ public:
   const SpillSlot *
   getCalleeSavedSpillSlots(unsigned &NumEntries) const override;
 
+  bool supportsZeroCallUsedRegs(const MachineFunction &MF) const override;
+
 protected:
   bool hasFPImpl(const MachineFunction &MF) const override;
 
