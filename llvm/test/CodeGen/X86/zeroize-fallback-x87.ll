@@ -6,7 +6,7 @@
 ; pop X86FloatingPoint appends after an asm cannot transfer control, so it does
 ; not move the exit past the asm.
 
-; RUN: llc -mtriple=x86_64-unknown-linux-gnu %s -o - | FileCheck %s
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu -verify-machineinstrs %s -o - | FileCheck %s
 
 ; An asm with nothing on the stack gets the full clear in front of it.
 ; CHECK-LABEL: asm_empty_stack:
