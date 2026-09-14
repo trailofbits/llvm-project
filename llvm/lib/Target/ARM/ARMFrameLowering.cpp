@@ -1594,6 +1594,20 @@ void ARMFrameLowering::emitEpilogue(MachineFunction &MF,
 // register is only used when every part of it was asked for.
 //===----------------------------------------------------------------------===//
 
+bool ARMFrameLowering::supportsZeroCallUsedRegs(
+    const MachineFunction &MF) const {
+  // VFP registers may exist on a Thumb-1 target even though Thumb-1 has no
+  // instructions that can clear them. Keep core-only modes available, but do
+  // not advertise a request that may need floating-point clearing there.
+  if (!STI.isThumb1Only() || !STI.hasFPRegs())
+    return true;
+
+  StringRef Mode =
+      MF.getFunction().getFnAttribute("zero-call-used-regs").getValueAsString();
+  return Mode == "used-gpr-arg" || Mode == "used-gpr" ||
+         Mode == "all-gpr-arg" || Mode == "all-gpr";
+}
+
 /// Whether \p Reg is one of the registers this step sorts into the
 /// floating-point half of the work.
 ///
@@ -1676,6 +1690,16 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
   }
   const bool ClearVPR = RegsToZero.test(ARM::VPR) && STI.hasMVEIntegerOps();
 
+  // PEI excludes subregisters and superregisters of live exit operands, but a
+  // partially overlapping tuple can survive that exclusion. Expanding it above
+  // can therefore reintroduce live leaves (for example, D0_D2 overlaps a Q0
+  // return value). Remove those leaves before choosing the clearing widths.
+  LiveRegUnits LiveUnits(TRI);
+  computeLiveUnitsAt(LiveUnits, MBB, MBBI);
+  for (MCRegister Reg : FPLeaves.set_bits())
+    if (!LiveUnits.available(Reg))
+      FPLeaves.reset(Reg);
+
   // Reduce the leaves to the widest register that covers only leaves that were
   // asked for. Q first, then D, and whatever is left stays an S.
   auto coversOnlyRequested = [&](MCRegister Reg) {
@@ -1754,7 +1778,9 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
       LiveRegUnits Used(TRI);
       computeLiveUnitsAt(Used, MBB, MBBI);
       for (MCRegister Reg : ZeroSrcRC)
-        if (!MRI.isReserved(Reg) && Used.available(Reg)) {
+        // A return can read LR without naming it as a machine operand, and
+        // not every calling convention lists it as callee-saved.
+        if (Reg != ARM::LR && !MRI.isReserved(Reg) && Used.available(Reg)) {
           ZeroSrc = Reg;
           break;
         }
