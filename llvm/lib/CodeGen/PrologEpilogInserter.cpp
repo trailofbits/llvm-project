@@ -1513,7 +1513,8 @@ getClearingInsertPoint(MachineBasicBlock &MBB, MachineInstr &ExitMI) {
 /// registers uncleared at every other return, dead and holding a value.
 static BitVector computeRegsToClearAtExit(
     const BitVector &Candidates, const MachineBasicBlock &MBB,
-    MachineBasicBlock::const_iterator InsertPt, const TargetRegisterInfo &TRI) {
+    MachineBasicBlock::const_iterator InsertPt, const TargetRegisterInfo &TRI,
+    const TargetFrameLowering &TFI) {
   // Only the rest of the block runs after the sequence, and only because the
   // block does not continue in the function; getEnforceableExit() ensures that.
   assert(MBB.succ_empty() && "exit block continues in the function");
@@ -1535,7 +1536,7 @@ static BitVector computeRegsToClearAtExit(
       // the same: it also spares siblings a clear would widen into a live
       // register (%ah into %al on x86), and no target-agnostic rule keeps both
       // that and AArch64's independently-cleared register tuples correct.
-      if (MI.isReturn())
+      if (MI.isReturn() && !TFI.zeroCallUsedRegsPreservesUnrequestedSiblings())
         for (MCRegUnit Unit : TRI.regunits(Reg))
           RegsToZero.reset(static_cast<unsigned>(Unit));
 
@@ -1627,9 +1628,9 @@ void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
   case ClearingStep::ClearRegisters:
     // What to clear is settled here rather than in the plan, because it is the
     // exit that decides it: see computeRegsToClearAtExit.
-    TFI.emitZeroCallUsedRegs(
-        computeRegsToClearAtExit(Plan.CandidateRegsToZero, MBB, InsertPt, TRI),
-        MBB, InsertPt, RS);
+    TFI.emitZeroCallUsedRegs(computeRegsToClearAtExit(Plan.CandidateRegsToZero,
+                                                      MBB, InsertPt, TRI, TFI),
+                             MBB, InsertPt, RS);
     break;
 
   case ClearingStep::ClearFlags:
@@ -1781,6 +1782,13 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
   for (const MCPhysReg *CSRegs = TRI.getCalleeSavedRegs(&MF);
        MCPhysReg CSReg = *CSRegs; ++CSRegs)
     for (MCRegister Reg : TRI.sub_and_superregs_inclusive(CSReg))
+      CandidateRegsToZero.reset(Reg.id());
+
+  // Some return instructions read the return address without an explicit
+  // operand, and conventions such as GHC leave it out of the callee-saved
+  // list. It must survive clearing regardless of either representation.
+  if (MCRegister RAReg = TRI.getRARegister())
+    for (MCRegister Reg : TRI.sub_and_superregs_inclusive(RAReg))
       CandidateRegsToZero.reset(Reg.id());
 
   return ClearingDisposition::Emit;
