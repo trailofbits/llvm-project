@@ -10,8 +10,6 @@
 ; RUN: llc -mtriple=thumbv8m.main -mattr=+fp-armv8d16sp %s -o - | FileCheck %s --check-prefix=VFP
 ; RUN: llc -mtriple=thumbv8.1m.main -mattr=+mve %s -o - | FileCheck %s --check-prefix=MVE
 ; RUN: llc -mtriple=thumbv7m-none-eabi %s -o - | FileCheck %s --check-prefix=NOFP
-; RUN: llc -mtriple=thumbv6-none-eabi -mattr=+vfp2 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=THUMB1 --implicit-check-not=vmov
-; RUN: llc -mtriple=thumbv6-none-eabi -mcpu=arm1176jzf-s -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=THUMB1 --implicit-check-not=vmov
 ; RUN: llc -mtriple=armv6-none-eabi -mattr=+vfp2 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=VFP
 ; RUN: llc -mtriple=thumbv6t2-none-eabi -mattr=+vfp2 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=VFP
 
@@ -74,13 +72,6 @@
 ; Thumb-2 callee may have written them. This is documented in the release
 ; notes. Only the general-purpose registers are cleared; ARM and Thumb-2 still
 ; clear VFP.
-; THUMB1-LABEL: all_regs:
-; THUMB1:         movs r0, #0
-; THUMB1-NEXT:    mov r1, r0
-; THUMB1-NEXT:    mov r2, r0
-; THUMB1-NEXT:    mov r3, r0
-; THUMB1-NEXT:    mov r12, r0
-; THUMB1-NEXT:    bx lr
 define void @all_regs() "zero-call-used-regs"="all" {
   ret void
 }

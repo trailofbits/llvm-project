@@ -254,3 +254,31 @@ entry:
   %or = or i32 %mul, %c
   ret i32 %or
 }
+
+; An identity return still clears unused argument registers in all-arg mode.
+define i32 @all_arg_identity(i32 %x) "zero-call-used-regs"="all-arg" {
+; ARM-LABEL: all_arg_identity:
+; ARM:       @ %bb.0:
+; ARM-NEXT:    mov r1, #0
+; ARM-NEXT:    mov r2, #0
+; ARM-NEXT:    mov r3, #0
+; ARM-NEXT:    mov r12, #0
+; ARM-NEXT:    bx lr
+;
+; THUMB2-LABEL: all_arg_identity:
+; THUMB2:       @ %bb.0:
+; THUMB2-NEXT:    movs r1, #0
+; THUMB2-NEXT:    movs r2, #0
+; THUMB2-NEXT:    movs r3, #0
+; THUMB2-NEXT:    mov.w r12, #0
+; THUMB2-NEXT:    bx lr
+;
+; THUMB1-LABEL: all_arg_identity:
+; THUMB1:       @ %bb.0:
+; THUMB1-NEXT:    movs r1, #0
+; THUMB1-NEXT:    mov r2, r1
+; THUMB1-NEXT:    mov r3, r1
+; THUMB1-NEXT:    mov r12, r1
+; THUMB1-NEXT:    bx lr
+  ret i32 %x
+}
