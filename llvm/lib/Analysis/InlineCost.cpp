@@ -3219,6 +3219,9 @@ std::optional<InlineResult> llvm::getAttributeBasedInliningDecision(
     if (!AttributeFuncs::isZeroizeStackInlineCompatible(*Caller, *Callee))
       return InlineResult::failure("incompatible zeroize-stack attributes");
 
+    if (!AttributeFuncs::isZeroizeFlagsInlineCompatible(*Caller, *Callee))
+      return InlineResult::failure("incompatible zeroize-flags attributes");
+
     auto IsViable = isInlineViable(*Callee);
     if (IsViable.isSuccess())
       return InlineResult::success();

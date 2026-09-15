@@ -20,7 +20,7 @@ declare i32 @__gxx_personality_v0(...)
 ; be in front of the register clear, and every step writes the flags so the
 ; flag clear has to be behind all of them.
 ; CHECK-LABEL: clearing sequence for function 'one_return':
-; CHECK-NEXT:  %bb.0 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; CHECK-NEXT:  %bb.0 return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; CHECK-NEXT:  end clearing sequence for function 'one_return'
 define i32 @one_return(i32 %x) "zero-call-used-regs"="used-gpr" {
   ret i32 %x
@@ -29,7 +29,7 @@ define i32 @one_return(i32 %x) "zero-call-used-regs"="used-gpr" {
 ; The steps a function does not ask for hold their positions anyway: which
 ; steps run is a property of the function, the order is not.
 ; CHECK-LABEL: clearing sequence for function 'asks_for_nothing':
-; CHECK-NEXT:  %bb.0 return: clear-stack=not-requested clear-registers=not-requested clear-flags=unimplemented
+; CHECK-NEXT:  %bb.0 return: clear-stack=not-requested clear-registers=not-requested clear-flags=not-requested
 ; CHECK-NEXT:  end clearing sequence for function 'asks_for_nothing'
 define i32 @asks_for_nothing(i32 %x) {
   ret i32 %x
@@ -37,8 +37,8 @@ define i32 @asks_for_nothing(i32 %x) {
 
 ; Every in-scope exit gets the sequence, not one of them and not the first.
 ; CHECK-LABEL: clearing sequence for function 'two_returns':
-; CHECK-NEXT:  %bb.1 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
-; CHECK-NEXT:  %bb.2 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; CHECK-NEXT:  %bb.1 return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
+; CHECK-NEXT:  %bb.2 return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; CHECK-NEXT:  end clearing sequence for function 'two_returns'
 define i32 @two_returns(i32 %x) "zero-call-used-regs"="used-gpr" {
 entry:
@@ -57,8 +57,8 @@ neg:
 ; blocks never reached it. The sequence runs there because the classification
 ; says it is in scope.
 ; CHECK-LABEL: clearing sequence for function 'cleanup_resumes':
-; CHECK-NEXT:  %bb.1 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
-; CHECK-NEXT:  %bb.2 unwind-resume: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; CHECK-NEXT:  %bb.1 return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
+; CHECK-NEXT:  %bb.2 unwind-resume: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; CHECK-NEXT:  end clearing sequence for function 'cleanup_resumes'
 define void @cleanup_resumes() "zero-call-used-regs"="used-gpr" personality ptr @__gxx_personality_v0 {
 entry:
@@ -77,7 +77,7 @@ lpad:
 ; being reached is left for a later change; this pins only that the exit is
 ; classified and that the sequence runs at it.
 ; CHECK-LABEL: clearing sequence for function 'tail_call':
-; CHECK-NEXT:  %bb.0 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; CHECK-NEXT:  %bb.0 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; CHECK-NEXT:  end clearing sequence for function 'tail_call'
 define i32 @tail_call(i32 %x) "zero-call-used-regs"="used-gpr" {
   %r = tail call i32 @callee(i32 %x)
@@ -88,7 +88,7 @@ define i32 @tail_call(i32 %x) "zero-call-used-regs"="used-gpr" {
 ; list is pinned between the two lines that bracket it, so an out-of-scope exit
 ; that started being emitted at would show up here.
 ; CHECK-LABEL: clearing sequence for function 'out_of_scope_exits':
-; CHECK-NEXT:  %bb.3 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; CHECK-NEXT:  %bb.3 return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; CHECK-NEXT:  end clearing sequence for function 'out_of_scope_exits'
 define void @out_of_scope_exits(i32 %x, ptr %buf) "zero-call-used-regs"="used-gpr" {
 entry:

@@ -104,7 +104,7 @@ define i32 @leaf(i32 %a, i32 %b) uwtable "zero-call-used-regs"="used" {
 ; tail call leaves R12 available as a zero source for the scalar FP clear.
 define i32 @fp_scratch(float %a, i32 %b, i32 %c, i32 %d) uwtable "zero-call-used-regs"="used" {
 ; SEQ-LABEL: clearing sequence for function 'fp_scratch':
-; SEQ-NEXT:    %bb.0 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:    %bb.0 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; CHECK-LABEL: fp_scratch:
 ; CHECK:         .seh_startepilogue
 ; CHECK-NEXT:    pop.w {r4, lr}

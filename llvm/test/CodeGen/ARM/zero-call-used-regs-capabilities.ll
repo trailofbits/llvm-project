@@ -11,20 +11,20 @@
 ; configurations. Stack clearing remains an independent, unsupported capability.
 
 ; CHECK-LABEL: clearing sequence for function 'used_gpr':
-; CHECK: return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; CHECK: return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 define i32 @used_gpr(i32 %x) "zero-call-used-regs"="used-gpr" {
   ret i32 %x
 }
 
 ; CHECK-LABEL: clearing sequence for function 'all':
-; CHECK: return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; CHECK: return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 define i32 @all(i32 %x) "zero-call-used-regs"="all" {
   ret i32 %x
 }
 
 ; "skip" asks for nothing, so there is nothing to report.
 ; CHECK-LABEL: clearing sequence for function 'skip':
-; CHECK: return: clear-stack=not-requested clear-registers=not-requested clear-flags=unimplemented
+; CHECK: return: clear-stack=not-requested clear-registers=not-requested clear-flags=not-requested
 define i32 @skip(i32 %x) "zero-call-used-regs"="skip" {
   ret i32 %x
 }
