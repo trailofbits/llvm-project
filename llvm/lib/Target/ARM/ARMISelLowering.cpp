@@ -2770,6 +2770,11 @@ void ARMTargetLowering::HandleByVal(CCState *State, unsigned &Size,
 bool ARMTargetLowering::IsEligibleForTailCallOptimization(
     TargetLowering::CallLoweringInfo &CLI, CCState &CCInfo,
     SmallVectorImpl<CCValAssign> &ArgLocs, const bool isIndirect) const {
+  // The protected epilogue must erase its owned frame before returning.
+  if (CLI.DAG.getMachineFunction().getFunction().hasFnAttribute(
+          "zeroize-stack"))
+    return false;
+
   CallingConv::ID CalleeCC = CLI.CallConv;
   SDValue Callee = CLI.Callee;
   bool isVarArg = CLI.IsVarArg;
