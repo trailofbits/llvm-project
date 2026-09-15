@@ -127,6 +127,9 @@ private:
     return true;
   }
 
+  bool isZeroCallUsedRegsScratchReg(const MachineFunction &MF,
+                                    MCRegister Reg) const override;
+
   /// Emit target zero call-used regs.
   void emitZeroCallUsedRegs(BitVector RegsToZero, MachineBasicBlock &MBB,
                             MachineBasicBlock::iterator MBBI,

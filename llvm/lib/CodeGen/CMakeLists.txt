@@ -195,6 +195,7 @@ add_llvm_component_library(LLVMCodeGen
   RegisterClassInfo.cpp
   RegisterCoalescer.cpp
   RegisterPressure.cpp
+  RegisterClearing.cpp
   RegisterScavenging.cpp
   GCEmptyBasicBlocks.cpp
   Rematerializer.cpp

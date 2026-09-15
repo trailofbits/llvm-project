@@ -624,6 +624,14 @@ void X86FrameLowering::emitCalleeSavedFrameMoves(
   }
 }
 
+bool X86FrameLowering::isZeroCallUsedRegsScratchReg(const MachineFunction &MF,
+                                                    MCRegister Reg) const {
+  // XOR32rr also zeros the upper half in 64-bit mode. Require the declaration
+  // to cover the full write, including sibling subregisters such as AL and AH.
+  return STI.is64Bit() ? X86::GR64RegClass.contains(Reg)
+                       : X86::GR32RegClass.contains(Reg);
+}
+
 void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
                                             MachineBasicBlock &MBB,
                                             MachineBasicBlock::iterator MBBI,

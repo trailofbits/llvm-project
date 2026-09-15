@@ -1534,6 +1534,11 @@ static MCRegister getLargestFPRegisterOrZero(const RISCVSubtarget &STI,
   return MCRegister();
 }
 
+bool RISCVFrameLowering::isZeroCallUsedRegsScratchReg(const MachineFunction &MF,
+                                                      MCRegister Reg) const {
+  return RISCV::GPRRegClass.contains(Reg);
+}
+
 void RISCVFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
                                               MachineBasicBlock &MBB,
                                               MachineBasicBlock::iterator MBBI,
