@@ -87,6 +87,20 @@ static cl::opt<bool> PrintClearingSequence(
     cl::desc("Print the clearing sequence emitted at each in-scope exit, in "
              "the order its steps run"));
 
+// A stand-in for a step that is not written yet. Clearing the stack frame is
+// trailofbits/vspells-ct-internal-notes#26 and no target implements it, so the
+// step that would declare the registers it worked through declares nothing,
+// and the coverage the register clear gives those registers has no producer to
+// exercise it. This option supplies one: it stands in for a target that clears
+// the frame using the named registers. It makes the stack-clearing step
+// declare them and emit nothing else, which is the part of a real
+// implementation this file has to cope with. Hidden, and inert unless a test
+// asks for it.
+static cl::list<std::string> StandInStackScratchRegs(
+    "pei-stack-clear-scratch-regs", cl::Hidden, cl::CommaSeparated,
+    cl::desc("Registers the stack-clearing step is to declare as the scratch "
+             "it used, standing in for the implementation of that step"));
+
 namespace {
 
 //===----------------------------------------------------------------------===//
@@ -283,9 +297,12 @@ class PEIImpl {
   ClearingDisposition planClearStack(MachineFunction &MF);
   ClearingDisposition planClearRegisters(MachineFunction &MF,
                                          BitVector &CandidateRegsToZero);
+  ClearingDisposition planClearRegistersForScratch(
+      MachineFunction &MF, BitVector &CandidateRegsToZero);
   void emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
                         MachineBasicBlock &MBB,
-                        MachineBasicBlock::iterator InsertPt);
+                        MachineBasicBlock::iterator InsertPt,
+                        BitVector &ScratchRegs, BitVector &ClearedRegs);
   void diagnoseIgnoredZeroizeRequestsOnNakedFunction(MachineFunction &MF);
 
 public:
@@ -329,7 +346,7 @@ STATISTIC(NumBytesStackSpace,
           "Number of bytes used for stack in all functions");
 
 void PEILegacy::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.setPreservesCFG();
+  // A stack-clearing target may insert loop blocks.
   AU.addRequired<MachineOptimizationRemarkEmitterPass>();
   MachineFunctionPass::getAnalysisUsage(AU);
 }
@@ -540,7 +557,7 @@ PrologEpilogInserterPass::run(MachineFunction &MF,
   if (!PEIImpl(&ORE).run(MF))
     return PreservedAnalyses::all();
 
-  return getMachineFunctionPassPreservedAnalyses().preserveSet<CFGAnalyses>();
+  return getMachineFunctionPassPreservedAnalyses();
 }
 
 /// Calculate the MaxCallFrameSize variable for the function's frame
@@ -1548,6 +1565,225 @@ static BitVector computeRegsToClearAtExit(
   return RegsToZero;
 }
 
+//===----------------------------------------------------------------------===//
+// Scratch registers.
+//
+// A step of the sequence that needs registers to do its work is not the last
+// word on them. Clearing the frame reads the frame through a register and
+// writes zeroes back through another, so when it finishes, the registers it
+// worked through hold what it has just destroyed: the value it overwrote, or
+// the address inside the frame it overwrote it at. Those are the frame's
+// contents by another name, and leaving with them in registers discloses
+// exactly what leaving with them on the stack would have.
+//
+// Running the register clear after the stack clear is what makes destroying
+// them possible, and ClearingSequence already fixes that order. Order alone is
+// not coverage. What the register clear clears is chosen by the function's
+// "zero-call-used-regs" mode, and every mode is a statement about the
+// function: which registers it used, which of them are argument registers,
+// which are general purpose. A register the clearing machinery dirtied is none
+// of those things. A "used" mode does not select it, because the sweep that
+// computes the used set runs while the plan is made, before the stack clear
+// has been emitted, and so cannot see it. An "arg" mode does not select it
+// unless it happens to be an argument register. And a function that asked for
+// its frame to be cleared need not have asked for its registers to be cleared
+// at all, in which case there is no mode to select anything.
+//
+// So the coverage cannot be inferred from the function, and is declared by the
+// step instead: a step records the registers it used, and the register clear
+// adds what has been recorded to what it was already going to clear. Two
+// things follow, and both are the point rather than a side effect:
+//
+//  - The declaration is per exit. A step is emitted once at each in-scope exit
+//    and need not use the same registers at each one, so the record is built
+//    as the sequence runs at an exit and read by the register clear at that
+//    same exit.
+//
+//  - The register clear stops being optional once a step in front of it
+//    declares anything. A function with "zeroize-stack" and no
+//    "zero-call-used-regs" gets one anyway, over nothing but the declared
+//    registers: the request to clear the frame is not discharged while the
+//    frame's contents are sitting in registers. It is also why a target that
+//    cannot clear registers cannot clear the frame either, and is told so.
+//
+// A step may only declare a register whose value at the exit nothing depends
+// on. That rules out the registers the exit itself needs -- the return value,
+// a tail call's outgoing arguments, the exception object an unwind resume is
+// passed -- and it rules out the callee-saved registers, which have to reach
+// the exit holding what the caller left in them whether or not the exit names
+// them. A step that needs such a register has to save and restore it rather
+// than declare it, because what is declared is cleared. Builds with assertions
+// check both halves; a build without them clears what it was told to, which is
+// the direction the rest of this machinery errs in too.
+//===----------------------------------------------------------------------===//
+
+/// The register named \p Name on this target, or a null register if it has no
+/// register of that name.
+static MCRegister findRegisterByName(const TargetRegisterInfo &TRI,
+                                     StringRef Name) {
+  for (unsigned Reg = 1, E = TRI.getNumRegs(); Reg != E; ++Reg)
+    if (Name.equals_insensitive(TRI.getName(Reg)))
+      return MCRegister(Reg);
+  return MCRegister();
+}
+
+/// Record in \p ScratchRegs the registers the ClearStack step used at this
+/// exit.
+///
+/// It used none: no target clears the frame, so the step emits nothing
+/// (trailofbits/vspells-ct-internal-notes#26). What is declared here is what
+/// -pei-stack-clear-scratch-regs names, which is how the declaration and its
+/// consumption are exercised while the step that would make one does not
+/// exist. An implementation of the step declares what it actually used, in
+/// place of this.
+static void declareStackClearScratchRegs(const TargetRegisterInfo &TRI,
+                                         BitVector &ScratchRegs) {
+  for (const std::string &Name : StandInStackScratchRegs) {
+    MCRegister Reg = findRegisterByName(TRI, Name);
+    if (!Reg)
+      report_fatal_error(Twine("unknown register name in "
+                               "-pei-stack-clear-scratch-regs: '") +
+                         Name + "'");
+    ScratchRegs.set(Reg.id());
+  }
+}
+
+#ifndef NDEBUG
+/// Whether \p Regs holds a register whose value at the exit something depends
+/// on, and which therefore cannot be declared as scratch by a step of the
+/// sequence.
+static bool anyRegNeededAtExit(const BitVector &Regs,
+                               const MachineBasicBlock &MBB,
+                               MachineBasicBlock::const_iterator InsertPt,
+                               const TargetRegisterInfo &TRI) {
+  const MachineFunction &MF = *MBB.getParent();
+
+  // A callee-saved register has to reach every exit holding what the caller
+  // left in it. Nothing at the exit names it, so the scan below would not find
+  // it.
+  for (const MCPhysReg *CSRegs = TRI.getCalleeSavedRegs(&MF);
+       MCPhysReg CSReg = *CSRegs; ++CSRegs)
+    for (MCRegister Reg : TRI.sub_and_superregs_inclusive(CSReg))
+      if (Regs.test(Reg.id()))
+        return true;
+
+  // What the exit needs is what the instructions after the sequence read or
+  // write, which is the same question computeRegsToClearAtExit answers for the
+  // candidate set.
+  for (const MachineInstr &MI : make_range(InsertPt, MBB.end()))
+    for (const MachineOperand &MO : MI.operands()) {
+      if (!MO.isReg() || !MO.getReg())
+        continue;
+      for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(MO.getReg()))
+        if (Regs.test(SReg))
+          return true;
+    }
+
+  return false;
+}
+#endif
+
+//===----------------------------------------------------------------------===//
+// Keeping the clears.
+//
+// A register clear is an instruction whose only effect is to overwrite a
+// register nothing reads afterwards, which is the definition of dead code. It
+// is emitted precisely because nothing reads the register: the value being
+// destroyed is one the function is finished with, and if anything still needed
+// it the clear would be wrong. So the machine-level reason to keep it is
+// missing from the instruction itself, and it survives only for as long as
+// nothing looks. This is the machine-level counterpart of the non-removability
+// the llvm.zeroize intrinsic already carries in the IR; an intrinsic's
+// properties stop meaning anything once it has been lowered to an XOR.
+//
+// What supplies the missing reason is the exit. Recording the cleared
+// registers as used at the point control leaves says what is in fact true:
+// their values at the point of leaving are part of what the function leaves
+// behind, so an instruction that sets them has an effect that outlives the
+// function. A pass that removes an instruction because its definitions are
+// dead then finds them live, and leaves the clear alone.
+//
+// The registers are named as implicit uses of the return, and only of a
+// return. The other in-scope exits leave through a call or through an
+// instruction the classification could not read, and neither is a place to
+// state what the function leaves behind: a call's register operands describe
+// its arguments and an opaque instruction's describe whatever the target or
+// the asm string put there. The clears at those exits stay as they are.
+//
+// A register operand on an exit is not read only as liveness, which is why the
+// target gets a say in which register is named: see
+// TargetFrameLowering::getClearedRegExitAnchor. On X86 the collision is not
+// hypothetical. The pass that inserts vzeroupper treats a return naming a YMM
+// or ZMM register as a return that carries a vector value and skips the
+// vzeroupper in front of it, so naming a cleared YMM there drops the
+// vzeroupper from an AVX function that clears its registers and leaves the
+// caller an AVX-to-SSE transition to pay. X86 answers with the 128-bit part of
+// the register instead, which keeps the definition live -- a definition is
+// live as soon as any part of it is -- and says nothing about vector state.
+//
+// An extra instruction was tried in place of the operands and does not work.
+// FAKE_USE is the pseudo for exactly this ("represents a use of the operand
+// but generates no code"), it is explicitly exempted from
+// MachineInstr::wouldBeTriviallyDead, and it would work at every exit rather
+// than only at returns. But it is not free of output: the asm printer writes a
+// "# fake_use:" comment for it, so every function that clears registers grows
+// a line, and a dozen existing tests read the emitted code line by line.
+// Recording the fact on an instruction that is already there costs nothing.
+//
+// isBarrier is not the mechanism for this, and was considered and rejected. It
+// says that control does not fall through the instruction -- Target.td spells
+// the field "Can control flow fall through this instruction?" -- which is a
+// statement about the CFG and is what makes an unconditional branch different
+// from a conditional one. It has nothing to say about whether an instruction's
+// effects can be discarded, it would be false of a clear in any case, and
+// setting it would misdescribe the block to everything that reads it.
+//
+// The exposure this closes is narrower than it looks, and saying so is part of
+// the change. DeadMachineInstructionElim is the pass that removes instructions
+// on exactly these grounds, and in the default pipeline it runs twice, both
+// times in addMachineSSAOptimization, which is before register allocation and
+// so long before this. Nothing after prologue/epilogue insertion runs it: the
+// passes that follow are MachineLateInstrsCleanup, BranchFolder,
+// TailDuplicate, MachineCopyPropagation, the post-RA expansions and
+// schedulers, block placement and the target's pre-emit passes, and none of
+// them removes an instruction for having no live definitions.
+// MachineLateInstrsCleanup comes closest, and it declines an XOR before
+// reaching the question: its candidate test rejects an instruction that reads
+// a register other than the frame register, which the two operands of the XOR
+// are.
+//
+// So this is not a fix for something the compiler does today. It is the
+// property being made to hold rather than being left to the pipeline's
+// composition, and the difference is easy to see: run the pass that would
+// remove them over the code this emits and, before this change, every clear in
+// a function goes.
+//===----------------------------------------------------------------------===//
+
+/// Record the registers \p ClearedRegs the sequence cleared at \p ExitMI as
+/// implicit uses of the return control leaves through, so that the clears are
+/// observably live and cannot be removed for having no live definitions.
+static void anchorClearedRegsAtExit(MachineBasicBlock &MBB,
+                                    const MachineInstr &ExitMI,
+                                    const BitVector &ClearedRegs,
+                                    const TargetFrameLowering &TFI) {
+  if (ClearedRegs.none() || !ExitMI.isReturn())
+    return;
+
+  const MachineFunction &MF = *MBB.getParent();
+
+  for (MachineInstr &MI : MBB.terminators()) {
+    if (&MI != &ExitMI)
+      continue;
+    for (unsigned Reg : ClearedRegs.set_bits()) {
+      MCRegister Anchor = TFI.getClearedRegExitAnchor(MF, MCRegister(Reg));
+      if (Anchor && !MI.hasRegisterImplicitUseOperand(Anchor))
+        MI.addOperand(MachineOperand::CreateReg(Anchor, /*isDef=*/false,
+                                                /*isImp=*/true));
+    }
+    return;
+  }
+}
+
 /// insertClearingSequences - Run the clearing sequence at every exit of \p MF
 /// that is in scope.
 ///
@@ -1565,17 +1801,22 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
   if (!Plan.anyStepEmits() && !PrintClearingSequence)
     return;
 
+  const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+  const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
+
   raw_ostream &OS = errs();
   if (PrintClearingSequence)
     OS << "clearing sequence for function '" << MF.getName() << "':\n";
 
-  for (MachineBasicBlock &MBB : MF) {
-    // Where the sequence runs is decided in one place, for every step, so
-    // that a step cannot go looking for sites of its own.
-    MachineInstr *ExitMI = getEnforceableExit(MBB);
-    if (!ExitMI)
-      continue;
+  // Stack emitters may split blocks to form bounded clearing loops. Snapshot
+  // exits so newly created blocks are neither skipped nor processed twice.
+  SmallVector<MachineInstr *, 8> Exits;
+  for (MachineBasicBlock &MBB : MF)
+    if (MachineInstr *Exit = getEnforceableExit(MBB))
+      Exits.push_back(Exit);
 
+  for (MachineInstr *ExitMI : Exits) {
+    MachineBasicBlock &MBB = *ExitMI->getParent();
     // An exit that is in scope is one the sequence can be placed at, so it has
     // a position by construction. Emitting at the end of the block instead
     // would put the sequence after the instruction control leaves through.
@@ -1588,17 +1829,48 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
       OS << "  " << printMBBReference(MBB) << " "
          << getExitKindName(*ExitMI) << ":";
 
+    // What the steps in front of the register clear leave in registers. It is
+    // built as the sequence runs at this exit and read by the register clear
+    // at this exit; see the comment on scratch registers above.
+    BitVector ScratchRegs(TRI.getNumRegs());
+
+    // What the sequence cleared here, collected as it runs and used once it
+    // has finished; see the comment on keeping the clears above.
+    BitVector ClearedRegs(TRI.getNumRegs());
+
     for (ClearingStep Step : ClearingSequence) {
       ClearingDisposition D = Plan.dispositionOf(Step);
       if (D == ClearingDisposition::Emit)
-        emitClearingStep(Step, Plan, MBB, InsertPt);
+        emitClearingStep(Step, Plan, *ExitMI->getParent(),
+                         getClearingInsertPoint(*ExitMI->getParent(), *ExitMI),
+                         ScratchRegs, ClearedRegs);
       if (PrintClearingSequence)
         OS << " " << getClearingStepName(Step) << "="
            << getClearingDispositionName(D);
     }
 
-    if (PrintClearingSequence)
+    if (PrintClearingSequence) {
+      // Only when there are any, so that the line a function without a step
+      // that declares registers prints is the line it printed before.
+      if (ScratchRegs.any()) {
+        OS << " scratch=";
+        const char *Sep = "";
+        for (unsigned Reg : ScratchRegs.set_bits()) {
+          OS << Sep << TRI.getName(Reg);
+          Sep = ",";
+        }
+      }
       OS << "\n";
+    }
+
+    // Strictly after the sequence has run, and so strictly after the register
+    // clear has decided what it covers here. The registers this adds to the
+    // exit are registers the exit reads, and computeRegsToClearAtExit spares
+    // every register the exit reads: add them first and the register clear
+    // spares exactly the registers it was about to clear, and spares them
+    // silently, the result being a function that reports itself protected and
+    // clears nothing.
+    anchorClearedRegsAtExit(*ExitMI->getParent(), *ExitMI, ClearedRegs, TFI);
   }
 
   if (PrintClearingSequence)
@@ -1607,31 +1879,83 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
 
 /// emitClearingStep - Emit one step of the clearing sequence at \p InsertPt.
 ///
+/// \p ScratchRegs carries the registers the steps already run at this exit
+/// used, and so left holding what they destroyed. A step adds the registers it
+/// used to it, and the register clear reads it; see the comment on scratch
+/// registers above.
+///
+/// \p ClearedRegs collects the registers the sequence has cleared here, for
+/// the implicit uses that keep the clears; see the comment on keeping the
+/// clears above.
+///
 /// A step that emits nothing today still has its case here, so that the
 /// implementation of it lands at the position the order gives it rather than
 /// wherever it is convenient.
 void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
                                MachineBasicBlock &MBB,
-                               MachineBasicBlock::iterator InsertPt) {
+                               MachineBasicBlock::iterator InsertPt,
+                               BitVector &ScratchRegs, BitVector &ClearedRegs) {
   MachineFunction &MF = *MBB.getParent();
   const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
 
   switch (Step) {
   case ClearingStep::ClearStack:
-    // Nothing emits here yet: no target can clear the frame, so planning has
-    // already refused every request for it and this step never reaches
-    // emission. It is first in the order because it needs registers to run,
-    // and the register clear after it is what destroys those.
+    if (StandInStackScratchRegs.empty())
+      TFI.emitZeroizeStack(MBB, InsertPt, ScratchRegs);
+    else
+      declareStackClearScratchRegs(TRI, ScratchRegs);
     break;
 
-  case ClearingStep::ClearRegisters:
+  case ClearingStep::ClearRegisters: {
     // What to clear is settled here rather than in the plan, because it is the
     // exit that decides it: see computeRegsToClearAtExit.
-    TFI.emitZeroCallUsedRegs(computeRegsToClearAtExit(Plan.CandidateRegsToZero,
-                                                      MBB, InsertPt, TRI, TFI),
-                             MBB, InsertPt, RS);
+    BitVector RegsToZero =
+        computeRegsToClearAtExit(Plan.CandidateRegsToZero, MBB, InsertPt, TRI, TFI);
+
+    // On top of that, whatever the steps in front of this one declared. The
+    // declarations are folded in after the exit has narrowed the candidates
+    // and not before, because narrowing them away is exactly what would
+    // happen: a declared register is one the sequence dirtied on the way here,
+    // not one the function used, and the narrowing is there to spare what the
+    // exit still needs.
+    assert(!anyRegNeededAtExit(ScratchRegs, MBB, InsertPt, TRI) &&
+           "a step of the clearing sequence declared as scratch a register "
+           "whose value at the exit something depends on");
+    RegsToZero |= ScratchRegs;
+
+    // The registers to put on the exit are the ones the clear writes, which
+    // are not the ones it was asked to clear: the request names every
+    // allocatable alias of a register, and the target picks which of them to
+    // write, so x86 is asked for %rax, %eax, %ax, %al and %ah and emits one
+    // instruction defining %eax. Reading the emitted instructions back is what
+    // gives the registers that exist. The range is what was inserted in front
+    // of InsertPt just now.
+    MachineBasicBlock::iterator Emitted = InsertPt;
+    bool AtBegin = Emitted == MBB.begin();
+    MachineBasicBlock::iterator Before;
+    if (!AtBegin)
+      Before = std::prev(Emitted);
+
+    TFI.emitZeroCallUsedRegs(RegsToZero, MBB, InsertPt, RS);
+
+    for (MachineInstr &MI :
+         make_range(AtBegin ? MBB.begin() : std::next(Before), InsertPt))
+      for (const MachineOperand &MO : MI.operands()) {
+        if (!MO.isReg() || !MO.isDef() || !MO.getReg())
+          continue;
+        // Only what was asked for. A clear writes registers on the side that
+        // are not part of what it destroys -- an XOR sets the flags -- and
+        // saying the function leaves those behind would be saying something
+        // else, and something untrue.
+        for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(MO.getReg()))
+          if (RegsToZero.test(SReg)) {
+            ClearedRegs.set(MO.getReg().id());
+            break;
+          }
+      }
     break;
+  }
 
   case ClearingStep::ClearFlags:
     // Nothing emits here yet. It is last in the order because every step in
@@ -1649,6 +1973,21 @@ void PEIImpl::planClearingSequence(MachineFunction &MF,
                                    ExitClearingPlan &Plan) {
   Plan.Stack = planClearStack(MF);
   Plan.Registers = planClearRegisters(MF, Plan.CandidateRegsToZero);
+
+  // A step that runs in front of the register clear leaves the registers it
+  // worked through holding what it destroyed, and the register clear is what
+  // destroys those in turn. So once such a step runs, the register clear runs
+  // with it, whether or not the function asked for one: "zero-call-used-regs"
+  // is how a function asks for its own registers to be cleared, and these are
+  // not its registers, they are the sequence's. That includes a function that
+  // asked for "skip", which declines a clear of what the function itself left
+  // in registers and says nothing about what clearing its frame put there. A
+  // function with no step in front of the register clear is untouched by this.
+  if (Plan.Stack == ClearingDisposition::Emit &&
+      Plan.Registers == ClearingDisposition::NotRequested)
+    Plan.Registers =
+        planClearRegistersForScratch(MF, Plan.CandidateRegsToZero);
+
   // Nothing asks for the flags to be cleared and nothing clears them. The step
   // is planned all the same, so that the sequence a function runs is described
   // by the plan in full rather than in the parts that have an implementation.
@@ -1663,6 +2002,14 @@ ClearingDisposition PEIImpl::planClearStack(MachineFunction &MF) {
   if (!F.hasFnAttribute("zeroize-stack"))
     return ClearingDisposition::NotRequested;
 
+  // The stand-in for the implementation of this step answers the capability
+  // question instead of asking it, because what it stands in for is a target
+  // that has the capability. It emits nothing; what it does is declare the
+  // registers such a step would have used, so that what the rest of the
+  // sequence does with them can be exercised.
+  if (!StandInStackScratchRegs.empty())
+    return ClearingDisposition::Emit;
+
   const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
   if (!TFI.supportsZeroizeStack(MF)) {
     F.getContext().diagnose(DiagnosticInfoUnsupported{
@@ -1671,9 +2018,36 @@ ClearingDisposition PEIImpl::planClearStack(MachineFunction &MF) {
     return ClearingDisposition::Unsupported;
   }
 
-  // No target implements the step yet, so a supported request reports
-  // unimplemented rather than silently emitting nothing.
-  return ClearingDisposition::Unimplemented;
+  return ClearingDisposition::Emit;
+}
+
+/// planClearRegistersForScratch - Turn the ClearRegisters step on in a
+/// function that did not ask for it, because a step in front of it does run
+/// and will leave registers holding what it destroyed.
+///
+/// The candidate set is left empty on purpose: nothing about the function
+/// selects a register here, and what is cleared at each exit is exactly what
+/// the steps in front of the register clear declare at that exit.
+ClearingDisposition
+PEIImpl::planClearRegistersForScratch(MachineFunction &MF,
+                                      BitVector &CandidateRegsToZero) {
+  const Function &F = MF.getFunction();
+  const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
+  const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+
+  // A target that cannot clear registers cannot finish clearing the frame
+  // either: the sequence would end with the frame's contents in the registers
+  // it read them through, which is the disclosure the request was made to
+  // prevent. Report it rather than emitting the half that works.
+  if (!TFI.supportsZeroCallUsedRegs(MF)) {
+    F.getContext().diagnose(DiagnosticInfoUnsupported{
+        F, "clearing the stack needs the registers it uses to be cleared "
+           "afterwards, which is not supported by this target"});
+    return ClearingDisposition::Unsupported;
+  }
+
+  CandidateRegsToZero.resize(TRI.getNumRegs());
+  return ClearingDisposition::Emit;
 }
 
 /// planClearRegisters - Decide what the ClearRegisters step does in \p MF, and
