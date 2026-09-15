@@ -2665,6 +2665,16 @@ fn -> other_fn -> other_fn ; fn is norecurse
     Inlining a callee with this attribute requires the caller to carry it as
     well, including for `alwaysinline` callees.
 
+    ARM32 clears NZCV, Q where implemented, and GE where implemented, together
+    with VPR on MVE targets. It preserves execution state, interrupt masks,
+    processor mode, and floating-point control/status registers. ARM mode,
+    Thumb-2, and baseline M-profile Thumb support ordinary returns; classic
+    Thumb-1, exception-resume exits, interrupt/CMSE entry functions, signed
+    returns, Windows, and nonstandard calling conventions are unsupported.
+    Ordinary tail-call optimization is disabled; mandatory tail calls are
+    diagnosed. Thumb-2 A/R targets require DSP instruction support. Flags
+    clearing alone does not erase stack storage.
+
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
     returning, so that data the frame held is not left readable to whatever

@@ -1849,7 +1849,8 @@ bool ARMFrameLowering::supportsZeroCallUsedRegs(
   StringRef Mode =
       MF.getFunction().getFnAttribute("zero-call-used-regs").getValueAsString();
   return ((Mode.empty() || Mode == "skip") &&
-          MF.getFunction().hasFnAttribute("zeroize-stack")) ||
+          (MF.getFunction().hasFnAttribute("zeroize-stack") ||
+           MF.getFunction().hasFnAttribute("zeroize-flags"))) ||
          Mode == "used-gpr-arg" || Mode == "used-gpr" ||
          Mode == "all-gpr-arg" || Mode == "all-gpr";
 }
@@ -1888,6 +1889,148 @@ static void computeLiveUnitsAt(LiveRegUnits &Used, const MachineBasicBlock &MBB,
       continue;
     Used.stepBackward(*I);
   }
+}
+
+bool ARMFrameLowering::supportsZeroizeFlags(const MachineFunction &MF) const {
+  const Function &F = MF.getFunction();
+  const ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
+  // M-profile MSR is available even on baseline Thumb. Classic Thumb-1 has
+  // no instruction that can write the complete application flags to zero.
+  if ((STI.isThumb1Only() && !STI.isMClass()) ||
+      (STI.isThumb() && !STI.isMClass() && !STI.hasDSP()) ||
+      STI.isTargetWindows() || F.hasFnAttribute("interrupt") ||
+      AFI->isCmseNSEntryFunction() || AFI->shouldSignReturnAddress(true))
+    return false;
+  switch (F.getCallingConv()) {
+  case CallingConv::C:
+  case CallingConv::Fast:
+  case CallingConv::ARM_AAPCS:
+  case CallingConv::ARM_AAPCS_VFP:
+    break;
+  default:
+    return false;
+  }
+  for (const MachineBasicBlock &MBB : MF)
+    for (const MachineInstr &MI : MBB) {
+      if (MI.isReturn()) {
+        if (!MBB.succ_empty())
+          return false;
+        switch (MI.getOpcode()) {
+        case ARM::BX_RET:
+        case ARM::tBX_RET:
+        case ARM::LDMIA_RET:
+        case ARM::t2LDMIA_RET:
+        case ARM::tPOP_RET:
+          break;
+        default:
+          return false;
+        }
+      }
+      // Keep exceptional exits outside the ordinary-return contract until
+      // their state-preservation and retention rules have been implemented.
+      if (MI.isEHScopeReturn())
+        return false;
+      if (MI.isCall())
+        for (const MachineOperand &MO : MI.operands())
+          if ((MO.isGlobal() &&
+               (MO.getGlobal()->getName() == "_Unwind_Resume" ||
+                MO.getGlobal()->getName() == "__cxa_end_cleanup")) ||
+              (MO.isSymbol() &&
+               (StringRef(MO.getSymbolName()) == "_Unwind_Resume" ||
+                StringRef(MO.getSymbolName()) == "__cxa_end_cleanup")))
+            return false;
+    }
+  return true;
+}
+
+bool ARMFrameLowering::prepareZeroizeFlags(MachineBasicBlock &MBB,
+                                           MachineBasicBlock::iterator InsertPt,
+                                           BitVector &ScratchRegs) const {
+  MachineFunction &MF = *MBB.getParent();
+  const ARMBaseRegisterInfo &TRI = *STI.getRegisterInfo();
+  LiveRegUnits Live(TRI);
+  computeLiveUnitsAt(Live, MBB, InsertPt);
+  auto Fail = [&](StringRef Message) {
+    MF.getFunction().getContext().diagnose(
+        DiagnosticInfoUnsupported{MF.getFunction(), Message});
+    return false;
+  };
+  if (!Live.available(ARM::CPSR) ||
+      (STI.hasMVEIntegerOps() && !Live.available(ARM::VPR)))
+    return Fail("flags clearing requires dead condition and predication state "
+                "at the exit");
+
+  // Use only caller-saved GPRs; baseline Thumb needs a low register to
+  // materialize zero. Planning precedes all clearing, including stack loops.
+  for (MCRegister Reg : {ARM::R0, ARM::R1, ARM::R2, ARM::R3, ARM::R12}) {
+    if (STI.isThumb1Only() && Reg == ARM::R12)
+      continue;
+    if (!MF.getRegInfo().isReserved(Reg) && Live.available(Reg)) {
+      ScratchRegs.set(Reg.id());
+      return true;
+    }
+  }
+  return Fail("flags clearing needs a free caller-saved register to hold zero");
+}
+
+void ARMFrameLowering::emitZeroizeFlags(MachineBasicBlock &MBB,
+                                        MachineBasicBlock::iterator InsertPt,
+                                        const BitVector &ScratchRegs,
+                                        BitVector &ClearedRegs) const {
+  const ARMBaseInstrInfo &TII = *STI.getInstrInfo();
+  assert(ScratchRegs.count() == 1 && "expected one planned zero source");
+  MCRegister Zero = ScratchRegs.find_first();
+  DebugLoc DL = InsertPt->getDebugLoc();
+  if (STI.hasMVEIntegerOps()) {
+    auto VPR = BuildMI(MBB, InsertPt, DL, TII.get(ARM::VMSR_VPR))
+                   .addReg(Zero)
+                   .add(predOps(ARMCC::AL))
+                   .addReg(ARM::SP, RegState::Implicit);
+    for (unsigned Reg : ClearedRegs.set_bits())
+      if (Reg != Zero && Reg != ARM::CPSR && Reg != ARM::VPR && Reg != ARM::SP)
+        VPR.addReg(Reg, RegState::Implicit);
+    ClearedRegs.set(ARM::VPR);
+  }
+
+  // On A/R-profile, writing CPSR_s would also write SSBS/PAN/DIT on newer
+  // cores, even for code compiled for v7. Zero plus zero has no byte carries:
+  // UADD8 clears GE without changing control state and leaves Zero zero.
+  bool ClearGE = !STI.isMClass() && STI.hasV6Ops();
+  if (ClearGE) {
+    auto GE = BuildMI(MBB, InsertPt, DL,
+                      TII.get(STI.isThumb() ? ARM::t2UADD8 : ARM::UADD8), Zero)
+                  .addReg(Zero)
+                  .addReg(Zero)
+                  .add(predOps(ARMCC::AL))
+                  .addReg(ARM::CPSR, RegState::ImplicitDefine)
+                  .addReg(ARM::SP, RegState::Implicit);
+    for (unsigned Reg : ClearedRegs.set_bits())
+      if (Reg != Zero && Reg != ARM::CPSR && Reg != ARM::SP)
+        GE.addReg(Reg, RegState::Implicit);
+  }
+  unsigned Opc = STI.isThumb() ? (STI.isMClass() ? ARM::t2MSR_M : ARM::t2MSR_AR)
+                               : ARM::MSR;
+  // M-profile provides separate APSR field masks. On A/R-profile write only
+  // NZCVQ, preserving GE and all execution/control state.
+  unsigned Mask = STI.isMClass() ? (STI.hasDSP() ? 0xc00 : 0x800) : 8;
+  auto MIB = BuildMI(MBB, InsertPt, DL, TII.get(Opc))
+                 .addImm(Mask)
+                 .addReg(Zero)
+                 .add(predOps(ARMCC::AL));
+  // MSR has unmodeled side effects, ordering it against memory operations.
+  // Explicit dependencies also keep it after every register clear and SP
+  // restoration when the post-RA scheduler rearranges otherwise independent
+  // instructions. The exit anchor retains its final CPSR definition.
+  assert(MIB->hasUnmodeledSideEffects() && "MSR must order memory effects");
+  MIB.addReg(ARM::SP, RegState::Implicit);
+  // CPSR is modeled as one register: retain the GE definition that this
+  // partial write preserves, rather than treating MSR as overwriting it.
+  if (ClearGE)
+    MIB.addReg(ARM::CPSR, RegState::Implicit);
+  for (unsigned Reg : ClearedRegs.set_bits())
+    if (Reg != Zero && Reg != ARM::CPSR && Reg != ARM::SP)
+      MIB.addReg(Reg, RegState::Implicit);
+  ClearedRegs.set(ARM::CPSR);
 }
 
 void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
@@ -1934,7 +2077,8 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
              ", which this target does not know how to clear");
     }
   }
-  const bool ClearVPR = RegsToZero.test(ARM::VPR) && STI.hasMVEIntegerOps();
+  const bool ClearVPR = RegsToZero.test(ARM::VPR) && STI.hasMVEIntegerOps() &&
+                        !MF.getFunction().hasFnAttribute("zeroize-flags");
 
   // PEI excludes subregisters and superregisters of live exit operands, but a
   // partially overlapping tuple can survive that exclusion. Expanding it above
