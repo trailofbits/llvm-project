@@ -2603,6 +2603,11 @@ static bool checkStrictFP(const Function &Caller, const Function &Callee) {
          Caller.getAttributes().hasFnAttr(Attribute::StrictFP);
 }
 
+static bool checkZeroizeFlags(const Function &Caller, const Function &Callee) {
+  return !Callee.hasFnAttribute("zeroize-flags") ||
+         Caller.hasFnAttribute("zeroize-flags");
+}
+
 /// The one "zeroize-stack" mode that clears less than the others. LangRef makes
 /// "used" the widest mode and gives any unrecognized value that same widest
 /// meaning, so every value other than this one clears the whole frame.
@@ -2828,6 +2833,11 @@ bool AttributeFuncs::areInlineCompatible(const Function &Caller,
 bool AttributeFuncs::isStrictFPInlineCompatible(const Function &Caller,
                                                 const Function &Callee) {
   return checkStrictFP(Caller, Callee);
+}
+
+bool AttributeFuncs::isZeroizeFlagsInlineCompatible(const Function &Caller,
+                                                    const Function &Callee) {
+  return checkZeroizeFlags(Caller, Callee);
 }
 
 bool AttributeFuncs::isZeroizeStackInlineCompatible(const Function &Caller,

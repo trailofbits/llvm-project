@@ -93,11 +93,11 @@ define i32 @no_stack_clear(i32 %x) "zero-call-used-regs"="used-gpr" {
 ; The sequence reports what was declared at each exit, so the declaration is
 ; visible without reading the registers back out of the emitted code.
 ; SEQ-LABEL: clearing sequence for function 'declared_reaches_the_clear':
-; SEQ-NEXT:    %bb.0 return: clear-stack=emitted clear-registers=emitted clear-flags=unimplemented scratch=R11
+; SEQ-NEXT:    %bb.0 return: clear-stack=emitted clear-registers=emitted clear-flags=not-requested scratch=R11
 ; SEQ-LABEL: clearing sequence for function 'no_register_request':
-; SEQ-NEXT:    %bb.0 return: clear-stack=emitted clear-registers=emitted clear-flags=unimplemented scratch=R11
+; SEQ-NEXT:    %bb.0 return: clear-stack=emitted clear-registers=emitted clear-flags=not-requested scratch=R11
 ; SEQ-LABEL: clearing sequence for function 'every_exit':
-; SEQ-NEXT:    %bb.1 return: clear-stack=emitted clear-registers=emitted clear-flags=unimplemented scratch=R11
-; SEQ-NEXT:    %bb.2 return: clear-stack=emitted clear-registers=emitted clear-flags=unimplemented scratch=R11
+; SEQ-NEXT:    %bb.1 return: clear-stack=emitted clear-registers=emitted clear-flags=not-requested scratch=R11
+; SEQ-NEXT:    %bb.2 return: clear-stack=emitted clear-registers=emitted clear-flags=not-requested scratch=R11
 ; SEQ-LABEL: clearing sequence for function 'no_stack_clear':
-; SEQ-NEXT:    %bb.0 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:    %bb.0 return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested

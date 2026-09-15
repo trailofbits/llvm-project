@@ -2651,6 +2651,20 @@ fn -> other_fn -> other_fn ; fn is norecurse
 `"no-stack-arg-probe"`
 :   This attribute disables ABI-required stack probes, if any.
 
+`"zeroize-flags"`
+:   This attribute requests zeroization of the target's non-allocatable
+    condition state at every supported function exit, after stack and register
+    clearing. It takes no value. It does not implicitly request clearing of
+    the function's stack or general-purpose registers. Temporary registers
+    required for the sequence are cleared even when `"zero-call-used-regs"`
+    is absent or selects `"skip"`.
+
+    Unsupported targets, exit protocols, naked functions, and exits where
+    clearing would destroy live state are compilation errors. Targets must
+    document the state they clear and their supported exit protocols.
+    Inlining a callee with this attribute requires the caller to carry it as
+    well, including for `alwaysinline` callees.
+
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
     returning, so that data the frame held is not left readable to whatever

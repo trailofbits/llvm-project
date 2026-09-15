@@ -149,16 +149,13 @@ namespace {
 /// One step of the clearing sequence. The order is not this enumeration's
 /// order but ClearingSequence's; see the comment above.
 enum class ClearingStep {
-  /// Clear the stack frame, for "zeroize-stack". No target implements this
-  /// yet.
+  /// Clear the stack frame, for "zeroize-stack".
   ClearStack,
 
   /// Clear the call-used registers, for "zero-call-used-regs".
   ClearRegisters,
 
-  /// Clear the condition flags. Nothing implements this yet and nothing can
-  /// ask for it: the flag register classes are not allocatable, so the
-  /// register clear cannot reach them and a mechanism of its own is needed.
+  /// Clear non-allocatable condition state, for "zeroize-flags".
   ClearFlags,
 };
 
@@ -179,10 +176,6 @@ enum class ClearingDisposition {
   /// The function asked for it and the target cannot do it. The request has
   /// been reported; nothing is emitted.
   Unsupported,
-
-  /// Nothing in the tree emits this step yet. The step holds its place in the
-  /// order so that the implementation lands in the right one.
-  Unimplemented,
 
   /// The step emits at every in-scope exit.
   Emit,
@@ -244,8 +237,6 @@ StringRef getClearingDispositionName(ClearingDisposition D) {
     return "not-requested";
   case ClearingDisposition::Unsupported:
     return "unsupported";
-  case ClearingDisposition::Unimplemented:
-    return "unimplemented";
   case ClearingDisposition::Emit:
     return "emitted";
   }
@@ -302,7 +293,9 @@ class PEIImpl {
   void emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
                         MachineBasicBlock &MBB,
                         MachineBasicBlock::iterator InsertPt,
-                        BitVector &ScratchRegs, BitVector &ClearedRegs);
+                        BitVector &ScratchRegs,
+                        const BitVector &FlagsScratchRegs,
+                        BitVector &ClearedRegs);
   void diagnoseIgnoredZeroizeRequestsOnNakedFunction(MachineFunction &MF);
 
 public:
@@ -1837,13 +1830,19 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
     // What the sequence cleared here, collected as it runs and used once it
     // has finished; see the comment on keeping the clears above.
     BitVector ClearedRegs(TRI.getNumRegs());
+    BitVector FlagsScratchRegs(TRI.getNumRegs());
+    if (Plan.Flags == ClearingDisposition::Emit) {
+      if (!TFI.prepareZeroizeFlags(MBB, InsertPt, FlagsScratchRegs))
+        continue;
+      ScratchRegs |= FlagsScratchRegs;
+    }
 
     for (ClearingStep Step : ClearingSequence) {
       ClearingDisposition D = Plan.dispositionOf(Step);
       if (D == ClearingDisposition::Emit)
         emitClearingStep(Step, Plan, *ExitMI->getParent(),
                          getClearingInsertPoint(*ExitMI->getParent(), *ExitMI),
-                         ScratchRegs, ClearedRegs);
+                         ScratchRegs, FlagsScratchRegs, ClearedRegs);
       if (PrintClearingSequence)
         OS << " " << getClearingStepName(Step) << "="
            << getClearingDispositionName(D);
@@ -1894,7 +1893,9 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
 void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
                                MachineBasicBlock &MBB,
                                MachineBasicBlock::iterator InsertPt,
-                               BitVector &ScratchRegs, BitVector &ClearedRegs) {
+                               BitVector &ScratchRegs,
+                               const BitVector &FlagsScratchRegs,
+                               BitVector &ClearedRegs) {
   MachineFunction &MF = *MBB.getParent();
   const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
@@ -1958,9 +1959,7 @@ void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
   }
 
   case ClearingStep::ClearFlags:
-    // Nothing emits here yet. It is last in the order because every step in
-    // front of it writes the flags, so a flag clear anywhere else is undone by
-    // what follows it.
+    TFI.emitZeroizeFlags(MBB, InsertPt, FlagsScratchRegs, ClearedRegs);
     break;
   }
 }
@@ -1973,6 +1972,17 @@ void PEIImpl::planClearingSequence(MachineFunction &MF,
                                    ExitClearingPlan &Plan) {
   Plan.Stack = planClearStack(MF);
   Plan.Registers = planClearRegisters(MF, Plan.CandidateRegsToZero);
+  if (MF.getFunction().hasFnAttribute("zeroize-flags")) {
+    const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
+    if (TFI.supportsZeroizeFlags(MF))
+      Plan.Flags = ClearingDisposition::Emit;
+    else {
+      MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+          MF.getFunction(), "\"zeroize-flags\" is not supported by this target "
+                            "or exit protocol"});
+      Plan.Flags = ClearingDisposition::Unsupported;
+    }
+  }
 
   // A step that runs in front of the register clear leaves the registers it
   // worked through holding what it destroyed, and the register clear is what
@@ -1982,16 +1992,13 @@ void PEIImpl::planClearingSequence(MachineFunction &MF,
   // not its registers, they are the sequence's. That includes a function that
   // asked for "skip", which declines a clear of what the function itself left
   // in registers and says nothing about what clearing its frame put there. A
-  // function with no step in front of the register clear is untouched by this.
-  if (Plan.Stack == ClearingDisposition::Emit &&
+  // function without scratch requirements is untouched by this. The flags
+  // step also needs its planned zero sources established by register clearing.
+  if ((Plan.Stack == ClearingDisposition::Emit ||
+       Plan.Flags == ClearingDisposition::Emit) &&
       Plan.Registers == ClearingDisposition::NotRequested)
     Plan.Registers =
         planClearRegistersForScratch(MF, Plan.CandidateRegsToZero);
-
-  // Nothing asks for the flags to be cleared and nothing clears them. The step
-  // is planned all the same, so that the sequence a function runs is described
-  // by the plan in full rather than in the parts that have an implementation.
-  Plan.Flags = ClearingDisposition::Unimplemented;
 }
 
 /// planClearStack - Decide what the ClearStack step does in \p MF, reporting a
@@ -2035,14 +2042,18 @@ PEIImpl::planClearRegistersForScratch(MachineFunction &MF,
   const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
 
-  // A target that cannot clear registers cannot finish clearing the frame
+  // A target that cannot clear registers cannot finish a scratch-using clear
   // either: the sequence would end with the frame's contents in the registers
   // it read them through, which is the disclosure the request was made to
   // prevent. Report it rather than emitting the half that works.
   if (!TFI.supportsZeroCallUsedRegs(MF)) {
     F.getContext().diagnose(DiagnosticInfoUnsupported{
-        F, "clearing the stack needs the registers it uses to be cleared "
-           "afterwards, which is not supported by this target"});
+        F,
+        F.hasFnAttribute("zeroize-flags")
+            ? "flags clearing needs register clearing, which is not supported "
+              "by this target"
+            : "clearing the stack needs the registers it uses to be cleared "
+              "afterwards, which is not supported by this target"});
     return ClearingDisposition::Unsupported;
   }
 
@@ -2181,6 +2192,10 @@ void PEIImpl::diagnoseIgnoredZeroizeRequestsOnNakedFunction(
 
   if (!F.hasFnAttribute(Attribute::Naked))
     return;
+
+  if (F.hasFnAttribute("zeroize-flags"))
+    F.getContext().diagnose(DiagnosticInfoUnsupported{
+        F, "\"zeroize-flags\" cannot be honored on a \"naked\" function"});
 
   if (F.hasFnAttribute("zeroize-stack"))
     F.getContext().diagnose(DiagnosticInfoUnsupported{

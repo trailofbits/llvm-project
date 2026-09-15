@@ -13,7 +13,7 @@ declare i32 @__CxxFrameHandler3(...)
 
 ; Only the return is in scope. The catch funclet's catchret is not listed.
 ; SEQ-LABEL: clearing sequence for function 'catch_and_return':
-; SEQ-NEXT:  %bb.{{[0-9]+}} return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:  %bb.{{[0-9]+}} return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; SEQ-NEXT:  end clearing sequence for function 'catch_and_return'
 
 ; CHECK-LABEL: catch_and_return:

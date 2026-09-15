@@ -7,8 +7,8 @@ declare i32 @callee(i32, i32)
 
 ; CHECK-NOT:  error:
 ; CHECK-LABEL: clearing sequence for function 'two_exits':
-; CHECK-NEXT:  %bb.1 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
-; CHECK-NEXT:  %bb.2 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; CHECK-NEXT:  %bb.1 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
+; CHECK-NEXT:  %bb.2 return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; CHECK-NEXT:  end clearing sequence for function 'two_exits'
 define i32 @two_exits(i1 %c, i32 %a, i32 %b) "zero-call-used-regs"="used-gpr" {
 entry:
