@@ -1,0 +1,43 @@
+# RUN: split-file %s %t
+# RUN: not llc -mtriple=armv7-none-eabi -run-pass=prolog-epilog %t/scratch.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=SCRATCH
+# RUN: not llc -mtriple=armv7-none-eabi -run-pass=prolog-epilog %t/flags.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=FLAGS
+# RUN: not llc -mtriple=thumbv8.1m.main-none-eabi -mattr=+mve -run-pass=prolog-epilog %t/vpr.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=FLAGS
+# SCRATCH: error: {{.*}}flags clearing needs a free caller-saved register to hold zero
+# FLAGS: error: {{.*}}flags clearing requires dead condition and predication state at the exit
+
+#--- scratch.mir
+--- |
+  define void @scratch() "zeroize-flags" { ret void }
+...
+---
+name: scratch
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0, $r1, $r2, $r3, $r12
+    BX_RET 14, $noreg, implicit $r0, implicit $r1, implicit $r2, implicit $r3, implicit $r12
+...
+#--- flags.mir
+--- |
+  define void @flags() "zeroize-flags" { ret void }
+...
+---
+name: flags
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $cpsr
+    BX_RET 0, $cpsr
+...
+#--- vpr.mir
+--- |
+  define void @vpr() "zeroize-flags" { ret void }
+...
+---
+name: vpr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $vpr
+    tBX_RET 14, $noreg, implicit $vpr
+...
