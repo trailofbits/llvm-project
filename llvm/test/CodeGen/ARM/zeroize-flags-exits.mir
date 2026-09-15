@@ -1,0 +1,48 @@
+# RUN: llc -mtriple=armv7-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %s -o %t.sched
+# RUN: llc -mtriple=armv7-none-eabi -x mir -run-pass=postmisched,dead-mi-elimination -verify-machineinstrs %t.sched -o - | FileCheck %s
+# RUN: llc -mtriple=armv7-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %s -o %t
+# RUN: FileCheck %s < %t
+# RUN: llc -mtriple=armv7-none-eabi -x mir -run-pass=dead-mi-elimination -verify-machineinstrs %t -o - | FileCheck %s
+
+# Both original returns get their own clearing loop and scratch cleanup. The
+# loops must not destroy the distinct live-out values, even after machine DCE.
+# CHECK-LABEL: name: different_liveouts
+# CHECK: STRi12 $r2, $r1, 0, {{.*}}(volatile store (s32))
+# CHECK: CMPrr $r1, $r12,
+# CHECK: $sp = MOVr $r1,
+# CHECK-DAG: $r1 = MOVi 0,
+# CHECK-DAG: $r2 = MOVi 0,
+# CHECK-DAG: $r12 = MOVi 0,
+# CHECK: $r1 = UADD8 $r1, $r1,
+# CHECK: MSR 8, $r1, 14{{.*}}implicit-def $cpsr, implicit $sp{{.*}}
+# CHECK: BX_RET {{.*}}implicit $r0, implicit $cpsr{{.*}}implicit $r1{{.*}}implicit $r2{{.*}}implicit $r12
+# CHECK: STRi12 $r1, $r0, 0, {{.*}}(volatile store (s32))
+# CHECK: CMPrr $r0, $r12,
+# CHECK: $sp = MOVr $r0,
+# CHECK-DAG: $r0 = MOVi 0,
+# CHECK-DAG: $r1 = MOVi 0,
+# CHECK-DAG: $r12 = MOVi 0,
+# CHECK: $r0 = UADD8 $r0, $r0,
+# CHECK: MSR 8, $r0, 14{{.*}}implicit-def $cpsr, implicit $sp{{.*}}
+# CHECK: BX_RET {{.*}}implicit $r2, implicit $cpsr{{.*}}implicit $r0{{.*}}implicit $r1{{.*}}implicit $r12
+--- |
+  define void @different_liveouts() "zeroize-stack"="used" "zeroize-flags" { ret void }
+...
+---
+name: different_liveouts
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 128, alignment: 4 }
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r0, $r2, $r3
+    CMPri $r3, 0, 14, $noreg, implicit-def $cpsr
+    Bcc %bb.2, 0, killed $cpsr
+  bb.1:
+    liveins: $r0
+    BX_RET 14, $noreg, implicit $r0
+  bb.2:
+    liveins: $r2
+    BX_RET 14, $noreg, implicit $r2
+...

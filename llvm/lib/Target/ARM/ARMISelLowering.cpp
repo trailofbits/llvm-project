@@ -2772,7 +2772,9 @@ bool ARMTargetLowering::IsEligibleForTailCallOptimization(
     SmallVectorImpl<CCValAssign> &ArgLocs, const bool isIndirect) const {
   // The protected epilogue must erase its owned frame before returning.
   if (CLI.DAG.getMachineFunction().getFunction().hasFnAttribute(
-          "zeroize-stack"))
+          "zeroize-stack") ||
+      CLI.DAG.getMachineFunction().getFunction().hasFnAttribute(
+          "zeroize-flags"))
     return false;
 
   CallingConv::ID CalleeCC = CLI.CallConv;
