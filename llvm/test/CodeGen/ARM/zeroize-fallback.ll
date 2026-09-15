@@ -1,5 +1,5 @@
 ; Two of the fallbacks are decided before any target is asked, so they show on
-; a target that cannot clear anything. trailofbits/vspells-ct-internal-notes#24.
+; a target that cannot clear anything.
 
 ; RUN: split-file %s %t
 ; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -verify-machineinstrs -pei-print-clearing-sequence %t/exits.ll -o /dev/null 2>&1 | FileCheck --check-prefix=SEQ %s

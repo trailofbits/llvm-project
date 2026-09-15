@@ -40,6 +40,7 @@ add_llvm_unittest(CodeGenTests
   MIR2VecTest.cpp
   RegAllocBasicTest.cpp
   RegAllocScoreTest.cpp
+  RegisterClearingTest.cpp
   RegisterTest.cpp
   PassManagerTest.cpp
   RematerializerTest.cpp

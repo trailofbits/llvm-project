@@ -1,6 +1,6 @@
 ; A "zero-call-used-regs" value that names no known mode means the widest one,
 ; as LangRef fixes for an unrecognized "zeroize-stack" mode. The mode switch
-; previously had no default. trailofbits/vspells-ct-internal-notes#24.
+; previously had no default.
 
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu -verify-machineinstrs %s -o - | FileCheck %s
 

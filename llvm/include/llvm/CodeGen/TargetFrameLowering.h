@@ -219,6 +219,17 @@ public:
     return false;
   }
 
+  /// Whether emitZeroCallUsedRegs can clear Reg as a scratch register. A true
+  /// answer guarantees that the entire register is cleared, without widening
+  /// the write into another register (apart from condition flags). PEI checks
+  /// separately that Reg is allocatable and not needed at the exit.
+  /// Targets must opt in explicitly; supporting a register-clear mode does not
+  /// guarantee that every physical register can be cleared.
+  virtual bool isZeroCallUsedRegsScratchReg(const MachineFunction &MF,
+                                            MCRegister Reg) const {
+    return false;
+  }
+
   /// emitZeroCallUsedRegs - Zeros out call used registers. Only called on
   /// targets whose supportsZeroCallUsedRegs returns true.
   ///
