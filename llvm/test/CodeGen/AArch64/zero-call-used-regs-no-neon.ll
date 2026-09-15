@@ -12,17 +12,41 @@
 define i32 @all(i32 %a) #0 {
 ; NONEON-LABEL: all:
 ; NONEON:       // %bb.0:
+; NONEON-NEXT:    fmov d0, xzr
+; NONEON-NEXT:    fmov d1, xzr
 ; NONEON-NEXT:    add w0, w0, #1
+; NONEON-NEXT:    fmov d2, xzr
+; NONEON-NEXT:    fmov d3, xzr
 ; NONEON-NEXT:    mov x1, #0 // =0x0
+; NONEON-NEXT:    fmov d4, xzr
+; NONEON-NEXT:    fmov d5, xzr
 ; NONEON-NEXT:    mov x2, #0 // =0x0
+; NONEON-NEXT:    fmov d6, xzr
+; NONEON-NEXT:    fmov d7, xzr
 ; NONEON-NEXT:    mov x3, #0 // =0x0
+; NONEON-NEXT:    fmov d16, xzr
+; NONEON-NEXT:    fmov d17, xzr
 ; NONEON-NEXT:    mov x4, #0 // =0x0
+; NONEON-NEXT:    fmov d18, xzr
+; NONEON-NEXT:    fmov d19, xzr
 ; NONEON-NEXT:    mov x5, #0 // =0x0
+; NONEON-NEXT:    fmov d20, xzr
+; NONEON-NEXT:    fmov d21, xzr
 ; NONEON-NEXT:    mov x6, #0 // =0x0
+; NONEON-NEXT:    fmov d22, xzr
+; NONEON-NEXT:    fmov d23, xzr
 ; NONEON-NEXT:    mov x7, #0 // =0x0
+; NONEON-NEXT:    fmov d24, xzr
+; NONEON-NEXT:    fmov d25, xzr
 ; NONEON-NEXT:    mov x8, #0 // =0x0
+; NONEON-NEXT:    fmov d26, xzr
+; NONEON-NEXT:    fmov d27, xzr
 ; NONEON-NEXT:    mov x9, #0 // =0x0
+; NONEON-NEXT:    fmov d28, xzr
+; NONEON-NEXT:    fmov d29, xzr
 ; NONEON-NEXT:    mov x10, #0 // =0x0
+; NONEON-NEXT:    fmov d30, xzr
+; NONEON-NEXT:    fmov d31, xzr
 ; NONEON-NEXT:    mov x11, #0 // =0x0
 ; NONEON-NEXT:    mov x12, #0 // =0x0
 ; NONEON-NEXT:    mov x13, #0 // =0x0
@@ -31,30 +55,6 @@ define i32 @all(i32 %a) #0 {
 ; NONEON-NEXT:    mov x16, #0 // =0x0
 ; NONEON-NEXT:    mov x17, #0 // =0x0
 ; NONEON-NEXT:    mov x18, #0 // =0x0
-; NONEON-NEXT:    fmov d0, xzr
-; NONEON-NEXT:    fmov d1, xzr
-; NONEON-NEXT:    fmov d2, xzr
-; NONEON-NEXT:    fmov d3, xzr
-; NONEON-NEXT:    fmov d4, xzr
-; NONEON-NEXT:    fmov d5, xzr
-; NONEON-NEXT:    fmov d6, xzr
-; NONEON-NEXT:    fmov d7, xzr
-; NONEON-NEXT:    fmov d16, xzr
-; NONEON-NEXT:    fmov d17, xzr
-; NONEON-NEXT:    fmov d18, xzr
-; NONEON-NEXT:    fmov d19, xzr
-; NONEON-NEXT:    fmov d20, xzr
-; NONEON-NEXT:    fmov d21, xzr
-; NONEON-NEXT:    fmov d22, xzr
-; NONEON-NEXT:    fmov d23, xzr
-; NONEON-NEXT:    fmov d24, xzr
-; NONEON-NEXT:    fmov d25, xzr
-; NONEON-NEXT:    fmov d26, xzr
-; NONEON-NEXT:    fmov d27, xzr
-; NONEON-NEXT:    fmov d28, xzr
-; NONEON-NEXT:    fmov d29, xzr
-; NONEON-NEXT:    fmov d30, xzr
-; NONEON-NEXT:    fmov d31, xzr
 ; NONEON-NEXT:    ret
 ;
 ; NOFP-LABEL: all:
