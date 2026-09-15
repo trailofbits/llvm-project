@@ -1,0 +1,35 @@
+# RUN: split-file %s %t
+# RUN: not llc -mtriple=armv7-none-eabi -run-pass=prolog-epilog %t/scratch.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=SCRATCH
+# RUN: not llc -mtriple=armv7-none-eabi -run-pass=prolog-epilog %t/flags.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=FLAGS
+# SCRATCH: error: {{.*}}stack clearing needs free low registers at this exit
+# FLAGS: error: {{.*}}stack clearing requires dead condition flags at the exit
+
+#--- scratch.mir
+--- |
+  define void @scratch() "zeroize-stack"="used" { ret void }
+...
+---
+name: scratch
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 4, alignment: 4 }
+body: |
+  bb.0:
+    liveins: $r0, $r1, $r2, $r3
+    BX_RET 14, $noreg, implicit $r0, implicit $r1, implicit $r2, implicit $r3
+...
+
+#--- flags.mir
+--- |
+  define void @flags() "zeroize-stack"="used" { ret void }
+...
+---
+name: flags
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 4, alignment: 4 }
+body: |
+  bb.0:
+    liveins: $cpsr
+    BX_RET 0, $cpsr
+...
