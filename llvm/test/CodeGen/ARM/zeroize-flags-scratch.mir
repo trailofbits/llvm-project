@@ -1,0 +1,33 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=armv7-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %t/arm.mir -o - | FileCheck %s
+# RUN: not llc -mtriple=thumbv6m-none-eabi -run-pass=prolog-epilog %t/thumb.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=THUMB
+# CHECK: $r12 = MOVi 0,
+# CHECK: $r12 = UADD8 $r12, $r12,
+# CHECK: MSR 8, $r12,
+# CHECK: BX_RET {{.*}}implicit $r0, implicit $r1, implicit $r2, implicit $r3
+# THUMB: error: {{.*}}flags clearing needs a free caller-saved register to hold zero
+
+#--- arm.mir
+--- |
+  define void @four_live() "zeroize-flags" { ret void }
+...
+---
+name: four_live
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0, $r1, $r2, $r3
+    BX_RET 14, $noreg, implicit $r0, implicit $r1, implicit $r2, implicit $r3
+...
+#--- thumb.mir
+--- |
+  define void @four_live() "zeroize-flags" { ret void }
+...
+---
+name: four_live
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0, $r1, $r2, $r3
+    tBX_RET 14, $noreg, implicit $r0, implicit $r1, implicit $r2, implicit $r3
+...
