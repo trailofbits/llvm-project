@@ -843,6 +843,14 @@ static MCRegister getRegisterOrZero(MCRegister Reg, bool HasSVE) {
   }
 }
 
+bool AArch64FrameLowering::isZeroCallUsedRegsScratchReg(
+    const MachineFunction &MF, MCRegister Reg) const {
+  // The emitter skips X19-X30 even for calling conventions that do not
+  // preserve them. Accept only full-width GPRs that it actually clears.
+  return AArch64::GPR64RegClass.contains(Reg) &&
+         getRegisterOrZero(Reg, /*HasSVE=*/false) == Reg;
+}
+
 void AArch64FrameLowering::emitZeroCallUsedRegs(
     BitVector RegsToZero, MachineBasicBlock &MBB,
     MachineBasicBlock::iterator MBBI, RegScavenger *) const {

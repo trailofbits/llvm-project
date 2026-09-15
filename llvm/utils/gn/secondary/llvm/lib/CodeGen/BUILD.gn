@@ -204,6 +204,7 @@ static_library("CodeGen") {
     "RegisterBank.cpp",
     "RegisterBankInfo.cpp",
     "RegisterClassInfo.cpp",
+    "RegisterClearing.cpp",
     "RegisterCoalescer.cpp",
     "RegisterPressure.cpp",
     "RegisterScavenging.cpp",

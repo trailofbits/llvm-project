@@ -1,7 +1,6 @@
 ; A block with no successors that ends in an instruction the exit classifier
 ; cannot account for is in scope: it may leave the function, and a dead
 ; sequence costs less than an uncleared exit.
-; trailofbits/vspells-ct-internal-notes#24.
 
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu -verify-machineinstrs -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck --check-prefix=SEQ %s
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu -verify-machineinstrs %s -o - | FileCheck %s

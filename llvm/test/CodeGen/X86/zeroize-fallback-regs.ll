@@ -1,7 +1,6 @@
 ; The "used" modes clear only registers the function touched. Registers an
 ; instruction touches implicitly were not counted, so an asm clobber or a
 ; physical-register output kept its contents past the return.
-; trailofbits/vspells-ct-internal-notes#24.
 
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu %s -o - | FileCheck %s
 

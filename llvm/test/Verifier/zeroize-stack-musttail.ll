@@ -1,14 +1,5 @@
-; An ordinary tail call in a protected function is an optimization, and it is
-; suppressed. musttail is not an optimization: the caller is required to be
-; replaced by the callee, and no pass is allowed to decide otherwise. A function
-; cannot both be replaced at the call and clear its frame after it, so the two
-; together describe a function that cannot be generated, and the combination is
-; rejected here rather than being honored in one direction without saying so.
-;
-; The check sits next to the other reasons a musttail call cannot be honored,
-; such as inline asm, because it is the same kind of conflict. The frontend
-; diagnostic for the same conflict in source is separate:
-; trailofbits/vspells-ct-internal-notes#22.
+; A musttail call must replace the caller, leaving no point to clear its frame.
+; Reject it in protected functions; ordinary tail-call optimization is suppressed.
 
 ; RUN: not llvm-as < %s -o /dev/null 2>&1 | FileCheck %s
 
