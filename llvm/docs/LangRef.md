@@ -2697,6 +2697,20 @@ fn -> other_fn -> other_fn ; fn is norecurse
     A transform may not leave a function carrying this attribute with a frame
     that is not cleared on every return from it.
 
+    ARM32 currently implements this request for ordinary static frames in ARM,
+    Thumb-1, and Thumb-2 mode. Both attribute modes clear the entire owned
+    allocation, including spill slots, saved-register slots, and padding. Saved
+    registers are restored before their slots are erased, and stack storage is
+    released only after erasure. Temporary registers used for clearing are
+    cleared even when `"zero-call-used-regs"` is absent or selects `"skip"`.
+
+    The ARM32 implementation diagnoses unsupported dynamic or realigned frames,
+    variadic functions, nonstandard calling conventions and protected entry/return
+    protocols, and unwind-resume exits that require the saved frame. It also
+    diagnoses insufficient scratch registers or live condition flags at a clearing
+    exit. Ordinary tail-call optimization is disabled for these functions.
+    Explicit condition-flag zeroization is not implemented by this stack clear.
+
     Inlining is constrained accordingly. A function that carries this attribute
     is inlined only into a caller that carries it as well, and only where the
     caller's mode clears at least as much of the frame as the callee's mode does.

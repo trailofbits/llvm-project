@@ -90,6 +90,11 @@ public:
   const SpillSlot *
   getCalleeSavedSpillSlots(unsigned &NumEntries) const override;
 
+  bool supportsZeroizeStack(const MachineFunction &MF) const override;
+  void emitZeroizeStack(MachineBasicBlock &MBB,
+                        MachineBasicBlock::iterator InsertPt,
+                        BitVector &ScratchRegs) const override;
+
   bool supportsZeroCallUsedRegs(const MachineFunction &MF) const override;
 
   bool zeroCallUsedRegsPreservesUnrequestedSiblings() const override {
