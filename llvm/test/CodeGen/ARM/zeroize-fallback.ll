@@ -19,7 +19,7 @@ declare void @llvm.trap()
 ; A supervisor call written as inline asm ends the block; whether control
 ; comes back is not something the compiler can decide.
 ; SEQ-LABEL: clearing sequence for function 'opaque_asm':
-; SEQ-NEXT:  %bb.0 unknown: clear-stack=not-requested clear-registers=not-requested clear-flags=unimplemented
+; SEQ-NEXT:  %bb.0 unknown: clear-stack=not-requested clear-registers=not-requested clear-flags=not-requested
 ; SEQ-NEXT:  end clearing sequence for function 'opaque_asm'
 define void @opaque_asm(i32 %a, i32 %b) {
   %s = add i32 %a, %b
