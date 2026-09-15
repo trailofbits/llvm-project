@@ -244,12 +244,17 @@ public:
   /// Returns true if this target can clear the stack frame of a function
   /// carrying the "zeroize-stack" attribute. Defaults to false.
   ///
-  /// No emission hook is paired with this query yet, so nothing can honor a
-  /// true answer: PEI reads it only to warn, and every target warns. Overriding
-  /// it before the emission exists silences the warning and clears nothing.
   virtual bool supportsZeroizeStack(const MachineFunction &MF) const {
     return false;
   }
+
+  /// Clear the owned static frame before releasing its storage. The target
+  /// must restore saved values before erasing their slots. It may split MBB,
+  /// but must retain the exit instruction. Declare every dead scratch register
+  /// for the subsequent register clear, including addressing temporaries.
+  virtual void emitZeroizeStack(MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator InsertPt,
+                                BitVector &ScratchRegs) const {}
 
   /// getClearedRegExitAnchor - The register to name on the instruction control
   /// leaves through, to record that the clearing sequence wrote \p Reg there
