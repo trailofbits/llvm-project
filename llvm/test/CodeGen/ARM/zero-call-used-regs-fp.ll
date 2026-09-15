@@ -4,14 +4,14 @@
 ; register when there is neither, and nothing at all when the registers are
 ; unavailable in the current instruction set.
 
-; RUN: llc -mtriple=armv7-unknown-linux-gnueabihf %s -o %t.neon.s
+; RUN: llc -verify-machineinstrs -mtriple=armv7-unknown-linux-gnueabihf %s -o %t.neon.s
 ; RUN: FileCheck %s --check-prefix=NEON < %t.neon.s
 ; RUN: FileCheck %s --check-prefix=NEON-GAP < %t.neon.s
-; RUN: llc -mtriple=thumbv8m.main -mattr=+fp-armv8d16sp %s -o - | FileCheck %s --check-prefix=VFP
-; RUN: llc -mtriple=thumbv8.1m.main -mattr=+mve %s -o - | FileCheck %s --check-prefix=MVE
-; RUN: llc -mtriple=thumbv7m-none-eabi %s -o - | FileCheck %s --check-prefix=NOFP
-; RUN: llc -mtriple=armv6-none-eabi -mattr=+vfp2 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=VFP
-; RUN: llc -mtriple=thumbv6t2-none-eabi -mattr=+vfp2 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=VFP
+; RUN: llc -verify-machineinstrs -mtriple=thumbv8m.main -mattr=+fp-armv8d16sp %s -o - | FileCheck %s --check-prefix=VFP
+; RUN: llc -verify-machineinstrs -mtriple=thumbv8.1m.main -mattr=+mve %s -o - | FileCheck %s --check-prefix=MVE
+; RUN: llc -verify-machineinstrs -mtriple=thumbv7m-none-eabi %s -o - | FileCheck %s --check-prefix=NOFP
+; RUN: llc -verify-machineinstrs -mtriple=armv6-none-eabi -mattr=+vfp2 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=VFP
+; RUN: llc -verify-machineinstrs -mtriple=thumbv6t2-none-eabi -mattr=+vfp2 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=VFP
 
 ; D8-D15 are callee-saved, so the vector registers built out of them are the
 ; caller's and are not cleared: on NEON that leaves q0-q3 and q8-q15, and the
@@ -24,21 +24,24 @@
 ; NEON-GAP:       bx lr
 ;
 ; NEON-LABEL: all_regs:
-; NEON-DAG:     mov r0, #0
-; NEON-DAG:     mov r12, #0
-; NEON-DAG:     vmov.i32 q0, #0x0
-; NEON-DAG:     vmov.i32 q1, #0x0
-; NEON-DAG:     vmov.i32 q2, #0x0
-; NEON-DAG:     vmov.i32 q3, #0x0
-; NEON-DAG:     vmov.i32 q8, #0x0
-; NEON-DAG:     vmov.i32 q9, #0x0
-; NEON-DAG:     vmov.i32 q10, #0x0
-; NEON-DAG:     vmov.i32 q11, #0x0
-; NEON-DAG:     vmov.i32 q12, #0x0
-; NEON-DAG:     vmov.i32 q13, #0x0
-; NEON-DAG:     vmov.i32 q14, #0x0
-; NEON-DAG:     vmov.i32 q15, #0x0
-; NEON:         bx lr
+; NEON-DAG: mov r0, #0
+; NEON-DAG: mov r1, #0
+; NEON-DAG: mov r2, #0
+; NEON-DAG: mov r3, #0
+; NEON-DAG: mov r12, #0
+; NEON-DAG: vmov.i32 q0, #0x0
+; NEON-DAG: vmov.i32 q1, #0x0
+; NEON-DAG: vmov.i32 q2, #0x0
+; NEON-DAG: vmov.i32 q3, #0x0
+; NEON-DAG: vmov.i32 q8, #0x0
+; NEON-DAG: vmov.i32 q9, #0x0
+; NEON-DAG: vmov.i32 q10, #0x0
+; NEON-DAG: vmov.i32 q11, #0x0
+; NEON-DAG: vmov.i32 q12, #0x0
+; NEON-DAG: vmov.i32 q13, #0x0
+; NEON-DAG: vmov.i32 q14, #0x0
+; NEON-DAG: vmov.i32 q15, #0x0
+; NEON: bx lr
 ;
 ; With floating-point registers but no vector immediate, each register is
 ; written from one that has been zeroed already. A d register takes two halves
@@ -67,11 +70,6 @@
 ; NOFP-NEXT:    bx lr
 ; NOFP-NOT:     vmov
 ;
-; Thumb-1 has no encoding that writes a VFP register, so the VFP registers are
-; deliberately left alone even when the CPU has them, and even though an ARM or
-; Thumb-2 callee may have written them. This is documented in the release
-; notes. Only the general-purpose registers are cleared; ARM and Thumb-2 still
-; clear VFP.
 define void @all_regs() "zero-call-used-regs"="all" {
   ret void
 }

@@ -304,7 +304,7 @@ STATISTIC(NumBytesStackSpace,
           "Number of bytes used for stack in all functions");
 
 void PEILegacy::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.setPreservesCFG();
+  // A stack-clearing target may insert loop blocks.
   AU.addRequired<MachineOptimizationRemarkEmitterPass>();
   MachineFunctionPass::getAnalysisUsage(AU);
 }
@@ -515,7 +515,7 @@ PrologEpilogInserterPass::run(MachineFunction &MF,
   if (!PEIImpl(&ORE).run(MF))
     return PreservedAnalyses::all();
 
-  return getMachineFunctionPassPreservedAnalyses().preserveSet<CFGAnalyses>();
+  return getMachineFunctionPassPreservedAnalyses();
 }
 
 /// Calculate the MaxCallFrameSize variable for the function's frame
@@ -1562,13 +1562,15 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
   if (PrintClearingSequence)
     OS << "clearing sequence for function '" << MF.getName() << "':\n";
 
-  for (MachineBasicBlock &MBB : MF) {
-    // Where the sequence runs is decided in one place, for every step, so
-    // that a step cannot go looking for sites of its own.
-    MachineInstr *ExitMI = getEnforceableExit(MBB);
-    if (!ExitMI)
-      continue;
+  // Stack emitters may split blocks to form bounded clearing loops. Snapshot
+  // exits so newly created blocks are neither skipped nor processed twice.
+  SmallVector<MachineInstr *, 8> Exits;
+  for (MachineBasicBlock &MBB : MF)
+    if (MachineInstr *Exit = getEnforceableExit(MBB))
+      Exits.push_back(Exit);
 
+  for (MachineInstr *ExitMI : Exits) {
+    MachineBasicBlock &MBB = *ExitMI->getParent();
     // An exit that is in scope is one the sequence can be placed at, so it has
     // a position by construction. Emitting at the end of the block instead
     // would put the sequence after the instruction control leaves through.
@@ -1596,7 +1598,8 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
     for (ClearingStep Step : ClearingSequence) {
       ClearingDisposition D = Plan.dispositionOf(Step);
       if (D == ClearingDisposition::Emit)
-        emitClearingStep(Step, Plan, MBB, InsertPt, *ExitMI, ScratchRegs);
+        emitClearingStep(Step, Plan, *ExitMI->getParent(), InsertPt, *ExitMI,
+                         ScratchRegs);
       if (PrintClearingSequence)
         OS << " " << getClearingStepName(Step) << "="
            << getClearingDispositionName(D);
@@ -1629,10 +1632,12 @@ void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
                                MachineInstr &ExitMI, BitVector &ScratchRegs) {
   MachineFunction &MF = *MBB.getParent();
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+  const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
 
   switch (Step) {
   case ClearingStep::ClearStack:
-    // A future stack clear must declare its scratch registers here.
+    TFI.emitZeroizeStack(MBB, InsertPt, ScratchRegs);
+    InsertPt = getClearingInsertPoint(*ExitMI.getParent(), ExitMI);
     break;
 
   case ClearingStep::ClearRegisters: {
@@ -1686,9 +1691,7 @@ ClearingDisposition PEIImpl::planClearStack(MachineFunction &MF) {
     return ClearingDisposition::Unsupported;
   }
 
-  // No target implements the step yet, so a supported request reports
-  // unimplemented rather than silently emitting nothing.
-  return ClearingDisposition::Unimplemented;
+  return ClearingDisposition::Emit;
 }
 
 /// Enable register clearing for scratch alone. Leave the mode's candidate set
