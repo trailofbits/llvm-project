@@ -1,13 +1,11 @@
-; ARM supports the register-clearing step independently of stack clearing.
-; An unsupported stack request must not suppress the register clear.
+; ARM supports coordinated stack and register clearing.
 
 ; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck %s
 
 declare i32 @callee(i32)
 
-; CHECK: warning: {{.*}}in function both i32 (i32): "zeroize-stack" is not supported by this target
 ; CHECK-LABEL: clearing sequence for function 'both':
-; CHECK-NEXT:  %bb.0 return: clear-stack=unsupported clear-registers=emitted clear-flags=unimplemented
+; CHECK-NEXT:  %bb.0 return: clear-stack=emitted clear-registers=emitted clear-flags=unimplemented
 ; CHECK-NEXT:  end clearing sequence for function 'both'
 define i32 @both(i32 %x) "zeroize-stack"="used" "zero-call-used-regs"="used-gpr" {
   ret i32 %x
