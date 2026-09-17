@@ -97,6 +97,9 @@ public:
 
   bool supportsZeroCallUsedRegs(const MachineFunction &MF) const override;
 
+  bool isZeroCallUsedRegsScratchReg(const MachineFunction &MF,
+                                    MCRegister Reg) const override;
+
 protected:
   bool hasFPImpl(const MachineFunction &MF) const override;
 

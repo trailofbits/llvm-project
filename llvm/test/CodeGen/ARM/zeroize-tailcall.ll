@@ -3,16 +3,16 @@
 ; a branch; a protected function keeps the call and returns through its own
 ; epilogue instead.
 
-; RUN: llc -mtriple=armv7-unknown-linux-gnueabi %s -o - 2>/dev/null | FileCheck %s
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi %s -o - | FileCheck %s
 
-; The "zeroize-stack" functions also report that no target clears the frame yet.
-; That report is a warning, so llc still succeeds, and stderr is discarded here.
+; Protected functions restore registers before erasing their frames and return
+; after releasing the cleared storage.
 
 declare i32 @callee(i32)
 
 ; CHECK-LABEL: protected:
 ; CHECK:         bl callee
-; CHECK:         pop {r11, pc}
+; CHECK:         bx lr
 define i32 @protected(i32 %x) "zeroize-stack"="used" {
   %r = tail call i32 @callee(i32 %x)
   ret i32 %r
@@ -29,7 +29,7 @@ define i32 @unprotected(i32 %x) {
 ; refused at the second place the tail-call question is asked.
 ; CHECK-LABEL: protected_libcall:
 ; CHECK:         bl fmod
-; CHECK:         pop {r11, pc}
+; CHECK:         bx lr
 define double @protected_libcall(double %a, double %b) "zeroize-stack"="used" {
   %r = frem double %a, %b
   ret double %r
