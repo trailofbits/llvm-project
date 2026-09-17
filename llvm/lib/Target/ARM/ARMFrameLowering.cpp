@@ -1838,6 +1838,14 @@ void ARMFrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
   }
 }
 
+bool ARMFrameLowering::isZeroCallUsedRegsScratchReg(
+    const MachineFunction &MF, MCRegister Reg) const {
+  // The stack clear uses only these full-width caller-clobbered GPRs.
+  // PEI separately checks allocation, callee saves, and exit operands.
+  return Reg == ARM::R0 || Reg == ARM::R1 || Reg == ARM::R2 ||
+         Reg == ARM::R3 || Reg == ARM::R12;
+}
+
 bool ARMFrameLowering::supportsZeroCallUsedRegs(
     const MachineFunction &MF) const {
   // VFP registers may exist on a Thumb-1 target even though Thumb-1 has no
