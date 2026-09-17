@@ -292,42 +292,49 @@ bool ARMBaseRegisterInfo::isArgumentRegister(const MachineFunction &MF,
   // Thumb-1, and on varargs, and a second copy of that reasoning would be one
   // that can disagree with the one the arguments were actually assigned by.
   const Function &F = MF.getFunction();
-  const ARMTargetLowering *TLI = MF.getSubtarget<ARMSubtarget>().getTargetLowering();
+  const ARMTargetLowering *TLI =
+      MF.getSubtarget<ARMSubtarget>().getTargetLowering();
   CCAssignFn *Fn = TLI->CCAssignFnForCall(F.getCallingConv(), F.isVarArg());
 
   auto HasReg = [PhysReg](ArrayRef<MCRegister> RegList) {
     return llvm::is_contained(RegList, PhysReg);
   };
 
-  // Registers a convention uses only for a swift-self or swift-error argument
-  // are emitted as a list of their own, and belong to the convention only when
-  // the function is one that can carry those arguments.
+  // Swift argument registers are emitted as a separate list. The attributes
+  // can also select these registers under non-Swift calling conventions.
   CallingConv::ID CC = F.getCallingConv();
-  const bool IsSwift =
-      CC == CallingConv::Swift || CC == CallingConv::SwiftTail;
+  const bool IsSwiftArgument =
+      CC == CallingConv::Swift || CC == CallingConv::SwiftTail ||
+      (PhysReg == ARM::R10 &&
+       F.getAttributes().hasAttrSomewhere(Attribute::SwiftSelf)) ||
+      (PhysReg == ARM::R8 &&
+       F.getAttributes().hasAttrSomewhere(Attribute::SwiftError));
 
-  // A convention that delegates has a list per definition, and the delegated-to
-  // definition's list is as much a part of it as its own.
+  // Generated argument lists currently omit registers from delegated
+  // conventions, so explicitly include those lists here. For example,
+  // CC_ARM_AAPCS_ArgRegs contains only R12; CC_ARM_AAPCS_Common_ArgRegs
+  // supplies R0-R3. Removing the union would lose ordinary AAPCS arguments.
   if (Fn == CC_ARM_APCS)
     return HasReg(CC_ARM_APCS_ArgRegs) ||
-           (IsSwift && HasReg(CC_ARM_APCS_Swift_ArgRegs));
+           (IsSwiftArgument && HasReg(CC_ARM_APCS_Swift_ArgRegs));
   if (Fn == FastCC_ARM_APCS)
-    return HasReg(FastCC_ARM_APCS_ArgRegs) || HasReg(CC_ARM_APCS_ArgRegs);
+    return HasReg(FastCC_ARM_APCS_ArgRegs) || HasReg(CC_ARM_APCS_ArgRegs) ||
+           (IsSwiftArgument && HasReg(CC_ARM_APCS_Swift_ArgRegs));
   if (Fn == CC_ARM_APCS_GHC)
     return HasReg(CC_ARM_APCS_GHC_ArgRegs);
   if (Fn == CC_ARM_AAPCS)
     return HasReg(CC_ARM_AAPCS_ArgRegs) ||
            HasReg(CC_ARM_AAPCS_Common_ArgRegs) ||
-           (IsSwift && HasReg(CC_ARM_AAPCS_Swift_ArgRegs));
+           (IsSwiftArgument && HasReg(CC_ARM_AAPCS_Swift_ArgRegs));
   if (Fn == CC_ARM_AAPCS_VFP)
     return HasReg(CC_ARM_AAPCS_VFP_ArgRegs) ||
            HasReg(CC_ARM_AAPCS_Common_ArgRegs) ||
-           (IsSwift && HasReg(CC_ARM_AAPCS_VFP_Swift_ArgRegs));
+           (IsSwiftArgument && HasReg(CC_ARM_AAPCS_VFP_Swift_ArgRegs));
   if (Fn == CC_ARM_Win32_CFGuard_Check)
     return HasReg(CC_ARM_Win32_CFGuard_Check_ArgRegs);
 
-  // CCAssignFnForCall answers with one of the above or reports the convention
-  // as unsupported before returning, so there is no fourth possibility.
+  // The selector returns one of the handled functions or terminates with an
+  // unsupported-convention error.
   llvm_unreachable("unhandled ARM calling convention");
 }
 

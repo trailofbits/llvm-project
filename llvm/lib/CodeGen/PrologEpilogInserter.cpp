@@ -1783,6 +1783,10 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
             continue;
 
           MCRegister Reg = MO.getReg();
+          // TODO: Mark allocatable subregisters used as well. ARM pair operands
+          // such as R0_R1 must mark R0 and R1 so used-gpr can select the scalar
+          // components without classifying GPRPair as a general-purpose class.
+          // Add coverage for pair-only uses before enabling ARM register clearing.
           if (AllocatableSet[Reg.id()])
             UsedRegs.set(Reg.id());
         }
