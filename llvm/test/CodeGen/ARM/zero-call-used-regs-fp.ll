@@ -7,11 +7,11 @@
 ; RUN: llc -verify-machineinstrs -mtriple=armv7-unknown-linux-gnueabihf %s -o %t.neon.s
 ; RUN: FileCheck %s --check-prefix=NEON < %t.neon.s
 ; RUN: FileCheck %s --check-prefix=NEON-GAP < %t.neon.s
-; RUN: llc -verify-machineinstrs -mtriple=thumbv8m.main -mattr=+fp-armv8d16sp %s -o - | FileCheck %s --check-prefix=VFP
-; RUN: llc -verify-machineinstrs -mtriple=thumbv8.1m.main -mattr=+mve %s -o - | FileCheck %s --check-prefix=MVE
+; RUN: llc -verify-machineinstrs -mtriple=thumbv8m.main -mattr=+fp-armv8d16sp %s -o - | FileCheck %s --check-prefix=VFP --implicit-check-not="vmov d{{[8-9]|1[0-5]}},"
+; RUN: llc -verify-machineinstrs -mtriple=thumbv8.1m.main -mattr=+mve %s -o - | FileCheck %s --check-prefix=MVE --implicit-check-not="vmov.i32 q{{[4-7]}},"
 ; RUN: llc -verify-machineinstrs -mtriple=thumbv7m-none-eabi %s -o - | FileCheck %s --check-prefix=NOFP
-; RUN: llc -verify-machineinstrs -mtriple=armv6-none-eabi -mattr=+vfp2 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=VFP
-; RUN: llc -verify-machineinstrs -mtriple=thumbv6t2-none-eabi -mattr=+vfp2 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=VFP
+; RUN: llc -verify-machineinstrs -mtriple=armv6-none-eabi -mattr=+vfp2 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=VFP --implicit-check-not="vmov d{{[8-9]|1[0-5]}},"
+; RUN: llc -verify-machineinstrs -mtriple=thumbv6t2-none-eabi -mattr=+vfp2 -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=VFP --implicit-check-not="vmov d{{[8-9]|1[0-5]}},"
 
 ; D8-D15 are callee-saved, so the vector registers built out of them are the
 ; caller's and are not cleared: on NEON that leaves q0-q3 and q8-q15, and the
