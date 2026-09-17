@@ -1,11 +1,15 @@
-; Two of the fallbacks are decided before any target is asked, so they show on
-; a target that cannot clear anything.
+; Exit scope and unreadable modes are resolved before asking the target.
 
 ; RUN: split-file %s %t
-; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -verify-machineinstrs -pei-print-clearing-sequence %t/exits.ll -o /dev/null 2>&1 | FileCheck --check-prefix=SEQ %s
-; RUN: not llc -mtriple=armv7-unknown-linux-gnueabi -verify-machineinstrs %t/unknown.ll -o /dev/null 2>&1 | FileCheck --check-prefix=UNKNOWN %s
-; RUN: not llc -mtriple=armv7-unknown-linux-gnueabi -verify-machineinstrs %t/empty.ll -o /dev/null 2>&1 | FileCheck --check-prefix=EMPTY %s
-; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -verify-machineinstrs %t/skip.ll -o /dev/null 2>&1 | FileCheck --check-prefix=SKIP --allow-empty %s
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -verify-machineinstrs \
+; RUN:   -pei-print-clearing-sequence %t/exits.ll -o /dev/null 2>&1 | \
+; RUN:   FileCheck --check-prefix=SEQ %s
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -verify-machineinstrs %t/unknown.ll \
+; RUN:   -o - | FileCheck --check-prefix=UNKNOWN %s
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -verify-machineinstrs %t/empty.ll \
+; RUN:   -o - | FileCheck --check-prefix=EMPTY %s
+; RUN: llc -mtriple=armv7-unknown-linux-gnueabi -verify-machineinstrs %t/skip.ll \
+; RUN:   -o - | FileCheck --check-prefix=SKIP %s
 
 ;--- exits.ll
 @g = external global i32
@@ -33,23 +37,39 @@ define void @traps() {
 }
 
 ;--- unknown.ll
-; An unreadable mode is not "skip": it widens to "all", which this target
-; refuses and reports.
-; UNKNOWN: error: {{.*}}in function unrecognized_mode i32 (i32): "zero-call-used-regs" is not supported by this target
+; An unreadable mode widens to "all", clearing the registers the exit can spare.
+; UNKNOWN-LABEL: unrecognized_mode:
+; UNKNOWN-DAG:     vmov.i32 q0, #0x0
+; UNKNOWN-DAG:     mov r1, #0
+; UNKNOWN-DAG:     mov r2, #0
+; UNKNOWN-DAG:     mov r3, #0
+; UNKNOWN-DAG:     mov r12, #0
+; UNKNOWN-DAG:     vmov.i32 q15, #0x0
+; UNKNOWN:         bx lr
 define i32 @unrecognized_mode(i32 %x) "zero-call-used-regs"="a-mode-from-the-future" {
   ret i32 %x
 }
 
 ;--- empty.ll
-; An empty value widens to "all" and receives the same target diagnostic.
-; EMPTY: error: {{.*}}in function empty_mode i32 (i32): "zero-call-used-regs" is not supported by this target
+; An empty value also widens to "all".
+; EMPTY-LABEL: empty_mode:
+; EMPTY-DAG:     vmov.i32 q0, #0x0
+; EMPTY-DAG:     mov r1, #0
+; EMPTY-DAG:     mov r2, #0
+; EMPTY-DAG:     mov r3, #0
+; EMPTY-DAG:     mov r12, #0
+; EMPTY-DAG:     vmov.i32 q15, #0x0
+; EMPTY:         bx lr
 define i32 @empty_mode(i32 %x) "zero-call-used-regs"="" {
   ret i32 %x
 }
 
 ;--- skip.ll
-; "skip" is honored and succeeds independently of the unsupported requests.
-; SKIP-NOT: {{.}}
+; "skip" is honored and clears no registers.
+; SKIP-LABEL: skips_explicitly:
+; SKIP-NOT:     mov r{{[0-9]+}}, #0
+; SKIP-NOT:     vmov
+; SKIP:         bx lr
 define i32 @skips_explicitly(i32 %x) "zero-call-used-regs"="skip" {
   ret i32 %x
 }
