@@ -1778,19 +1778,25 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
             continue;
 
           MCRegister Reg = MO.getReg();
-          // TODO: Mark allocatable subregisters used as well. ARM pair operands
-          // such as R0_R1 must mark R0 and R1 so used-gpr can select the scalar
-          // components without classifying GPRPair as a general-purpose class.
-          // Add coverage for pair-only uses before enabling ARM register clearing.
-          if (AllocatableSet[Reg.id()])
-            UsedRegs.set(Reg.id());
+          if (!Reg)
+            continue;
+
+          // A tuple operand uses its scalar components too. In particular,
+          // used-gpr must select R0 and R1 for an ARM R0_R1 operand without
+          // classifying the pair itself as a general-purpose register. Walk
+          // the components even when the aggregate is not allocatable.
+          for (MCPhysReg SubReg : TRI.subregs_inclusive(Reg))
+            if (AllocatableSet[SubReg])
+              UsedRegs.set(SubReg);
         }
       }
 
-  // Get a list of registers that are used.
+  // Include the components of argument tuples so an exit can preserve one
+  // component while clearing another, even when the live-in names the pair.
   BitVector LiveIns(TRI.getNumRegs());
   for (const MachineBasicBlock::RegisterMaskPair &LI : MF.front().liveins())
-    LiveIns.set(LI.PhysReg);
+    for (MCPhysReg Reg : TRI.subregs_inclusive(LI.PhysReg))
+      LiveIns.set(Reg);
 
   CandidateRegsToZero.resize(TRI.getNumRegs());
   for (MCRegister Reg : AllocatableSet.set_bits()) {
@@ -1810,7 +1816,10 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
     if (OnlyArg) {
       if (OnlyUsed) {
         for (MCRegister LiveReg : LiveIns.set_bits()) {
-          if (TRI.regsOverlap(Reg, LiveReg))
+          // Do not widen a selected component back to an argument tuple:
+          // the other components may be unused. LiveIns includes subregs,
+          // so retain only the argument registers contained in this use.
+          if (TRI.isSubRegisterEq(Reg, LiveReg))
             CandidateRegsToZero.set(LiveReg);
         }
         continue;

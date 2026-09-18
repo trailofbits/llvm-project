@@ -701,8 +701,19 @@ void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
     TII.buildClearRegister(Reg, MBB, MBBI, DL);
 
   // Zero out the remaining registers.
-  for (MCRegister Reg : RegsToZero.set_bits())
+  for (MCRegister Reg : RegsToZero.set_bits()) {
+    // Used-register tracking includes subregisters. Prefer the widest
+    // selected SIMD alias instead of clearing XMM/YMM/ZMM separately.
+    if ((X86::VR128RegClass.contains(Reg) ||
+         X86::VR256RegClass.contains(Reg)) &&
+        llvm::any_of(TRI->superregs(Reg), [&](MCPhysReg SuperReg) {
+          return RegsToZero.test(SuperReg) &&
+                 ((X86::VR256RegClass.contains(SuperReg) && STI.hasAVX()) ||
+                  (X86::VR512RegClass.contains(SuperReg) && STI.hasAVX512()));
+        }))
+      continue;
     TII.buildClearRegister(Reg, MBB, MBBI, DL);
+  }
 }
 
 void X86FrameLowering::emitStackProbe(
