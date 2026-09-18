@@ -1,0 +1,83 @@
+name: Fork LLVM and Clang Tests
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  push:
+    branches: [enforced_secrecy_main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  llvm-clang:
+    name: LLVM and Clang (Linux, all targets)
+    if: >-
+      github.repository == 'trailofbits/llvm-project' &&
+      (github.event_name != 'pull_request' || github.event.action != 'closed')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout LLVM
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            cmake
+            llvm
+            clang
+            libc
+            third-party
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            clang lld cmake ninja-build python3 python3-psutil python3-yaml
+
+      - name: Configure
+        env:
+          LLVM_LIT_ARGS: >-
+            -v --timeout=1200 --use-unique-output-file-name
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cmake -S llvm -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=/usr/bin/clang \
+            -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+            -DPython3_EXECUTABLE=/usr/bin/python3 \
+            -DLLVM_ENABLE_PROJECTS=clang \
+            -DLLVM_TARGETS_TO_BUILD=all \
+            -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DLLVM_ENABLE_LLD=ON \
+            -DLLVM_LINK_LLVM_DYLIB=ON \
+            -DCLANG_LINK_CLANG_DYLIB=ON \
+            -DLLVM_PARALLEL_LINK_JOBS=1 \
+            -DLLVM_LIT_ARGS="${LLVM_LIT_ARGS} --xunit-xml-output=${PWD}/build/test-results.xml" \
+            2>&1 | tee artifacts/configure.log
+
+      - name: Build and run full test suites
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel "$(nproc)" \
+            --target check-llvm check-clang check-clang-python -- -k 0 \
+            2>&1 | tee artifacts/tests.log
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fork-llvm-clang-results
+          path: |
+            artifacts/
+            build/test-results*.xml
+          retention-days: 5
