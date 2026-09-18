@@ -676,11 +676,23 @@ void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
     break;
   }
 
+  // GPR clearing writes the 32-bit register even for a byte request. AL and
+  // AH do not overlap, so generic filtering can leave AH eligible when AL is
+  // live at the exit. Do not widen that request into a write of EAX.
+  BitVector GPRsNeededAtExit(TRI->getNumRegs());
+  for (const MachineInstr &MI : make_range(MBBI, MBB.end()))
+    for (const MachineOperand &MO : MI.operands())
+      if (MO.isReg() && MO.getReg() &&
+          TRI->isGeneralPurposeRegister(MF, MO.getReg()))
+        GPRsNeededAtExit.set(getX86SubSuperRegister(MO.getReg(), 32));
+
   // For GPRs, we only care to clear out the 32-bit register.
   BitVector GPRsToZero(TRI->getNumRegs());
   for (MCRegister Reg : RegsToZero.set_bits())
     if (TRI->isGeneralPurposeRegister(MF, Reg)) {
-      GPRsToZero.set(getX86SubSuperRegister(Reg, 32));
+      MCRegister Reg32 = getX86SubSuperRegister(Reg, 32);
+      if (!GPRsNeededAtExit.test(Reg32))
+        GPRsToZero.set(Reg32);
       RegsToZero.reset(Reg);
     }
 

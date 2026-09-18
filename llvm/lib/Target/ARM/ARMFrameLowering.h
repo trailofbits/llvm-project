@@ -27,6 +27,10 @@ protected:
 public:
   explicit ARMFrameLowering(const ARMSubtarget &sti);
 
+  bool supportsZeroCallUsedRegs(const MachineFunction &MF) const override {
+    return true;
+  }
+
   /// emitProlog/emitEpilog - These methods insert prolog and epilog code into
   /// the function.
   void emitPrologue(MachineFunction &MF, MachineBasicBlock &MBB) const override;

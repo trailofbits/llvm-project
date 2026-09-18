@@ -1533,18 +1533,13 @@ static BitVector computeRegsToClearAtExit(
       if (!Reg)
         continue;
 
-      // This picks up sibling registers (e.g. %al -> %ah).
-      // FIXME: mixing physical registers and register units is likely a bug,
-      // and it does over-spare (a dead sibling can survive a clear). Kept all
-      // the same: it also spares siblings a clear would widen into a live
-      // register (%ah into %al on x86), and no target-agnostic rule keeps both
-      // that and AArch64's independently-cleared register tuples correct.
-      if (MI.isReturn())
-        for (MCRegUnit Unit : TRI.regunits(Reg))
-          RegsToZero.reset(static_cast<unsigned>(Unit));
-
-      for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(Reg))
-        RegsToZero.reset(SReg);
+      // Candidates is indexed by physical registers, not register units.
+      // Exclude overlapping registers, but leave disjoint siblings eligible
+      // (e.g. ARM S1 when S0 holds a return value). A target that widens a
+      // clearing write must also preserve any live sibling it would touch.
+      for (MCRegAliasIterator Alias(Reg, &TRI, /*IncludeSelf=*/true);
+           Alias.isValid(); ++Alias)
+        RegsToZero.reset(*Alias);
     }
   }
 

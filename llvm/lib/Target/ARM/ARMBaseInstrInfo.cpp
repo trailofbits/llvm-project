@@ -877,8 +877,7 @@ void ARMBaseInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     Mov->addRegisterKilled(SrcReg, TRI);
 }
 
-void ARMBaseInstrInfo::buildClearRegister(Register Reg,
-                                          MachineBasicBlock &MBB,
+void ARMBaseInstrInfo::buildClearRegister(Register Reg, MachineBasicBlock &MBB,
                                           MachineBasicBlock::iterator Iter,
                                           DebugLoc &DL,
                                           bool AllowSideEffects) const {

@@ -1695,7 +1695,7 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
         FPLeaves.reset(Sub);
   };
 
-  SmallVector<MCRegister, 16> WideFPRegs;  // cleared by one instruction
+  SmallVector<MCRegister, 16> WideFPRegs;   // cleared by one instruction
   SmallVector<MCRegister, 16> PairedFPRegs; // cleared from two zeroed halves
   SmallVector<MCRegister, 32> SingleFPRegs; // cleared from one zeroed half
 
