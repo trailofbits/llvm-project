@@ -4,22 +4,35 @@
 ; register when there is neither, and nothing at all when the registers do not
 ; exist.
 
-; RUN: llc -verify-machineinstrs -mtriple=armv7-unknown-linux-gnueabihf %s -o - | FileCheck %s --check-prefix=NEON
+; RUN: llc -verify-machineinstrs -mtriple=armv7-unknown-linux-gnueabihf %s -o - | FileCheck %s --check-prefix=NEON --implicit-check-not='vmov.i32 q4,' --implicit-check-not='vmov.i32 q5,' --implicit-check-not='vmov.i32 q6,' --implicit-check-not='vmov.i32 q7,'
 ; RUN: llc -verify-machineinstrs -mtriple=thumbv8m.main -mattr=+fp-armv8d16sp %s -o - | FileCheck %s --check-prefix=VFP
 ; RUN: llc -verify-machineinstrs -mtriple=thumbv8.1m.main -mattr=+mve %s -o - | FileCheck %s --check-prefix=MVE
 ; RUN: llc -verify-machineinstrs -mtriple=thumbv7m-none-eabi %s -o - | FileCheck %s --check-prefix=NOFP
 
 ; D8-D15 are callee-saved, so the vector registers built out of them are the
 ; caller's and are not cleared: on NEON that leaves q0-q3 and q8-q15, and the
-; gap where q4-q7 would be is the point.
+; gap where q4-q7 would be is the point. Every register in the gap is named,
+; not a sample of it. Clearing one of these is an ABI violation, and a guard
+; that covers some of a set is one a violation can walk between.
 ; NEON-LABEL: all_regs:
-; NEON:         mov r0, #0
-; NEON:         mov r12, #0
-; NEON-NEXT:    vmov.i32 q0, #0x0
-; NEON:         vmov.i32 q3, #0x0
-; NEON-NEXT:    vmov.i32 q8, #0x0
-; NEON:         vmov.i32 q15, #0x0
-; NEON-NEXT:    bx lr
+; NEON-DAG: mov r0, #0
+; NEON-DAG: mov r1, #0
+; NEON-DAG: mov r2, #0
+; NEON-DAG: mov r3, #0
+; NEON-DAG: mov r12, #0
+; NEON-DAG: vmov.i32 q0, #0x0
+; NEON-DAG: vmov.i32 q1, #0x0
+; NEON-DAG: vmov.i32 q2, #0x0
+; NEON-DAG: vmov.i32 q3, #0x0
+; NEON-DAG: vmov.i32 q8, #0x0
+; NEON-DAG: vmov.i32 q9, #0x0
+; NEON-DAG: vmov.i32 q10, #0x0
+; NEON-DAG: vmov.i32 q11, #0x0
+; NEON-DAG: vmov.i32 q12, #0x0
+; NEON-DAG: vmov.i32 q13, #0x0
+; NEON-DAG: vmov.i32 q14, #0x0
+; NEON-DAG: vmov.i32 q15, #0x0
+; NEON: bx lr
 ;
 ; With floating-point registers but no vector immediate, each register is
 ; written from one that has been zeroed already. A d register takes two halves
@@ -29,7 +42,15 @@
 ; VFP:         movs r0, #0
 ; VFP:         vmov d0, r0, r0
 ; VFP:         vmov d7, r0, r0
-; VFP-NEXT:    bx lr
+; VFP-NOT:     vmov d8,
+; VFP-NOT:     vmov d9,
+; VFP-NOT:     vmov d10,
+; VFP-NOT:     vmov d11,
+; VFP-NOT:     vmov d12,
+; VFP-NOT:     vmov d13,
+; VFP-NOT:     vmov d14,
+; VFP-NOT:     vmov d15,
+; VFP:         bx lr
 ;
 ; MVE reaches q0-q7 and, unlike NEON, has a predicate register that is neither
 ; general-purpose nor part of the vector file. It is data, so it is cleared.
