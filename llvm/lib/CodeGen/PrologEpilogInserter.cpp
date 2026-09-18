@@ -1533,18 +1533,13 @@ static BitVector computeRegsToClearAtExit(
       if (!Reg)
         continue;
 
-      // This picks up sibling registers (e.g. %al -> %ah).
-      // FIXME: mixing physical registers and register units is likely a bug,
-      // and it does over-spare (a dead sibling can survive a clear). Kept all
-      // the same: it also spares siblings a clear would widen into a live
-      // register (%ah into %al on x86), and no target-agnostic rule keeps both
-      // that and AArch64's independently-cleared register tuples correct.
-      if (MI.isReturn())
-        for (MCRegUnit Unit : TRI.regunits(Reg))
-          RegsToZero.reset(static_cast<unsigned>(Unit));
-
-      for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(Reg))
-        RegsToZero.reset(SReg);
+      // Candidates is indexed by physical registers, not register units.
+      // Exclude overlapping registers, but leave disjoint siblings eligible
+      // (e.g. ARM S1 when S0 holds a return value). A target that widens a
+      // clearing write must also preserve any live sibling it would touch.
+      for (MCRegAliasIterator Alias(Reg, &TRI, /*IncludeSelf=*/true);
+           Alias.isValid(); ++Alias)
+        RegsToZero.reset(*Alias);
     }
   }
 
@@ -1783,19 +1778,25 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
             continue;
 
           MCRegister Reg = MO.getReg();
-          // TODO: Mark allocatable subregisters used as well. ARM pair operands
-          // such as R0_R1 must mark R0 and R1 so used-gpr can select the scalar
-          // components without classifying GPRPair as a general-purpose class.
-          // Add coverage for pair-only uses before enabling ARM register clearing.
-          if (AllocatableSet[Reg.id()])
-            UsedRegs.set(Reg.id());
+          if (!Reg)
+            continue;
+
+          // A tuple operand uses its scalar components too. In particular,
+          // used-gpr must select R0 and R1 for an ARM R0_R1 operand without
+          // classifying the pair itself as a general-purpose register. Walk
+          // the components even when the aggregate is not allocatable.
+          for (MCPhysReg SubReg : TRI.subregs_inclusive(Reg))
+            if (AllocatableSet[SubReg])
+              UsedRegs.set(SubReg);
         }
       }
 
-  // Get a list of registers that are used.
+  // Include the components of argument tuples so an exit can preserve one
+  // component while clearing another, even when the live-in names the pair.
   BitVector LiveIns(TRI.getNumRegs());
   for (const MachineBasicBlock::RegisterMaskPair &LI : MF.front().liveins())
-    LiveIns.set(LI.PhysReg);
+    for (MCPhysReg Reg : TRI.subregs_inclusive(LI.PhysReg))
+      LiveIns.set(Reg);
 
   CandidateRegsToZero.resize(TRI.getNumRegs());
   for (MCRegister Reg : AllocatableSet.set_bits()) {
@@ -1815,7 +1816,10 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
     if (OnlyArg) {
       if (OnlyUsed) {
         for (MCRegister LiveReg : LiveIns.set_bits()) {
-          if (TRI.regsOverlap(Reg, LiveReg))
+          // Do not widen a selected component back to an argument tuple:
+          // the other components may be unused. LiveIns includes subregs,
+          // so retain only the argument registers contained in this use.
+          if (TRI.isSubRegisterEq(Reg, LiveReg))
             CandidateRegsToZero.set(LiveReg);
         }
         continue;
