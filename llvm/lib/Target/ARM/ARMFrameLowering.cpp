@@ -121,6 +121,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/CFIInstBuilder.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
@@ -364,6 +365,12 @@ bool ARMFrameLowering::isFPReserved(const MachineFunction &MF) const {
 /// add/sub sp brackets around call sites.  Returns true if the call frame is
 /// included as part of the stack frame.
 bool ARMFrameLowering::hasReservedCallFrame(const MachineFunction &MF) const {
+  // Keep outgoing arguments inside the allocation erased by the protected
+  // epilogue, even when reserving a large call frame costs extra addressing.
+  if (MF.getFunction().hasFnAttribute("zeroize-stack") &&
+      !MF.getFrameInfo().hasVarSizedObjects())
+    return true;
+
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   unsigned CFSize = MFI.getMaxCallFrameSize();
   // It's not always a good idea to include the call frame as part of the
@@ -1405,6 +1412,11 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF,
 
 void ARMFrameLowering::emitEpilogue(MachineFunction &MF,
                                     MachineBasicBlock &MBB) const {
+  // The stack emitter restores saved values without releasing their slots.
+  if (MF.getFunction().hasFnAttribute("zeroize-stack") &&
+      supportsZeroizeStack(MF))
+    return;
+
   MachineFrameInfo &MFI = MF.getFrameInfo();
   ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
   const TargetRegisterInfo *RegInfo = MF.getSubtarget().getRegisterInfo();
@@ -1594,6 +1606,246 @@ void ARMFrameLowering::emitEpilogue(MachineFunction &MF,
 // register is only used when every part of it was asked for.
 //===----------------------------------------------------------------------===//
 
+static void computeLiveUnitsAt(LiveRegUnits &Used, const MachineBasicBlock &MBB,
+                               MachineBasicBlock::const_iterator MBBI);
+
+bool ARMFrameLowering::supportsZeroizeStack(const MachineFunction &MF) const {
+  const Function &F = MF.getFunction();
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
+  // These layouts require runtime extent tracking or a distinct unwind/ABI
+  // protocol. Keep the ordinary epilogue and report unsupported capability.
+  if (MFI.hasVarSizedObjects() || MFI.hasOpaqueSPAdjustment() ||
+      MFI.getMaxAlign() > getStackAlign() ||
+      STI.getRegisterInfo()->hasStackRealignment(MF) || STI.isTargetWindows() ||
+      MF.shouldSplitStack() || F.isVarArg() || F.hasFnAttribute("interrupt") ||
+      AFI->isCmseNSEntryFunction() || AFI->shouldSignReturnAddress(true) ||
+      AFI->getArgRegsSaveSize() || AFI->getNumAlignedDPRCS2Regs())
+    return false;
+  switch (F.getCallingConv()) {
+  case CallingConv::C:
+  case CallingConv::Fast:
+  case CallingConv::ARM_AAPCS:
+  case CallingConv::ARM_AAPCS_VFP:
+    break;
+  default:
+    return false;
+  }
+  for (const MachineBasicBlock &MBB : MF)
+    for (const MachineInstr &MI : MBB) {
+      if (MI.isReturn() && MI.getOpcode() != ARM::BX_RET &&
+          MI.getOpcode() != ARM::tBX_RET)
+        return false;
+      // EHABI needs the saved frame when resuming an exception. It cannot be
+      // erased using the ordinary-return protocol below.
+      if (MI.isCall())
+        for (const MachineOperand &MO : MI.operands())
+          if ((MO.isGlobal() &&
+               (MO.getGlobal()->getName() == "_Unwind_Resume" ||
+                MO.getGlobal()->getName() == "__cxa_end_cleanup")) ||
+              (MO.isSymbol() &&
+               (StringRef(MO.getSymbolName()) == "_Unwind_Resume" ||
+                StringRef(MO.getSymbolName()) == "__cxa_end_cleanup")))
+            return false;
+    }
+  return true;
+}
+
+void ARMFrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
+                                        MachineBasicBlock::iterator InsertPt,
+                                        BitVector &ScratchRegs) const {
+  MachineFunction &MF = *MBB.getParent();
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const ARMBaseRegisterInfo &TRI = *STI.getRegisterInfo();
+  const ARMBaseInstrInfo &TII = *STI.getInstrInfo();
+  const uint64_t Size = MFI.getStackSize();
+  auto Fail = [&](StringRef Message) {
+    MF.getFunction().getContext().diagnose(
+        DiagnosticInfoUnsupported{MF.getFunction(), Message});
+  };
+  if (Size == 0)
+    return;
+  if (Size > INT32_MAX || Size % 4) {
+    Fail("stack clearing requires a word-aligned static ARM frame");
+    return;
+  }
+  // StackSize covers the owned allocation, including outgoing-call space and
+  // padding. Check every object rather than assuming negative fixed objects
+  // (notably callee-save slots) necessarily fall within that allocation.
+  for (int FI = MFI.getObjectIndexBegin(), E = MFI.getObjectIndexEnd(); FI != E;
+       ++FI) {
+    if (MFI.isDeadObjectIndex(FI) || MFI.getObjectOffset(FI) >= 0)
+      continue;
+    int64_t Offset = MFI.getObjectOffset(FI);
+    if (Offset < -int64_t(Size) || Offset + MFI.getObjectSize(FI) > 0) {
+      Fail("stack clearing cannot cover an object outside the owned ARM frame");
+      return;
+    }
+  }
+  LiveRegUnits Live(TRI);
+  computeLiveUnitsAt(Live, MBB, InsertPt);
+  if (!Live.available(ARM::CPSR)) {
+    Fail("stack clearing requires dead condition flags at the exit");
+    return;
+  }
+  SmallVector<MCRegister, 3> Work;
+  for (MCRegister R : {ARM::R0, ARM::R1, ARM::R2, ARM::R3})
+    if (!MF.getRegInfo().isReserved(R) && Live.available(R))
+      Work.push_back(R);
+  const bool Loop = Size > 64;
+  MCRegister End;
+  if (Loop) {
+    if (!MF.getRegInfo().isReserved(ARM::R12) && Live.available(ARM::R12))
+      End = ARM::R12;
+    else if (Work.size() >= 3)
+      End = Work[2];
+  }
+  if (Work.size() < 2 || (Loop && !End)) {
+    Fail("stack clearing needs free low registers at this exit");
+    return;
+  }
+  MCRegister Ptr = Work[0], Zero = Work[1];
+  for (MCRegister R : {Ptr, Zero, End})
+    if (R)
+      ScratchRegs.set(R);
+  DebugLoc DL = InsertPt->getDebugLoc();
+  auto Copy = [&](MachineBasicBlock &B, MachineBasicBlock::iterator I,
+                  MCRegister Dst, MCRegister Src) {
+    TII.copyPhysReg(B, I, DL, Dst, Src, false);
+  };
+  auto Address = [&](MCRegister Dst, int Offset) {
+    if (STI.isThumb1Only())
+      emitThumbRegPlusImmediate(MBB, InsertPt, DL, Dst, ARM::SP, Offset, TII,
+                                TRI);
+    else if (STI.isThumb()) {
+      // Start from a defined base. The different-register form of the helper
+      // can use MOVT alone for an offset with a zero low half.
+      Copy(MBB, InsertPt, Dst, ARM::SP);
+      emitT2RegPlusImmediate(MBB, InsertPt, DL, Dst, Dst, Offset, ARMCC::AL,
+                             ARM::NoRegister, TII);
+    } else
+      emitARMRegPlusImmediate(MBB, InsertPt, DL, Dst, ARM::SP, Offset,
+                              ARMCC::AL, ARM::NoRegister, TII);
+  };
+  CFIInstBuilder(MBB, InsertPt, MachineInstr::FrameDestroy)
+      .buildDefCFA(ARM::SP, Size);
+  // Restore without popping: the saved slots still belong to this function
+  // until the stores below complete. Use physical addresses so frame-index
+  // scavenging cannot spill another secret after the frame has been cleared.
+  for (const CalleeSavedInfo &CSI : MFI.getCalleeSavedInfo()) {
+    MCRegister R = CSI.getReg();
+    if (CSI.isSpilledToReg() ||
+        (STI.isThumb1Only() && ARM::DPRRegClass.contains(R)) ||
+        (!ARM::GPRRegClass.contains(R) && !ARM::DPRRegClass.contains(R))) {
+      Fail("stack clearing encountered an unsupported ARM callee-save slot");
+      return;
+    }
+    int FI = CSI.getFrameIdx();
+    Address(Ptr, Size + MFI.getObjectOffset(FI));
+    bool FP = ARM::DPRRegClass.contains(R);
+    MCRegister LoadReg =
+        STI.isThumb1Only() && !ARM::tGPRRegClass.contains(R) ? Zero : R;
+    unsigned Opc = FP                   ? ARM::VLDRD
+                   : STI.isThumb1Only() ? ARM::tLDRi
+                   : STI.isThumb()      ? ARM::t2LDRi12
+                                        : ARM::LDRi12;
+    BuildMI(MBB, InsertPt, DL, TII.get(Opc), LoadReg)
+        .addReg(Ptr)
+        .addImm(0)
+        .add(predOps(ARMCC::AL))
+        .addMemOperand(MF.getMachineMemOperand(
+            MachinePointerInfo::getFixedStack(MF, FI),
+            MachineMemOperand::MOLoad, MFI.getObjectSize(FI),
+            MFI.getObjectAlign(FI)));
+    if (LoadReg != R)
+      Copy(MBB, InsertPt, R, LoadReg);
+    CFIInstBuilder(MBB, InsertPt, MachineInstr::FrameDestroy).buildRestore(R);
+  }
+  Address(Ptr, 0);
+  if (Loop) {
+    Address(Zero, Size);
+    Copy(MBB, InsertPt, End, Zero);
+  }
+  TII.buildClearRegister(Zero, MBB, InsertPt, DL);
+  auto Store = [&](MachineBasicBlock &B, MachineBasicBlock::iterator I,
+                   unsigned Offset) {
+    unsigned Opc = STI.isThumb1Only() ? ARM::tSTRi
+                   : STI.isThumb()    ? ARM::t2STRi12
+                                      : ARM::STRi12;
+    BuildMI(B, I, DL, TII.get(Opc))
+        .addReg(Zero)
+        .addReg(Ptr)
+        .addImm(STI.isThumb1Only() ? Offset / 4 : Offset)
+        .add(predOps(ARMCC::AL))
+        .addMemOperand(MF.getMachineMemOperand(
+            MachinePointerInfo(),
+            MachineMemOperand::MOStore | MachineMemOperand::MOVolatile, 4,
+            Align(4)));
+  };
+  MachineBasicBlock *Tail = &MBB;
+  if (!Loop) {
+    for (unsigned Offset = 0; Offset < Size; Offset += 4)
+      Store(MBB, InsertPt, Offset);
+    Address(Ptr, Size);
+  } else {
+    // Move the original return to a fresh block. The coordinator follows the
+    // exit instruction and emits register clearing there after this loop.
+    Tail = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
+    auto *Body = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
+    MF.insert(std::next(MBB.getIterator()), Body);
+    MF.insert(std::next(Body->getIterator()), Tail);
+    Tail->splice(Tail->end(), &MBB, InsertPt, MBB.end());
+    Tail->transferSuccessorsAndUpdatePHIs(&MBB);
+    MBB.addSuccessor(Body);
+    Body->addSuccessor(Body);
+    Body->addSuccessor(Tail);
+    Store(*Body, Body->end(), 0);
+    auto I = Body->end();
+    if (STI.isThumb1Only())
+      emitThumbRegPlusImmediate(*Body, I, DL, Ptr, Ptr, 4, TII, TRI);
+    else if (STI.isThumb())
+      emitT2RegPlusImmediate(*Body, I, DL, Ptr, Ptr, 4, ARMCC::AL,
+                             ARM::NoRegister, TII);
+    else
+      emitARMRegPlusImmediate(*Body, I, DL, Ptr, Ptr, 4, ARMCC::AL,
+                              ARM::NoRegister, TII);
+    BuildMI(*Body, I, DL,
+            TII.get(STI.isThumb1Only() ? ARM::tCMPhir
+                    : STI.isThumb()    ? ARM::t2CMPrr
+                                       : ARM::CMPrr))
+        .addReg(Ptr)
+        .addReg(End)
+        .add(predOps(ARMCC::AL));
+    BuildMI(*Body, I, DL, TII.get(STI.isThumb() ? ARM::tBcc : ARM::Bcc))
+        .addMBB(Body)
+        .addImm(ARMCC::NE)
+        .addReg(ARM::CPSR);
+    InsertPt = Tail->begin();
+    // Preserve return live-outs through both the loop and its continuation.
+    recomputeLiveIns(*Tail);
+    recomputeLiveIns(*Body);
+    recomputeLiveIns(*Body);
+  }
+  Copy(*Tail, InsertPt, ARM::SP, Ptr);
+  CFIInstBuilder(*Tail, InsertPt, MachineInstr::FrameDestroy)
+      .buildDefCFA(ARM::SP, 0);
+  if (Loop) {
+    recomputeLiveIns(*Tail);
+    for (MachineBasicBlock *Pred : Tail->predecessors()) {
+      recomputeLiveIns(*Pred);
+      recomputeLiveIns(*Pred);
+    }
+  }
+}
+
+bool ARMFrameLowering::isZeroCallUsedRegsScratchReg(
+    const MachineFunction &MF, MCRegister Reg) const {
+  // The stack clear uses only these full-width caller-clobbered GPRs.
+  // PEI separately checks allocation, callee saves, and exit operands.
+  return Reg == ARM::R0 || Reg == ARM::R1 || Reg == ARM::R2 ||
+         Reg == ARM::R3 || Reg == ARM::R12;
+}
+
 bool ARMFrameLowering::supportsZeroCallUsedRegs(
     const MachineFunction &MF) const {
   // VFP registers may exist on a Thumb-1 target even though Thumb-1 has no
@@ -1604,7 +1856,9 @@ bool ARMFrameLowering::supportsZeroCallUsedRegs(
 
   StringRef Mode =
       MF.getFunction().getFnAttribute("zero-call-used-regs").getValueAsString();
-  return Mode == "used-gpr-arg" || Mode == "used-gpr" ||
+  return ((Mode.empty() || Mode == "skip") &&
+          MF.getFunction().hasFnAttribute("zeroize-stack")) ||
+         Mode == "used-gpr-arg" || Mode == "used-gpr" ||
          Mode == "all-gpr-arg" || Mode == "all-gpr";
 }
 
@@ -2566,6 +2820,13 @@ bool ARMFrameLowering::spillCalleeSavedRegisters(
 bool ARMFrameLowering::restoreCalleeSavedRegisters(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
     MutableArrayRef<CalleeSavedInfo> CSI, const TargetRegisterInfo *TRI) const {
+  if (MBB.getParent()->getFunction().hasFnAttribute("zeroize-stack") &&
+      supportsZeroizeStack(*MBB.getParent())) {
+    for (CalleeSavedInfo &Info : CSI)
+      Info.setRestored(true);
+    return true;
+  }
+
   if (CSI.empty())
     return false;
 
@@ -2971,6 +3232,9 @@ checkNumAlignedDPRCS2Regs(MachineFunction &MF, BitVector &SavedRegs) {
 }
 
 bool ARMFrameLowering::enableShrinkWrapping(const MachineFunction &MF) const {
+  if (MF.getFunction().hasFnAttribute("zeroize-stack"))
+    return false;
+
   // For CMSE entry functions, we want to save the FPCXT_NS immediately
   // upon function entry (resp. restore it immediately before return)
   if (STI.hasV8_1MMainlineOps() &&
@@ -3593,6 +3857,13 @@ void ARMFrameLowering::updateLRRestored(MachineFunction &MF) {
 void ARMFrameLowering::processFunctionBeforeFrameFinalized(
     MachineFunction &MF, RegScavenger *RS) const {
   TargetFrameLowering::processFunctionBeforeFrameFinalized(MF, RS);
+  if (MF.getFunction().hasFnAttribute("zeroize-stack") &&
+      !MF.getFunction().hasFnAttribute(Attribute::Naked) &&
+      !supportsZeroizeStack(MF))
+    MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+        MF.getFunction(), "ARM stack clearing does not support this frame, "
+                          "calling convention, or exit"});
+
   updateLRRestored(MF);
 }
 
