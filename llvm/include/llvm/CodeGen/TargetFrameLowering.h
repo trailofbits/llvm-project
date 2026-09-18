@@ -267,6 +267,32 @@ public:
                                 MachineBasicBlock::iterator InsertPt,
                                 BitVector &ScratchRegs) const {}
 
+  /// Whether this target implements the "zeroize-flags" request for MF.
+  /// Unsupported requests are errors, including unsupported exit protocols.
+  virtual bool supportsZeroizeFlags(const MachineFunction &MF) const {
+    return false;
+  }
+
+  /// Plan the flags step at an exit, before any clearing is emitted. Declare
+  /// dead, unreserved scratch registers to be zeroed by ClearRegisters. The
+  /// flags emitter receives these registers zeroed and must leave them zero.
+  /// Diagnose an unsupported exit and return false rather than emit a partial
+  /// sequence. This hook must not insert instructions or change the CFG.
+  virtual bool prepareZeroizeFlags(MachineBasicBlock &MBB,
+                                   MachineBasicBlock::iterator InsertPt,
+                                   BitVector &ScratchRegs) const {
+    return false;
+  }
+
+  /// Clear non-allocatable condition state after stack and register clearing.
+  /// ScratchRegs contains the zero sources selected by prepareZeroizeFlags.
+  /// Add cleared state to ClearedRegs for exit retention. The target must also
+  /// preserve ordering through late scheduling and instruction expansion.
+  virtual void emitZeroizeFlags(MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator InsertPt,
+                                const BitVector &ScratchRegs,
+                                BitVector &ClearedRegs) const {}
+
   /// getClearedRegExitAnchor - The register to name on the instruction control
   /// leaves through, to record that the clearing sequence wrote \p Reg there
   /// and that a pass which removes instructions with no live definitions must
