@@ -230,6 +230,12 @@ public:
     return false;
   }
 
+  /// Whether emitZeroCallUsedRegs avoids widening a clear into an unrequested
+  /// sibling register. Such targets do not need PEI's legacy sibling exclusion.
+  virtual bool zeroCallUsedRegsPreservesUnrequestedSiblings() const {
+    return false;
+  }
+
   /// emitZeroCallUsedRegs - Zeros out call used registers. Only called on
   /// targets whose supportsZeroCallUsedRegs returns true.
   ///
