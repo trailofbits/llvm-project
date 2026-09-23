@@ -122,8 +122,8 @@ define i32 @all_regs(i32 %x) "cmse_nonsecure_entry" "zero-call-used-regs"="all" 
 ; FP:       @ %bb.0:
 ; FP-NEXT:    movs r1, #0
 ; FP-NEXT:    mrs r12, control
-; FP-NEXT:    tst.w r12, #8
 ; FP-NEXT:    vmov d0, r1, r1
+; FP-NEXT:    tst.w r12, #8
 ; FP-NEXT:    vmov d1, r1, r1
 ; FP-NEXT:    vmov d2, r1, r1
 ; FP-NEXT:    vmov d3, r1, r1
@@ -138,17 +138,8 @@ define i32 @all_regs(i32 %x) "cmse_nonsecure_entry" "zero-call-used-regs"="all" 
 ; FP-NEXT:    bic r12, r12, #4026531840
 ; FP-NEXT:    vmsr fpscr, r12
 ; FP-NEXT:    mov.w r12, #0
-; FP-NEXT:    vmov d0, r12, r12
-; FP-NEXT:    vmov d1, r12, r12
-; FP-NEXT:    vmov d2, r12, r12
-; FP-NEXT:    vmov d3, r12, r12
-; FP-NEXT:    vmov d4, r12, r12
-; FP-NEXT:    vmov d5, r12, r12
-; FP-NEXT:    vmov d6, r12, r12
-; FP-NEXT:    vmov d7, r12, r12
 ; FP-NEXT:  .LBB1_2:
 ; FP-NEXT:    mov.w r12, #0
-; FP-NEXT:    mov r1, r12
 ; FP-NEXT:    mov r2, r12
 ; FP-NEXT:    mov r3, r12
 ; FP-NEXT:    msr apsr_nzcvq, r12
@@ -174,17 +165,8 @@ define i32 @all_regs(i32 %x) "cmse_nonsecure_entry" "zero-call-used-regs"="all" 
 ; FP-O0-NEXT:    bic r12, r12, #4026531840
 ; FP-O0-NEXT:    vmsr fpscr, r12
 ; FP-O0-NEXT:    mov.w r12, #0
-; FP-O0-NEXT:    vmov d0, r12, r12
-; FP-O0-NEXT:    vmov d1, r12, r12
-; FP-O0-NEXT:    vmov d2, r12, r12
-; FP-O0-NEXT:    vmov d3, r12, r12
-; FP-O0-NEXT:    vmov d4, r12, r12
-; FP-O0-NEXT:    vmov d5, r12, r12
-; FP-O0-NEXT:    vmov d6, r12, r12
-; FP-O0-NEXT:    vmov d7, r12, r12
 ; FP-O0-NEXT:  .LBB1_2:
 ; FP-O0-NEXT:    mov.w r12, #0
-; FP-O0-NEXT:    mov r1, r12
 ; FP-O0-NEXT:    mov r2, r12
 ; FP-O0-NEXT:    mov r3, r12
 ; FP-O0-NEXT:    msr apsr_nzcvq, r12
@@ -307,8 +289,8 @@ define i64 @all_i64(i64 %x) "cmse_nonsecure_entry" "zero-call-used-regs"="all" {
 ; FP:       @ %bb.0:
 ; FP-NEXT:    movs r2, #0
 ; FP-NEXT:    mrs r12, control
-; FP-NEXT:    tst.w r12, #8
 ; FP-NEXT:    vmov d0, r2, r2
+; FP-NEXT:    tst.w r12, #8
 ; FP-NEXT:    vmov d1, r2, r2
 ; FP-NEXT:    vmov d2, r2, r2
 ; FP-NEXT:    vmov d3, r2, r2
@@ -323,17 +305,8 @@ define i64 @all_i64(i64 %x) "cmse_nonsecure_entry" "zero-call-used-regs"="all" {
 ; FP-NEXT:    bic r12, r12, #4026531840
 ; FP-NEXT:    vmsr fpscr, r12
 ; FP-NEXT:    mov.w r12, #0
-; FP-NEXT:    vmov d0, r12, r12
-; FP-NEXT:    vmov d1, r12, r12
-; FP-NEXT:    vmov d2, r12, r12
-; FP-NEXT:    vmov d3, r12, r12
-; FP-NEXT:    vmov d4, r12, r12
-; FP-NEXT:    vmov d5, r12, r12
-; FP-NEXT:    vmov d6, r12, r12
-; FP-NEXT:    vmov d7, r12, r12
 ; FP-NEXT:  .LBB3_2:
 ; FP-NEXT:    mov.w r12, #0
-; FP-NEXT:    mov r2, r12
 ; FP-NEXT:    mov r3, r12
 ; FP-NEXT:    msr apsr_nzcvq, r12
 ; FP-NEXT:    bxns lr
@@ -358,17 +331,8 @@ define i64 @all_i64(i64 %x) "cmse_nonsecure_entry" "zero-call-used-regs"="all" {
 ; FP-O0-NEXT:    bic r12, r12, #4026531840
 ; FP-O0-NEXT:    vmsr fpscr, r12
 ; FP-O0-NEXT:    mov.w r12, #0
-; FP-O0-NEXT:    vmov d0, r12, r12
-; FP-O0-NEXT:    vmov d1, r12, r12
-; FP-O0-NEXT:    vmov d2, r12, r12
-; FP-O0-NEXT:    vmov d3, r12, r12
-; FP-O0-NEXT:    vmov d4, r12, r12
-; FP-O0-NEXT:    vmov d5, r12, r12
-; FP-O0-NEXT:    vmov d6, r12, r12
-; FP-O0-NEXT:    vmov d7, r12, r12
 ; FP-O0-NEXT:  .LBB3_2:
 ; FP-O0-NEXT:    mov.w r12, #0
-; FP-O0-NEXT:    mov r2, r12
 ; FP-O0-NEXT:    mov r3, r12
 ; FP-O0-NEXT:    msr apsr_nzcvq, r12
 ; FP-O0-NEXT:    bxns lr
