@@ -616,6 +616,26 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     for (unsigned n = 0; n != 7; ++n)
       Reserved.set(X86::FP0 + n);
 
+  // Unavailable register files cannot hold this function's data. Reserve
+  // them so call-used register clearing does not request unavailable writes.
+  // ISel also excludes MMX under soft float.
+  if (!ST.hasMMX() || ST.useSoftFloat())
+    for (unsigned n = 0; n != 8; ++n)
+      Reserved.set(X86::MM0 + n);
+
+  // XMM0-15 and their YMM and ZMM aliases: nothing writes any part of them
+  // without SSE. XMM16-31 are reserved below without AVX-512.
+  if (!ST.hasSSE1())
+    for (unsigned n = 0; n != 16; ++n)
+      for (MCRegAliasIterator AI(X86::XMM0 + n, this, true); AI.isValid(); ++AI)
+        Reserved.set(*AI);
+
+  // Mask registers and their pairs: mask instructions are AVX-512.
+  if (!ST.hasAVX512())
+    for (unsigned n = 0; n != 8; ++n)
+      for (MCRegAliasIterator AI(X86::K0 + n, this, true); AI.isValid(); ++AI)
+        Reserved.set(*AI);
+
   // Reserve the registers that only exist in 64-bit mode.
   if (!Is64Bit) {
     // These 8-bit registers are part of the x86-64 extension even though their
