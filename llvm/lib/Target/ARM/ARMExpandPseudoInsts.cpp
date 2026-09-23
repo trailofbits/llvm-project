@@ -2343,6 +2343,18 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
       return true;
     }
     case ARM::tBXNS_RET: {
+      // R12 cannot hold a return value. Register clearing can add an implicit
+      // use to retain its zero or preserve the authentication code until this
+      // expansion. Remove that use before computing live-ins and clearing
+      // sets: CMSE expansion borrows R12, so it must be zeroed afterwards.
+      int ZeroR12Op = MI.findRegisterUseOperandIdx(ARM::R12, /*TRI=*/nullptr);
+      bool ZeroR12 = ZeroR12Op != -1;
+      if (ZeroR12) {
+        assert(MI.getOperand(ZeroR12Op).isImplicit() &&
+               "R12 is not a CMSE return-value register");
+        MI.removeOperand(ZeroR12Op);
+      }
+
       // For v8.0-M.Main we need to authenticate LR before clearing FPRs, which
       // uses R12 as a scratch register.
       if (!STI->hasV8_1MMainlineOps() && AFI->shouldSignReturnAddress())
@@ -2369,8 +2381,18 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
       SmallVector<unsigned, 5> ClearRegs;
       determineGPRegsToClear(
           *MBBI, {ARM::R0, ARM::R1, ARM::R2, ARM::R3, ARM::R12}, ClearRegs);
+      // CLRM writes zero on v8.1-M. Earlier subtargets copy LR instead, so
+      // leave R12 out of that copy sequence and explicitly zero it below.
+      if (ZeroR12 && !STI->hasV8_1MMainlineOps())
+        llvm::erase(ClearRegs, ARM::R12);
       CMSEClearGPRegs(AfterBB, AfterBB.end(), MBBI->getDebugLoc(), ClearRegs,
                       ARM::LR);
+
+      if (ZeroR12 && !STI->hasV8_1MMainlineOps()) {
+        DebugLoc DL = MI.getDebugLoc();
+        TII->buildClearRegister(ARM::R12, AfterBB, AfterBB.end(), DL,
+                                /*AllowSideEffects=*/false);
+      }
 
       MachineInstrBuilder NewMI =
           BuildMI(AfterBB, AfterBB.end(), MBBI->getDebugLoc(),
@@ -2379,6 +2401,8 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
               .add(predOps(ARMCC::AL));
       for (const MachineOperand &Op : MI.operands())
         NewMI->addOperand(Op);
+      if (ZeroR12)
+        NewMI.addReg(ARM::R12, RegState::Implicit);
       MI.eraseFromParent();
       return true;
     }

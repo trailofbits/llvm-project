@@ -1,0 +1,159 @@
+# RUN: llc -mtriple=armv7-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mtriple=armebv7-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s
+
+# The scalar components must be selected even when only the pair is an
+# instruction operand. Do not make GPRPair a general-purpose register class.
+--- |
+  define void @pair_def() "zero-call-used-regs"="used-gpr" { ret void }
+  define void @pair_use() "zero-call-used-regs"="used-gpr" { ret void }
+  define void @scalar_arguments(i64 %x, ptr %p) "zero-call-used-regs"="used-gpr-arg" { ret void }
+  define void @pair_argument(i64 %x, ptr %p) "zero-call-used-regs"="used-gpr-arg" { ret void }
+  define i32 @return_half(i64 %x, ptr %p) "zero-call-used-regs"="used-gpr-arg" { ret i32 0 }
+  define i64 @return_pair(ptr %p) "zero-call-used-regs"="used-gpr" { ret i64 0 }
+  define void @callee_saved() "zero-call-used-regs"="used-gpr" { ret void }
+  define void @one_argument_half(i64 %x) "zero-call-used-regs"="used-gpr-arg" { ret void }
+  define void @implicit_pair() "zero-call-used-regs"="used-gpr" { ret void }
+  define void @reserved_component() "zero-call-used-regs"="used-gpr" { ret void }
+...
+---
+name: pair_def
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2, $lr
+    dead $r0_r1 = LDREXD $r2, 14, $noreg
+    BX_RET 14, $noreg, implicit $lr
+# CHECK-LABEL: name: pair_def
+# CHECK: $r0_r1 = LDREXD
+# CHECK-NEXT: $r0 = MOVi 0,
+# CHECK-NEXT: $r1 = MOVi 0,
+# CHECK-NEXT: $r2 = MOVi 0,
+# CHECK-NEXT: BX_RET
+...
+---
+name: pair_use
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0_r1, $r2, $lr
+    dead early-clobber $r3 = STREXD $r0_r1, $r2, 14, $noreg
+    BX_RET 14, $noreg, implicit $lr
+# CHECK-LABEL: name: pair_use
+# CHECK: $r3 = STREXD
+# CHECK-NEXT: $r0 = MOVi 0,
+# CHECK-NEXT: $r1 = MOVi 0,
+# CHECK-NEXT: $r2 = MOVi 0,
+# CHECK-NEXT: $r3 = MOVi 0,
+# CHECK-NEXT: BX_RET
+...
+---
+name: scalar_arguments
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0, $r1, $r2, $lr
+    dead early-clobber $r3 = STREXD $r0_r1, $r2, 14, $noreg
+    BX_RET 14, $noreg, implicit $lr
+# CHECK-LABEL: name: scalar_arguments
+# CHECK: $r3 = STREXD
+# CHECK-NEXT: $r0 = MOVi 0,
+# CHECK-NEXT: $r1 = MOVi 0,
+# CHECK-NEXT: $r2 = MOVi 0,
+# CHECK-NEXT: BX_RET
+...
+---
+name: pair_argument
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0_r1, $r2, $lr
+    dead early-clobber $r3 = STREXD $r0_r1, $r2, 14, $noreg
+    BX_RET 14, $noreg, implicit $lr
+# CHECK-LABEL: name: pair_argument
+# CHECK: $r3 = STREXD
+# CHECK-NEXT: $r0 = MOVi 0,
+# CHECK-NEXT: $r1 = MOVi 0,
+# CHECK-NEXT: $r2 = MOVi 0,
+# CHECK-NEXT: BX_RET
+...
+---
+name: return_half
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0_r1, $r2, $lr
+    $r0_r1 = LDREXD $r2, 14, $noreg
+    BX_RET 14, $noreg, implicit $lr, implicit $r0
+# CHECK-LABEL: name: return_half
+# CHECK: $r0_r1 = LDREXD
+# CHECK-NEXT: $r1 = MOVi 0,
+# CHECK-NEXT: $r2 = MOVi 0,
+# CHECK-NEXT: BX_RET {{.*}}implicit $r0
+...
+---
+name: return_pair
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2, $lr
+    $r0_r1 = LDREXD $r2, 14, $noreg
+    BX_RET 14, $noreg, implicit $lr, implicit $r0_r1
+# CHECK-LABEL: name: return_pair
+# CHECK: $r0_r1 = LDREXD
+# CHECK-NEXT: $r2 = MOVi 0,
+# CHECK-NEXT: BX_RET {{.*}}implicit $r0_r1
+...
+---
+name: callee_saved
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r4_r5, $r2, $lr
+    dead early-clobber $r3 = STREXD $r4_r5, $r2, 14, $noreg
+    BX_RET 14, $noreg, implicit $lr
+# CHECK-LABEL: name: callee_saved
+# CHECK: $r3 = STREXD
+# CHECK-NEXT: $r2 = MOVi 0,
+# CHECK-NEXT: $r3 = MOVi 0,
+# CHECK-NEXT: BX_RET
+...
+---
+name: one_argument_half
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0_r1, $lr
+    dead $r2 = MOVr $r0, 14, $noreg, $noreg
+    BX_RET 14, $noreg, implicit $lr
+# CHECK-LABEL: name: one_argument_half
+# CHECK: $r2 = MOVr
+# CHECK-NEXT: $r0 = MOVi 0,
+# CHECK-NEXT: BX_RET
+...
+---
+name: implicit_pair
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $lr
+    INLINEASM &"", 1, implicit-def $r0_r1
+    BX_RET 14, $noreg, implicit $lr
+# CHECK-LABEL: name: implicit_pair
+# CHECK: INLINEASM
+# CHECK-NEXT: $r0 = MOVi 0,
+# CHECK-NEXT: $r1 = MOVi 0,
+# CHECK-NEXT: BX_RET
+...
+---
+name: reserved_component
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r12, $sp, $lr
+    INLINEASM &"", 1, implicit $r12_sp
+    BX_RET 14, $noreg, implicit $lr
+# CHECK-LABEL: name: reserved_component
+# CHECK: INLINEASM
+# CHECK-NEXT: $r12 = MOVi 0,
+# CHECK-NEXT: BX_RET
+...
