@@ -2666,6 +2666,10 @@ fn -> other_fn -> other_fn ; fn is norecurse
 
     Registers needed by the exit instruction, callee-saved registers, and the target's return-address register are excluded from clearing.
 
+    Emitted clears remain live through late machine optimizations. With LVI
+    return hardening, a cleared register may subsequently hold the return address
+    used by the hardened return sequence.
+
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
     returning, so that data the frame held is not left readable to whatever

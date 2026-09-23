@@ -114,6 +114,9 @@ Makes programs 10x faster by doing Special New Thing.
 
 ### Changes to the X86 Backend
 
+* LVI return hardening can reuse registers kept live solely to preserve emitted
+  clears.
+
 * `llvm.zeroize` now lowers to a clearing sequence on x86-64 (LP64). Other
   subtargets, segment-relative and 32-bit-pointer address spaces, and counts
   that cannot be shown to fit are reported as unsupported rather than
@@ -126,6 +129,8 @@ Makes programs 10x faster by doing Special New Thing.
 ### Changes to the C API
 
 ### Changes to the CodeGen infrastructure
+
+* Emitted register clears remain live through late machine optimizations.
 
 ### Changes to the Metadata Info
 

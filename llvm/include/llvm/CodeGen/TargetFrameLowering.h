@@ -230,17 +230,26 @@ public:
     return false;
   }
 
-  /// emitZeroCallUsedRegs - Zeros out call used registers. Only called on
-  /// targets whose supportsZeroCallUsedRegs returns true.
+  /// Keep clearing uses in a FAKE_USE before the exit so late exit rewrites
+  /// can reuse scratch registers without discarding genuine return operands.
+  virtual bool useFakeUseForZeroCallUsedRegs(const MachineInstr &ExitMI) const {
+    return false;
+  }
+
+  /// Zero call-used registers; supportsZeroCallUsedRegs() must return true.
   ///
-  /// \p MBBI is where to emit, and is not the target's to choose: register
-  /// clearing is one step of an ordered sequence run at each exit of the
-  /// function, and steps that pick their own positions cannot be ordered
-  /// against each other. See the comment on ClearingSequence in
-  /// PrologEpilogInserter.cpp for what the order is. It is the first
-  /// terminator of \p MBB at an exit that leaves through one, which is where
-  /// this has always emitted, and the call itself at an exit that leaves
-  /// through a call.
+  /// Emit at \p MBBI and leave it valid: the first terminator for terminating
+  /// exits, or the exit call otherwise. This preserves PEI's ClearingSequence
+  /// ordering.
+  ///
+  /// PEI clears dead flags on all inserted allocatable physical defs, including
+  /// target-selected scratch. It adds missing exact, non-undef exit uses as
+  /// implicit operands, optionally on a separate FAKE_USE as requested by
+  /// useFakeUseForZeroCallUsedRegs(). These need not represent return values.
+  ///
+  /// Exit rewrites must preserve these uses until no remaining pass can alter
+  /// clears based on liveness. AArch64 PAC return expansion drops them after
+  /// the last machine copy propagation pass in the standard pipeline.
   virtual void emitZeroCallUsedRegs(BitVector RegsToZero,
                                     MachineBasicBlock &MBB,
                                     MachineBasicBlock::iterator MBBI,
