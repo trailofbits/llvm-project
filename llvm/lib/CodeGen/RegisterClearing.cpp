@@ -8,9 +8,14 @@
 
 #include "RegisterClearing.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/iterator_range.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DiagnosticInfo.h"
@@ -81,17 +86,70 @@ static bool validateScratchRegs(const BitVector &Regs,
   return true;
 }
 
-bool llvm::emitZeroCallUsedRegsWithScratch(BitVector RegsToZero,
-                                           const BitVector &ScratchRegs,
-                                           MachineBasicBlock &MBB,
-                                           MachineBasicBlock::iterator InsertPt,
-                                           RegScavenger *RS) {
+/// Keep allocatable physical defs, including target scratch, live through the
+/// clearing sequence using the exit or a target-requested FAKE_USE.
+static MachineInstr *
+keepClearedRegsLive(iterator_range<MachineBasicBlock::iterator> Sequence,
+                    MachineInstr &ExitMI, const TargetRegisterInfo &TRI,
+                    const TargetFrameLowering &TFI) {
+  MachineFunction &MF = *ExitMI.getMF();
+  const BitVector Allocatable = TRI.getAllocatableSet(MF);
+  const bool UseFakeUse = TFI.useFakeUseForZeroCallUsedRegs(ExitMI);
+  MachineInstr *UseMI = &ExitMI;
+
+  // Subregister uses keep only part of a wider def live; undef keeps none.
+  BitVector ExitUses(TRI.getNumRegs());
+  for (const MachineOperand &MO : ExitMI.operands())
+    if (MO.isReg() && MO.isUse() && MO.getReg().isPhysical() && !MO.isUndef())
+      ExitUses.set(MO.getReg());
+
+  for (MachineInstr &MI : Sequence) {
+    for (MachineOperand &MO : MI.operands()) {
+      if (!MO.isReg() || !MO.isDef() || !MO.getReg().isPhysical())
+        continue;
+      MCRegister Reg = MO.getReg().asMCReg();
+      if (!Allocatable.test(Reg))
+        continue;
+      MO.setIsDead(false);
+      if (!ExitUses.test(Reg)) {
+        if (UseMI == &ExitMI && UseFakeUse) {
+          const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
+          UseMI =
+              BuildMI(*ExitMI.getParent(), ExitMI.getIterator(),
+                      ExitMI.getDebugLoc(), TII.get(TargetOpcode::FAKE_USE));
+          MF.setHasFakeUses(true);
+        }
+        UseMI->addOperand(MF, MachineOperand::CreateReg(Reg, /*isDef=*/false,
+                                                        /*isImp=*/true));
+        ExitUses.set(Reg);
+      }
+    }
+  }
+  return UseMI;
+}
+
+bool llvm::emitZeroCallUsedRegsWithScratch(
+    BitVector RegsToZero, const BitVector &ScratchRegs, MachineBasicBlock &MBB,
+    MachineBasicBlock::iterator &InsertPt, MachineInstr &ExitMI,
+    RegScavenger *RS) {
   const MachineFunction &MF = *MBB.getParent();
   const TargetFrameLowering &TFI = *MF.getSubtarget().getFrameLowering();
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
   if (!validateScratchRegs(ScratchRegs, MBB, InsertPt, TFI, TRI))
     return false;
   RegsToZero |= ScratchRegs;
+
+  // Anchor the inserted range to its predecessor; MBB.begin() can change.
+  const bool AtBegin = InsertPt == MBB.begin();
+  MachineBasicBlock::iterator Before =
+      AtBegin ? MBB.end() : std::prev(InsertPt);
+
   TFI.emitZeroCallUsedRegs(RegsToZero, MBB, InsertPt, RS);
+
+  MachineBasicBlock::iterator First = AtBegin ? MBB.begin() : std::next(Before);
+  MachineInstr *UseMI =
+      keepClearedRegsLive(make_range(First, InsertPt), ExitMI, TRI, TFI);
+  if (UseMI != &ExitMI)
+    InsertPt = UseMI->getIterator();
   return true;
 }

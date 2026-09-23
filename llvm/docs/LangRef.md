@@ -2675,6 +2675,10 @@ fn -> other_fn -> other_fn ; fn is norecurse
     a live `AL` return can coexist with clearing `AH` and the remaining upper
     bits of `RAX`.
 
+    Emitted clears remain live through late machine optimizations. Return
+    hardening may subsequently reuse a cleared register for the return address
+    (X86 LVI) or an authentication check (AArch64 tail calls).
+
     On X86, vector selection follows the function's enabled target features:
     SSE enables the 128-bit `XMM` width, AVX adds the 256-bit `YMM` width, and
     AVX-512 adds the 512-bit `ZMM` width. Vector registers numbered 8 through 15

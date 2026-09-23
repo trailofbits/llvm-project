@@ -633,6 +633,14 @@ bool X86FrameLowering::isZeroCallUsedRegsScratchReg(const MachineFunction &MF,
                        : X86::GR32RegClass.contains(Reg);
 }
 
+bool X86FrameLowering::useFakeUseForZeroCallUsedRegs(
+    const MachineInstr &ExitMI) const {
+  if (!STI.is64Bit() || !STI.useLVIControlFlowIntegrity())
+    return false;
+  return ExitMI.getOpcode() == X86::RET64 ||
+         (ExitMI.getOpcode() == X86::RET && ExitMI.getOperand(0).getImm() == 0);
+}
+
 /// Whether an instruction in \p MF writes an MMX register. An MMX instruction
 /// marks every x87 slot valid, and a push onto that stack overflows.
 static bool functionWritesMMX(const MachineFunction &MF) {
