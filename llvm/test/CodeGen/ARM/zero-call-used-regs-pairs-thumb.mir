@@ -1,0 +1,26 @@
+# RUN: llc -mtriple=thumbv6m-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=THUMB1
+# RUN: llc -mtriple=thumbv7m-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=THUMB2
+
+# An implicit tuple clobber must select its scalar GPRs in Thumb modes too.
+--- |
+  define void @implicit_pair() "zero-call-used-regs"="used-gpr" { ret void }
+...
+---
+name: implicit_pair
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $lr
+    INLINEASM &"", 1, implicit-def $r0_r1
+    tBX_RET 14, $noreg, implicit $lr
+# THUMB1-LABEL: name: implicit_pair
+# THUMB1: INLINEASM
+# THUMB1-NEXT: $r0, $cpsr = tMOVi8 0,
+# THUMB1-NEXT: $r1 = tMOVr $r0,
+# THUMB1-NEXT: tBX_RET
+# THUMB2-LABEL: name: implicit_pair
+# THUMB2: INLINEASM
+# THUMB2-NEXT: $r0 = t2MOVi 0,
+# THUMB2-NEXT: $r1 = t2MOVi 0,
+# THUMB2-NEXT: tBX_RET
+...
