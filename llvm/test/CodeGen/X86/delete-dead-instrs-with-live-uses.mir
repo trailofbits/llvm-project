@@ -1,4 +1,4 @@
-# RUN: llc -mtriple=i386-apple-ios9.0.0-simulator --frame-pointer=all -verify-machineinstrs -start-before=greedy -o - %s | FileCheck %s
+# RUN: llc -mtriple=i386-apple-ios9.0.0-simulator -mattr=+sse --frame-pointer=all -verify-machineinstrs -start-before=greedy -o - %s | FileCheck %s
 
 # The test used to fail with "Live segment doesn't end at a valid instruction"
 # See PR51655.
