@@ -193,6 +193,9 @@ features cannot lower the translation-unit ABI level;
 
 - All options of the `-fzero-call-used-regs` compiler flag are now allowed on RISC-V.
 
+- The `-fzero-call-used-regs` flag is now supported on 32-bit Arm targets,
+  including Thumb-1 and Thumb-2.
+
 ### Removed Compiler Flags
 
 ### Attribute Changes in Clang
