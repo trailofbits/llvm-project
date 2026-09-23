@@ -10868,10 +10868,12 @@ void X86InstrInfo::buildClearRegister(Register Reg, MachineBasicBlock &MBB,
   const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();
   const TargetRegisterInfo &TRI = getRegisterInfo();
 
-  if (ST.hasMMX() && X86::VR64RegClass.contains(Reg))
-    // FIXME: Should we ignore MMX registers?
-    return;
-
+  // This clears one register with one instruction. The MMX registers are the
+  // significands of the x87 register file and are cleared with it, by the
+  // stack sequence in X86FrameLowering::emitZeroCallUsedRegs; that emitter
+  // sorts every register before asking here, and a register with no
+  // instruction to clear it is the emitter's to report, not this function's
+  // to drop.
   if (TRI.isGeneralPurposeRegister(MF, Reg)) {
     // Convert register to the 32-bit version. Both 'movl' and 'xorl' clear the
     // upper bits of a 64-bit register automagically.
@@ -10884,33 +10886,32 @@ void X86InstrInfo::buildClearRegister(Register Reg, MachineBasicBlock &MBB,
       BuildMI(MBB, Iter, DL, get(X86::XOR32rr), Reg)
           .addReg(Reg, RegState::Undef)
           .addReg(Reg, RegState::Undef);
-  } else if (X86::VR128RegClass.contains(Reg)) {
-    // XMM#
-    if (!ST.hasSSE1())
-      return;
-
-    BuildMI(MBB, Iter, DL, get(X86::V_SET0), Reg);
-  } else if (X86::VR256RegClass.contains(Reg)) {
-    // YMM#
-    if (!ST.hasAVX())
-      return;
-
-    BuildMI(MBB, Iter, DL, get(X86::V_SET0), TRI.getSubReg(Reg, X86::sub_xmm));
-  } else if (X86::VR512RegClass.contains(Reg)) {
-    // ZMM#
-    if (!ST.hasAVX512())
-      return;
-
-    BuildMI(MBB, Iter, DL, get(X86::AVX512_128_SET0),
-            TRI.getSubReg(Reg, X86::sub_xmm));
-  } else if (X86::VK1RegClass.contains(Reg) || X86::VK2RegClass.contains(Reg) ||
-             X86::VK4RegClass.contains(Reg) || X86::VK8RegClass.contains(Reg) ||
-             X86::VK16RegClass.contains(Reg)) {
-    if (!ST.hasVLX())
-      return;
-
+  } else if (X86::VR128XRegClass.contains(Reg) ||
+             X86::VR256XRegClass.contains(Reg) ||
+             X86::VR512RegClass.contains(Reg)) {
+    // XMM#, YMM#, ZMM#: clear the XMM lane. A VEX or EVEX encoded xor zeroes
+    // the bits above the lane, and without AVX nothing can have written them.
+    // XMM16-31 have only EVEX encodings; AVX512_128_SET0 picks one that the
+    // subtarget has, with or without VLX.
+    Register Lane = X86::VR128XRegClass.contains(Reg)
+                        ? Reg
+                        : Register(TRI.getSubReg(Reg, X86::sub_xmm));
+    assert(ST.hasSSE1() && "vector register on a subtarget without SSE");
+    unsigned Op = X86::V_SET0;
+    if (TRI.getEncodingValue(Lane) >= 16) {
+      assert(ST.hasAVX512() && "XMM16-31 on a subtarget without AVX-512");
+      Op = X86::AVX512_128_SET0;
+    }
+    BuildMI(MBB, Iter, DL, get(Op), Lane);
+  } else if (X86::VK1RegClass.contains(Reg)) {
+    // K#: every mask class holds the same eight registers. KXORW zeroes the
+    // bits above 16 as well, so it clears the whole register without BWI.
+    assert(ST.hasAVX512() && "mask register on a subtarget without AVX-512");
     unsigned Op = ST.hasBWI() ? X86::KSET0Q : X86::KSET0W;
     BuildMI(MBB, Iter, DL, get(Op), Reg);
+  } else {
+    llvm_unreachable("no clearing instruction for this register; "
+                     "emitZeroCallUsedRegs sorts the registers first");
   }
 }
 
