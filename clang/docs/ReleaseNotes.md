@@ -211,6 +211,10 @@ features cannot lower the translation-unit ABI level;
   set cannot write VFP registers, so values left there by ARM or Thumb-2
   callees survive the return on cores such as the ARM1176JZF-S.
 
+- Clears emitted for `-fzero-call-used-regs` and the `zero_call_used_regs`
+  attribute are preserved through late machine optimizations. X86 LVI return
+  hardening can still reuse available scratch registers after clearing.
+
 ### Removed Compiler Flags
 
 ### Attribute Changes in Clang

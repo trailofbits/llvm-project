@@ -16,13 +16,17 @@
 namespace llvm {
 class RegScavenger;
 
-/// Add validated scratch declarations to the exit's filtered register set and
-/// emit the clear. The caller must check supportsZeroCallUsedRegs first.
-/// Scratch declarations are per exit and independent of the function's mode.
-/// Return false and diagnose an invalid declaration without emitting a clear.
+/// Validate \p ScratchRegs, merge them into \p RegsToZero, and emit at
+/// \p InsertPt. Keep all emitted allocatable physical defs live through
+/// clearing, including target scratch. Scratch declarations are per exit,
+/// regardless of clearing mode. The caller must check
+/// supportsZeroCallUsedRegs(). If the target requests a FAKE_USE, move \p
+/// InsertPt before it so later clearing steps remain covered by its uses.
+/// Diagnose invalid scratch and return false without emitting a clear.
 LLVM_ABI bool emitZeroCallUsedRegsWithScratch(
     BitVector RegsToZero, const BitVector &ScratchRegs, MachineBasicBlock &MBB,
-    MachineBasicBlock::iterator InsertPt, RegScavenger *RS);
+    MachineBasicBlock::iterator &InsertPt, MachineInstr &ExitMI,
+    RegScavenger *RS);
 
 } // namespace llvm
 

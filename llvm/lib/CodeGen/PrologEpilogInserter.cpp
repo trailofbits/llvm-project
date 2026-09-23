@@ -259,8 +259,8 @@ class PEIImpl {
       MachineFunction &MF, BitVector &CandidateRegsToZero);
   void emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
                         MachineBasicBlock &MBB,
-                        MachineBasicBlock::iterator InsertPt,
-                        BitVector &ScratchRegs);
+                        MachineBasicBlock::iterator &InsertPt,
+                        MachineInstr &ExitMI, BitVector &ScratchRegs);
   void diagnoseIgnoredZeroizeRequestsOnNakedFunction(MachineFunction &MF);
 
 public:
@@ -1592,7 +1592,7 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
     for (ClearingStep Step : ClearingSequence) {
       ClearingDisposition D = Plan.dispositionOf(Step);
       if (D == ClearingDisposition::Emit)
-        emitClearingStep(Step, Plan, MBB, InsertPt, ScratchRegs);
+        emitClearingStep(Step, Plan, MBB, InsertPt, *ExitMI, ScratchRegs);
       if (PrintClearingSequence)
         OS << " " << getClearingStepName(Step) << "="
            << getClearingDispositionName(D);
@@ -1617,12 +1617,12 @@ void PEIImpl::insertClearingSequences(MachineFunction &MF) {
     OS << "end clearing sequence for function '" << MF.getName() << "'\n";
 }
 
-/// Emit one clearing step at \p InsertPt. Earlier steps add their scratch
-/// registers to \p ScratchRegs; the register clear validates and clears them.
+/// Emit \p Step at \p InsertPt. Register clearing includes earlier steps'
+/// \p ScratchRegs and keeps all cleared registers live through later steps.
 void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
                                MachineBasicBlock &MBB,
-                               MachineBasicBlock::iterator InsertPt,
-                               BitVector &ScratchRegs) {
+                               MachineBasicBlock::iterator &InsertPt,
+                               MachineInstr &ExitMI, BitVector &ScratchRegs) {
   MachineFunction &MF = *MBB.getParent();
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
 
@@ -1639,7 +1639,7 @@ void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
     // Add scratch after mode filtering: these registers were dirtied by the
     // clearing sequence and need not have been used by the function.
     emitZeroCallUsedRegsWithScratch(std::move(RegsToZero), ScratchRegs, MBB,
-                                    InsertPt, RS);
+                                    InsertPt, ExitMI, RS);
     break;
   }
 
