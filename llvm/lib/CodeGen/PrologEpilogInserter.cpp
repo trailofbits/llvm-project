@@ -1504,22 +1504,14 @@ getClearingInsertPoint(MachineBasicBlock &MBB, MachineInstr &ExitMI) {
   return MachineBasicBlock::iterator(ExitMI);
 }
 
-/// The registers to clear at this exit, from the candidates \p Candidates the
-/// mode allows. What an exit still needs is the exit's to decide, not the
-/// function's. The sequence is emitted at \p InsertPt, so what runs after it is
-/// the rest of \p MBB: a return and its return-value registers, a tail call and
-/// its outgoing-argument registers, or an unwind-resume call and the argument
-/// register holding the exception object. Those are spared; the rest of the
-/// mode's set is dead here and cleared.
-///
-/// Asking the exit is what makes the answer per-exit. The old function-wide set
-/// took the union over the returns instead, leaving each return's live-out
-/// registers uncleared at every other return, dead and holding a value.
+/// Filter \p Candidates using register operands from \p InsertPt to the end of
+/// this exit block. Per-exit filtering lets registers needed by another exit
+/// be cleared here. Targets must preserve unmodeled state and live units
+/// touched by widened writes.
 static BitVector computeRegsToClearAtExit(
     const BitVector &Candidates, const MachineBasicBlock &MBB,
     MachineBasicBlock::const_iterator InsertPt, const TargetRegisterInfo &TRI) {
-  // Only the rest of the block runs after the sequence, and only because the
-  // block does not continue in the function; getEnforceableExit() ensures that.
+  // getEnforceableExit() guarantees that execution leaves the function here.
   assert(MBB.succ_empty() && "exit block continues in the function");
 
   BitVector RegsToZero = Candidates;
@@ -1533,18 +1525,10 @@ static BitVector computeRegsToClearAtExit(
       if (!Reg)
         continue;
 
-      // This picks up sibling registers (e.g. %al -> %ah).
-      // FIXME: mixing physical registers and register units is likely a bug,
-      // and it does over-spare (a dead sibling can survive a clear). Kept all
-      // the same: it also spares siblings a clear would widen into a live
-      // register (%ah into %al on x86), and no target-agnostic rule keeps both
-      // that and AArch64's independently-cleared register tuples correct.
-      if (MI.isReturn())
-        for (MCRegUnit Unit : TRI.regunits(Reg))
-          RegsToZero.reset(static_cast<unsigned>(Unit));
-
-      for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(Reg))
-        RegsToZero.reset(SReg);
+      // Leave disjoint siblings eligible (e.g. ARM S1 when S0 is live).
+      for (MCRegAliasIterator Alias(Reg, &TRI, /*IncludeSelf=*/true);
+           Alias.isValid(); ++Alias)
+        RegsToZero.reset(*Alias);
     }
   }
 
@@ -1783,19 +1767,23 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
             continue;
 
           MCRegister Reg = MO.getReg();
-          // TODO: Mark allocatable subregisters used as well. ARM pair operands
-          // such as R0_R1 must mark R0 and R1 so used-gpr can select the scalar
-          // components without classifying GPRPair as a general-purpose class.
-          // Add coverage for pair-only uses before enabling ARM register clearing.
-          if (AllocatableSet[Reg.id()])
-            UsedRegs.set(Reg.id());
+          if (!Reg)
+            continue;
+
+          // Include allocatable components even for nonallocatable tuples,
+          // e.g. R0 and R1 for ARM's R0_R1 operand.
+          for (MCPhysReg SubReg : TRI.subregs_inclusive(Reg))
+            if (AllocatableSet[SubReg])
+              UsedRegs.set(SubReg);
         }
       }
 
-  // Get a list of registers that are used.
+  // Track argument tuple components independently.
   BitVector LiveIns(TRI.getNumRegs());
   for (const MachineBasicBlock::RegisterMaskPair &LI : MF.front().liveins())
-    LiveIns.set(LI.PhysReg);
+    for (MCPhysReg Reg : TRI.subregs_inclusive(LI.PhysReg))
+      if (AllocatableSet[Reg])
+        LiveIns.set(Reg);
 
   CandidateRegsToZero.resize(TRI.getNumRegs());
   for (MCRegister Reg : AllocatableSet.set_bits()) {
@@ -1815,7 +1803,8 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
     if (OnlyArg) {
       if (OnlyUsed) {
         for (MCRegister LiveReg : LiveIns.set_bits()) {
-          if (TRI.regsOverlap(Reg, LiveReg))
+          // Widening to the argument tuple could select unused siblings.
+          if (TRI.isSubRegisterEq(Reg, LiveReg))
             CandidateRegsToZero.set(LiveReg);
         }
         continue;
@@ -1827,26 +1816,17 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
     CandidateRegsToZero.set(Reg.id());
   }
 
-  // Registers still needed where the sequence runs are taken out per exit, not
-  // here: doing it here means the union over the exits, which leaves a register
-  // one exit needs holding a value at every other one.
+  // Filter live operands per exit in computeRegsToClearAtExit().
 
-  // Callee-saved registers are the function's to preserve, though: one has to
-  // hold what the caller left in it wherever the function leaves, so no exit
-  // can clear it.
-  for (const MCPhysReg *CSRegs = TRI.getCalleeSavedRegs(&MF);
+  // Preserve callee-saved registers, including custom additions from call
+  // lowering recorded in MachineRegisterInfo.
+  for (const MCPhysReg *CSRegs = MF.getRegInfo().getCalleeSavedRegs();
        MCPhysReg CSReg = *CSRegs; ++CSRegs)
     for (MCRegister Reg : TRI.sub_and_superregs_inclusive(CSReg))
       CandidateRegsToZero.reset(Reg.id());
 
-  // The return address is not the function's to clear either, and the loop
-  // above does not always take it out. A target's return instruction may read
-  // it without naming it as an operand -- RISC-V's PseudoRET declares no Uses
-  // and expands to `jalr x0, x1, 0` -- so computeRegsToClearAtExit cannot see
-  // it at the exit, and a calling convention that preserves nothing, such as
-  // CallingConv::GHC, leaves it out of the callee-saved list. Counting a call
-  // pseudo's implicit definition of it then puts it in the used set, and a
-  // `used` mode clears the register the return is about to jump through.
+  // Return instructions may omit the return-address operand (e.g. RISC-V
+  // PseudoRET), and some calling conventions do not save that register.
   if (MCRegister RAReg = TRI.getRARegister())
     for (MCRegister Reg : TRI.sub_and_superregs_inclusive(RAReg))
       CandidateRegsToZero.reset(Reg.id());

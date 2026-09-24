@@ -227,6 +227,7 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/CFIInstBuilder.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -245,7 +246,9 @@
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/Support/CommandLine.h"
@@ -878,6 +881,36 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
       // For FPRs,
       if (MCRegister XReg = getRegisterOrZero(Reg, HasSVE))
         FPRsToZero.set(XReg);
+    }
+  }
+
+  // Check widened writes for live upper fragments (e.g. W0_HI or Q0_HI)
+  // before emitting any clears.
+  LiveRegUnits NeededAtExit(TRI);
+  for (const MachineInstr &MI : make_range(MBBI, MBB.end()))
+    for (const MachineOperand &MO : MI.operands())
+      if (MO.isReg() && MO.getReg() && !(MO.isUse() && MO.isUndef()))
+        NeededAtExit.addReg(MO.getReg());
+  // Recheck only units added by widening.
+  for (MCRegister Reg : RegsToZero.set_bits())
+    NeededAtExit.removeReg(Reg);
+  // Preserve these registers even if requested or absent from exit operands.
+  if (MCRegister RAReg = TRI.getRARegister())
+    NeededAtExit.addReg(RAReg);
+  for (const MCPhysReg *CSRegs = MF.getRegInfo().getCalleeSavedRegs();
+       MCPhysReg CSReg = *CSRegs; ++CSRegs)
+    NeededAtExit.addReg(CSReg);
+
+  BitVector FullRegsToZero = GPRsToZero;
+  FullRegsToZero |= FPRsToZero;
+  for (MCRegister Reg : FullRegsToZero.set_bits()) {
+    if (!NeededAtExit.available(Reg)) {
+      MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+          MF.getFunction(),
+          Twine("\"zero-call-used-regs\" cannot clear register '") +
+              TRI.getName(Reg) +
+              "' without overwriting a value needed at the exit"});
+      return;
     }
   }
 
