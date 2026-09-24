@@ -198,6 +198,9 @@ features cannot lower the translation-unit ABI level;
   On X86, a return value in `AL` can be preserved while clearing the rest of its
   register.
 
+- Register uses marked `undef` at exits no longer prevent otherwise eligible
+  clears for `-fzero-call-used-regs` and the `zero_call_used_regs` attribute.
+
 ### Removed Compiler Flags
 
 ### Attribute Changes in Clang

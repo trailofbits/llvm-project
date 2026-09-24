@@ -43,7 +43,7 @@ static bool anyRegNeededAtExit(const BitVector &Regs,
   // Preserve registers referenced by instructions after the insertion point.
   for (const MachineInstr &MI : make_range(InsertPt, MBB.end()))
     for (const MachineOperand &MO : MI.operands()) {
-      if (!MO.isReg() || !MO.getReg())
+      if (!MO.isReg() || !MO.getReg() || (MO.isUse() && MO.isUndef()))
         continue;
       for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(MO.getReg()))
         if (Regs.test(SReg))

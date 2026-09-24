@@ -1518,7 +1518,7 @@ static BitVector computeRegsToClearAtExit(
 
   for (const MachineInstr &MI : make_range(InsertPt, MBB.end())) {
     for (const MachineOperand &MO : MI.operands()) {
-      if (!MO.isReg())
+      if (!MO.isReg() || (MO.isUse() && MO.isUndef()))
         continue;
 
       MCRegister Reg = MO.getReg();
