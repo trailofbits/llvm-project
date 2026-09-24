@@ -193,6 +193,9 @@ features cannot lower the translation-unit ABI level;
 
 - All options of the `-fzero-call-used-regs` compiler flag are now allowed on RISC-V.
 
+- Register uses marked `undef` at exits no longer prevent otherwise eligible
+  clears for `-fzero-call-used-regs` and the `zero_call_used_regs` attribute.
+
 ### Removed Compiler Flags
 
 ### Attribute Changes in Clang

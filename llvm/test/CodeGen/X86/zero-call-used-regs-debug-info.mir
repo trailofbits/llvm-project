@@ -132,7 +132,8 @@ body:             |
     ; CHECK-NEXT: DBG_VALUE $edi, $noreg, !24, !DIExpression(), debug-location !27
     ; CHECK-NEXT: renamable $al = MOV8rm $rip, 1, $noreg, @b, $noreg, debug-location !28 :: (dereferenceable load (s8) from @b, align 4, !tbaa !29)
     ; CHECK-NEXT: MOV8mr $rip, 1, $noreg, @a, $noreg, killed renamable $al, debug-location !34 :: (store (s8) into @a, !tbaa !35)
-    ; CHECK-NEXT: RET 0, undef $al, debug-location !36
+    ; CHECK-NEXT: $eax = XOR32rr undef $eax, undef $eax, implicit-def $eflags, debug-location !36
+    ; CHECK-NEXT: RET 0, undef $al{{.*}}, debug-location !36
     DBG_VALUE $edi, $noreg, !23, !DIExpression(), debug-location !26
     DBG_VALUE $edi, $noreg, !24, !DIExpression(), debug-location !27
     renamable $al = MOV8rm $rip, 1, $noreg, @b, $noreg, debug-location !28 :: (dereferenceable load (s8) from @b, align 4, !tbaa !29)

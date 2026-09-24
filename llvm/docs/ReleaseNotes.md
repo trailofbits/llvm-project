@@ -127,6 +127,9 @@ Makes programs 10x faster by doing Special New Thing.
 
 ### Changes to the CodeGen infrastructure
 
+* Register clearing ignores register uses marked `undef` when filtering exit
+  operands, while preserving definitions and non-undef uses.
+
 ### Changes to the Metadata Info
 
 ### Changes to the Debug Info
