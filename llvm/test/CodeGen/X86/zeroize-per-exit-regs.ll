@@ -25,7 +25,7 @@ declare i32 @__gxx_personality_v0(...)
 ;           retq
 ;
 ; Neither exit needs all of them. The tail call needs the outgoing arguments in
-; %edi and %esi and does not need %eax, which the callee is about to write; the
+; %edi and %esi and does not need %eax or the old argument in %edx; the
 ; return needs the return value in %eax and does not need %edi, %esi or %edx,
 ; which nothing reads after it. Each exit now clears what the other one needed.
 define i32 @tail_and_return(i1 %c, i32 %a, i32 %b) "zero-call-used-regs"="used-gpr" {
@@ -35,6 +35,7 @@ define i32 @tail_and_return(i1 %c, i32 %a, i32 %b) "zero-call-used-regs"="used-g
 ; CHECK:         movl %esi, %edi
 ; CHECK-NEXT:    movl %edx, %esi
 ; CHECK-NEXT:    xorl %eax, %eax
+; CHECK-NEXT:    xorl %edx, %edx
 ; CHECK-NEXT:    jmp callee@PLT
 ;
 ; CHECK:       .LBB0_1:
