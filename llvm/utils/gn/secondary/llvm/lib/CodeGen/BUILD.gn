@@ -235,6 +235,7 @@ static_library("CodeGen") {
     "StackMaps.cpp",
     "StackProtector.cpp",
     "StackSlotColoring.cpp",
+    "StackZeroization.cpp",
     "StaticDataAnnotator.cpp",
     "StaticDataSplitter.cpp",
     "SwiftErrorValueTracking.cpp",
