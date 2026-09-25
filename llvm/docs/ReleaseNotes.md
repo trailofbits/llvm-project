@@ -137,6 +137,9 @@ Makes programs 10x faster by doing Special New Thing.
 * Register clearing tracks allocatable subregisters and preserves custom
   callee-saved registers.
 
+* Register clearing ignores register uses marked `undef` when filtering exit
+  operands, while preserving definitions and non-undef uses.
+
 ### Changes to the Metadata Info
 
 ### Changes to the Debug Info

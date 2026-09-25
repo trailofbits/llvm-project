@@ -2675,6 +2675,11 @@ fn -> other_fn -> other_fn ; fn is norecurse
     a live `AL` return can coexist with clearing `AH` and the remaining upper
     bits of `RAX`.
 
+    Machine-register uses marked `undef` do not by themselves prevent clearing;
+    definitions and non-undef uses still exclude overlapping registers. An IR
+    `undef` return can still lower to a non-undef register use, which remains
+    excluded.
+
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
     returning, so that data the frame held is not left readable to whatever

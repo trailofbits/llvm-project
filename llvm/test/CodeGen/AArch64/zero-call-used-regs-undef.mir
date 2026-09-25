@@ -1,0 +1,40 @@
+# RUN: llc -mtriple=aarch64 -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s
+
+--- |
+  define i64 @undef_return() "zero-call-used-regs"="used-gpr" { ret i64 undef }
+  define i64 @live_return() "zero-call-used-regs"="used-gpr" { ret i64 123 }
+  define i32 @live_alias() "zero-call-used-regs"="used-gpr" { ret i32 123 }
+...
+---
+name: undef_return
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $x0 = MOVZXi 123, 0
+    RET undef $lr, implicit undef $x0
+# CHECK-LABEL: name: undef_return
+# CHECK: $x0 = MOVZXi 0, 0
+# CHECK-NEXT: RET undef $lr, implicit undef $x0
+...
+---
+name: live_return
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $x0 = MOVZXi 123, 0
+    RET undef $lr, implicit $x0
+# CHECK-LABEL: name: live_return
+# CHECK: $x0 = MOVZXi 123, 0
+# CHECK-NEXT: RET undef $lr, implicit {{(killed )?}}$x0
+...
+---
+name: live_alias
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $x0 = MOVZXi 123, 0
+    RET undef $lr, implicit undef $x0, implicit $w0
+# CHECK-LABEL: name: live_alias
+# CHECK: $x0 = MOVZXi 123, 0
+# CHECK-NEXT: RET undef $lr, implicit undef $x0, implicit {{(killed )?}}$w0
+...

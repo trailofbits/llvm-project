@@ -235,6 +235,30 @@ TEST_P(RegisterClearingTest, LiveReturnRejected) {
   EXPECT_THAT(Diagnostics, HasSubstr("needed at the exit"));
 }
 
+TEST_P(RegisterClearingTest, UndefScratchUseAllowed) {
+  auto &MBB = addExit();
+  MCRegister Scratch = reg(GetParam().Scratch);
+  MBB.back().addOperand(
+      *MF, MachineOperand::CreateReg(Scratch, /*isDef=*/false, /*isImp=*/true,
+                                     /*isKill=*/false, /*isDead=*/false,
+                                     /*isUndef=*/true));
+  ASSERT_TRUE(clear(MBB, regs({}), regs({Scratch})));
+  expectClears(MBB, {Scratch});
+}
+
+TEST_P(RegisterClearingTest, UndefScratchDefRejected) {
+  auto &MBB = addExit();
+  MCRegister Scratch = reg(GetParam().Scratch);
+  MBB.back().addOperand(
+      *MF, MachineOperand::CreateReg(Scratch, /*isDef=*/true, /*isImp=*/true,
+                                     /*isKill=*/false, /*isDead=*/false,
+                                     /*isUndef=*/true));
+  EXPECT_FALSE(clear(MBB, regs({}), regs({Scratch})));
+  EXPECT_EQ(MBB.size(), 1u);
+  EXPECT_EQ(Errors, 1u);
+  EXPECT_THAT(Diagnostics, HasSubstr("needed at the exit"));
+}
+
 TEST_P(RegisterClearingTest, CalleeSavedRegisterRejected) {
   expectRejected(reg(GetParam().CalleeSaved));
 }
