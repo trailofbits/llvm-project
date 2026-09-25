@@ -2664,6 +2664,10 @@ fn -> other_fn -> other_fn ; fn is norecurse
     These values are accepted at the IR layer; a target that does not support register clearing diagnoses the resulting request as unsupported, just as for an explicit `"all"` request.
     Use `"skip"` or omit the attribute to request no clearing.
 
+    Emitted clears remain live through late machine optimizations. With LVI
+    return hardening, a cleared register may subsequently hold the return address
+    used by the hardened return sequence.
+
     Register use and argument live-ins are tracked through their allocatable
     subregisters. Registers are filtered separately at each supported exit.
     Explicit and implicit register operands from the clearing insertion point
