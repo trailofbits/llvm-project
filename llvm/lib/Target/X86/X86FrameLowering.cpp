@@ -20,6 +20,7 @@
 #include "X86TargetMachine.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -651,6 +652,50 @@ void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
   if (MBBI != MBB.end())
     DL = MBBI->getDebugLoc();
 
+  // Include artificial upper fragments when checking widened writes.
+  LiveRegUnits NeededAtExit(*TRI);
+  for (const MachineInstr &MI : make_range(MBBI, MBB.end()))
+    for (const MachineOperand &MO : MI.operands())
+      if (MO.isReg() && MO.getReg() && !(MO.isUse() && MO.isUndef()))
+        NeededAtExit.addReg(MO.getReg());
+
+  LiveRegUnits LiveAtInsert(*TRI);
+  for (const MachineInstr &MI : reverse(make_range(MBBI, MBB.end())))
+    if (!MI.isDebugInstr())
+      LiveAtInsert.stepBackward(MI);
+
+  BitVector GPRsToZero(TRI->getNumRegs());
+  SmallVector<std::pair<MCRegister, bool>, 4> ByteRegsToZero;
+  for (MCRegister Reg : RegsToZero.set_bits())
+    if (TRI->isGeneralPurposeRegister(MF, Reg)) {
+      MCRegister Reg32 = getX86SubSuperRegister(Reg, 32);
+      MCRegister FullReg = getX86SubSuperRegister(Reg, STI.is64Bit() ? 64 : 32);
+      if (NeededAtExit.available(FullReg)) {
+        GPRsToZero.set(Reg32);
+      } else {
+        bool CanPreserve =
+            X86::GR8RegClass.contains(Reg) && NeededAtExit.available(Reg);
+        MCRegister LowByte = TRI->getSubReg(Reg32, X86::sub_8bit);
+        bool PreserveLowByte = X86::GR8_ABCD_HRegClass.contains(Reg) &&
+                               !LiveAtInsert.available(LowByte);
+        if (CanPreserve && PreserveLowByte) {
+          LiveRegUnits WidenedUnits = NeededAtExit;
+          WidenedUnits.removeReg(LowByte);
+          CanPreserve = WidenedUnits.available(FullReg);
+        }
+        if (!CanPreserve) {
+          MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+              MF.getFunction(),
+              Twine("\"zero-call-used-regs\" cannot clear register '") +
+                  TRI->getName(Reg32) +
+                  "' without overwriting a value needed at the exit"});
+          return;
+        }
+        ByteRegsToZero.emplace_back(Reg, PreserveLowByte);
+      }
+      RegsToZero.reset(Reg);
+    }
+
   // Zero out FP stack if referenced. Do this outside of the loop below so that
   // it's done only once.
   for (MCRegister Reg : RegsToZero.set_bits()) {
@@ -684,21 +729,34 @@ void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
     break;
   }
 
-  // For GPRs, we only care to clear out the 32-bit register.
-  BitVector GPRsToZero(TRI->getNumRegs());
-  for (MCRegister Reg : RegsToZero.set_bits())
-    if (TRI->isGeneralPurposeRegister(MF, Reg)) {
-      GPRsToZero.set(getX86SubSuperRegister(Reg, 32));
-      RegsToZero.reset(Reg);
+  for (auto [Reg, PreserveLowByte] : ByteRegsToZero) {
+    if (PreserveLowByte) {
+      // Preserve the live low byte and flags while clearing all upper bits.
+      MCRegister Reg32 = getX86SubSuperRegister(Reg, 32);
+      BuildMI(MBB, MBBI, DL, TII.get(X86::MOVZX32rr8), Reg32)
+          .addReg(TRI->getSubReg(Reg32, X86::sub_8bit));
+    } else {
+      BuildMI(MBB, MBBI, DL, TII.get(X86::MOV8ri), Reg).addImm(0);
     }
+  }
 
   // Zero out the GPRs first.
   for (MCRegister Reg : GPRsToZero.set_bits())
     TII.buildClearRegister(Reg, MBB, MBBI, DL);
 
   // Zero out the remaining registers.
-  for (MCRegister Reg : RegsToZero.set_bits())
+  for (MCRegister Reg : RegsToZero.set_bits()) {
+    // Clear only the widest selected, supported SIMD alias.
+    if ((X86::VR128RegClass.contains(Reg) ||
+         X86::VR256RegClass.contains(Reg)) &&
+        llvm::any_of(TRI->superregs(Reg), [&](MCPhysReg SuperReg) {
+          return RegsToZero.test(SuperReg) &&
+                 ((X86::VR256RegClass.contains(SuperReg) && STI.hasAVX()) ||
+                  (X86::VR512RegClass.contains(SuperReg) && STI.hasAVX512()));
+        }))
+      continue;
     TII.buildClearRegister(Reg, MBB, MBBI, DL);
+  }
 }
 
 void X86FrameLowering::emitStackProbe(

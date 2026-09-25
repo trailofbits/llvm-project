@@ -1,0 +1,93 @@
+# RUN: llc -mtriple=x86_64 -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s
+
+# AL and AH are disjoint. Preserve the live byte, clear dead upper bits when
+# AL is live.
+--- |
+  define i8 @return_low() "zero-call-used-regs"="all-gpr" { ret i8 1 }
+  define i8 @return_low_used() "zero-call-used-regs"="used-gpr" { ret i8 1 }
+  define i8 @return_low_flags() "zero-call-used-regs"="used-gpr" { ret i8 1 }
+  define i8 @return_high() "zero-call-used-regs"="all-gpr" { ret i8 1 }
+  define void @dead_high() "zero-call-used-regs"="used-gpr" { ret void }
+  define i8 @return_undef() "zero-call-used-regs"="all-gpr" { ret i8 undef }
+...
+---
+name: return_low
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $ah = MOV8ri 90
+    $al = MOV8ri 1
+    RET64 implicit $al
+# CHECK-LABEL: name: return_low
+# CHECK: $ah = MOV8ri 90
+# CHECK-NEXT: $al = MOV8ri 1
+# CHECK-NEXT: $eax = MOVZX32rr8 $al
+# CHECK-NOT: $eax =
+# CHECK: $ecx = XOR32rr
+# CHECK-NOT: $eax =
+# CHECK: RET64 implicit $al
+...
+---
+name: return_low_used
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $rax = MOV64ri 1311768467463790320
+    RET64 implicit $al
+# CHECK-LABEL: name: return_low_used
+# CHECK: $rax = MOV64ri 1311768467463790320
+# CHECK-NEXT: $eax = MOVZX32rr8 $al
+# CHECK-NEXT: RET64 implicit $al
+...
+---
+name: return_low_flags
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $rax = MOV64ri 1311768467463790320
+    TEST8rr $al, $al, implicit-def $eflags
+    RET64 implicit $al, implicit $eflags
+# CHECK-LABEL: name: return_low_flags
+# CHECK: TEST8rr $al, $al, implicit-def $eflags
+# CHECK-NEXT: $eax = MOVZX32rr8 $al
+# CHECK-NEXT: RET64 implicit $al, implicit $eflags
+...
+---
+name: return_high
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $al = MOV8ri 90
+    $ah = MOV8ri 1
+    RET64 implicit $ah
+# CHECK-LABEL: name: return_high
+# CHECK: $al = MOV8ri 90
+# CHECK-NEXT: $ah = MOV8ri 1
+# CHECK-NEXT: $al = MOV8ri 0
+# CHECK-NOT: $eax =
+# CHECK: $ecx = XOR32rr
+# CHECK-NOT: $eax =
+# CHECK: RET64 implicit $ah
+...
+---
+name: dead_high
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $ah = MOV8ri 1
+    RET64
+# CHECK-LABEL: name: dead_high
+# CHECK: $ah = MOV8ri 1
+# CHECK-NEXT: $eax = XOR32rr
+# CHECK-NEXT: RET64
+...
+---
+name: return_undef
+tracksRegLiveness: true
+body: |
+  bb.0:
+    RET64 implicit undef $al
+# CHECK-LABEL: name: return_undef
+# CHECK: $eax = XOR32rr undef $eax, undef $eax, implicit-def $eflags
+# CHECK: RET64 implicit undef $al
+...

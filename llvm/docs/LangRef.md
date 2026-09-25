@@ -2664,11 +2664,20 @@ fn -> other_fn -> other_fn ; fn is norecurse
     These values are accepted at the IR layer; a target that does not support register clearing diagnoses the resulting request as unsupported, just as for an explicit `"all"` request.
     Use `"skip"` or omit the attribute to request no clearing.
 
-    Registers needed by the exit instruction, callee-saved registers, and the target's return-address register are excluded from clearing.
-
     Emitted clears remain live through late machine optimizations. With LVI
     return hardening, a cleared register may subsequently hold the return address
     used by the hardened return sequence.
+
+    Register use and argument live-ins are tracked through their allocatable
+    subregisters. Registers are filtered separately at each supported exit.
+    Explicit and implicit register operands from the clearing insertion point
+    through the exit exclude overlapping registers from clearing. Callee-saved
+    registers, including per-function additions, and the target's return-address
+    register remain excluded.
+
+    Targets must preserve live register units when widening a clear. On x86-64,
+    a live `AL` return can coexist with clearing `AH` and the remaining upper
+    bits of `RAX`.
 
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before

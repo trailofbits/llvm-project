@@ -71,6 +71,9 @@ Makes programs 10x faster by doing Special New Thing.
 
 ### Changes to the AArch64 Backend
 
+* Register clearing now diagnoses widened writes that would overwrite live
+  upper register fragments.
+
 ### Changes to the AMDGPU Backend
 
 * Replaced `xnack` and `sramecc` target features with `amdgpu.xnack`
@@ -114,6 +117,10 @@ Makes programs 10x faster by doing Special New Thing.
 
 ### Changes to the X86 Backend
 
+* For byte return values, register clearing can clear unused upper bits while
+  preserving the live byte. Unsupported clears of live upper register fragments
+  are diagnosed.
+
 * LVI return hardening can reuse registers kept live solely to preserve emitted
   clears.
 
@@ -131,6 +138,9 @@ Makes programs 10x faster by doing Special New Thing.
 ### Changes to the CodeGen infrastructure
 
 * Emitted register clears remain live through late machine optimizations.
+
+* Register clearing tracks allocatable subregisters and preserves custom
+  callee-saved registers.
 
 ### Changes to the Metadata Info
 

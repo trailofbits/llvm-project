@@ -197,6 +197,11 @@ features cannot lower the translation-unit ABI level;
   attribute are preserved through late machine optimizations. X86 LVI return
   hardening can still reuse available scratch registers after clearing.
 
+- Fixed allocatable subregister tracking and preservation of custom callee-saved
+  registers for `-fzero-call-used-regs` and the `zero_call_used_regs` attribute.
+  On X86, a return value in `AL` can be preserved while clearing the rest of its
+  register.
+
 ### Removed Compiler Flags
 
 ### Attribute Changes in Clang
