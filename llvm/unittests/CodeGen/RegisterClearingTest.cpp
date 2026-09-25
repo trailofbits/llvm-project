@@ -217,6 +217,24 @@ TEST_P(RegisterClearingTest, EmptyScratchLeavesOnlyCandidates) {
   expectClears(MBB, {Candidate});
 }
 
+TEST_P(RegisterClearingTest, ReservedRegisterRejected) {
+  expectRejected(reg(GetParam().Reserved));
+  EXPECT_THAT(Diagnostics, HasSubstr("not supported for scratch"));
+}
+
+TEST_P(RegisterClearingTest, InvalidScratchPreventsCandidateClearing) {
+  auto &MBB = addExit();
+  EXPECT_FALSE(clear(MBB, regs({reg(GetParam().Candidate)}),
+                     regs({reg(GetParam().Unsupported)})));
+  EXPECT_EQ(MBB.size(), 1u);
+  EXPECT_EQ(Errors, 1u);
+}
+
+TEST_P(RegisterClearingTest, LiveReturnRejected) {
+  expectRejected(reg(GetParam().FullReturnValue));
+  EXPECT_THAT(Diagnostics, HasSubstr("needed at the exit"));
+}
+
 TEST_P(RegisterClearingTest, UndefScratchUseAllowed) {
   auto &MBB = addExit();
   MCRegister Scratch = reg(GetParam().Scratch);
@@ -238,24 +256,6 @@ TEST_P(RegisterClearingTest, UndefScratchDefRejected) {
   EXPECT_FALSE(clear(MBB, regs({}), regs({Scratch})));
   EXPECT_EQ(MBB.size(), 1u);
   EXPECT_EQ(Errors, 1u);
-  EXPECT_THAT(Diagnostics, HasSubstr("needed at the exit"));
-}
-
-TEST_P(RegisterClearingTest, ReservedRegisterRejected) {
-  expectRejected(reg(GetParam().Reserved));
-  EXPECT_THAT(Diagnostics, HasSubstr("not supported for scratch"));
-}
-
-TEST_P(RegisterClearingTest, InvalidScratchPreventsCandidateClearing) {
-  auto &MBB = addExit();
-  EXPECT_FALSE(clear(MBB, regs({reg(GetParam().Candidate)}),
-                     regs({reg(GetParam().Unsupported)})));
-  EXPECT_EQ(MBB.size(), 1u);
-  EXPECT_EQ(Errors, 1u);
-}
-
-TEST_P(RegisterClearingTest, LiveReturnRejected) {
-  expectRejected(reg(GetParam().FullReturnValue));
   EXPECT_THAT(Diagnostics, HasSubstr("needed at the exit"));
 }
 

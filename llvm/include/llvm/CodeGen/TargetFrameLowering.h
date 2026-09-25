@@ -230,17 +230,22 @@ public:
     return false;
   }
 
-  /// emitZeroCallUsedRegs - Zeros out call used registers. Only called on
-  /// targets whose supportsZeroCallUsedRegs returns true.
+  /// Zero call-used registers; supportsZeroCallUsedRegs() must return true.
   ///
-  /// \p MBBI is where to emit, and is not the target's to choose: register
-  /// clearing is one step of an ordered sequence run at each exit of the
-  /// function, and steps that pick their own positions cannot be ordered
-  /// against each other. See the comment on ClearingSequence in
-  /// PrologEpilogInserter.cpp for what the order is. It is the first
-  /// terminator of \p MBB at an exit that leaves through one, which is where
-  /// this has always emitted, and the call itself at an exit that leaves
-  /// through a call.
+  /// Emit at \p MBBI and leave it valid: the first terminator for terminating
+  /// exits, or the exit call otherwise. This preserves PEI's ClearingSequence
+  /// ordering.
+  ///
+  /// PEI filters \p RegsToZero using register operands from
+  /// \p MBBI to the block end, excluding aliases. Mode selection excludes
+  /// nonallocatable and fixed registers, plus sub- and superregisters of
+  /// callee-saved registers and the return-address register.
+  ///
+  /// Disjoint siblings may remain live. Targets must preserve required state
+  /// not covered by PEI's filtering and diagnose requests they cannot emit
+  /// safely. Widened writes must preserve additional units unless safe to
+  /// clobber; absence from \p RegsToZero is no guarantee. PEI does not validate
+  /// widened writes.
   virtual void emitZeroCallUsedRegs(BitVector RegsToZero,
                                     MachineBasicBlock &MBB,
                                     MachineBasicBlock::iterator MBBI,
