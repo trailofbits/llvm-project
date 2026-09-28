@@ -854,6 +854,20 @@ bool AArch64FrameLowering::isZeroCallUsedRegsScratchReg(
          getRegisterOrZero(Reg, /*HasSVE=*/false) == Reg;
 }
 
+bool AArch64FrameLowering::useFakeUseForZeroCallUsedRegs(
+    const MachineInstr &ExitMI) const {
+  if (!ExitMI.isCall() || !ExitMI.isReturn())
+    return false;
+
+  // Tail-call authentication chooses X16 or X17 using the exit's real uses.
+  // Keep clearing uses separate so they do not hide the available scratch.
+  const MachineFunction &MF = *ExitMI.getMF();
+  const auto &STI = MF.getSubtarget<AArch64Subtarget>();
+  return MF.getInfo<AArch64FunctionInfo>()->shouldSignReturnAddress(MF) &&
+         STI.getAuthenticatedLRCheckMethod(MF) !=
+             AArch64PAuth::AuthCheckMethod::None;
+}
+
 void AArch64FrameLowering::emitZeroCallUsedRegs(
     BitVector RegsToZero, MachineBasicBlock &MBB,
     MachineBasicBlock::iterator MBBI, RegScavenger *) const {

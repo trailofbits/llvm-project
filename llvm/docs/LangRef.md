@@ -2675,6 +2675,10 @@ fn -> other_fn -> other_fn ; fn is norecurse
     a live `AL` return can coexist with clearing `AH` and the remaining upper
     bits of `RAX`.
 
+    Emitted clears remain live through late machine optimizations. Return
+    hardening may subsequently reuse a cleared register for the return address
+    (X86 LVI) or an authentication check (AArch64 tail calls).
+
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
     returning, so that data the frame held is not left readable to whatever

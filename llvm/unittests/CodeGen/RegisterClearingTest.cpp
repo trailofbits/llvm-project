@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../lib/CodeGen/RegisterClearing.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -133,8 +134,17 @@ protected:
 
   bool clear(MachineBasicBlock &MBB, const BitVector &Candidates,
              const BitVector &Scratch) {
-    return emitZeroCallUsedRegsWithScratch(Candidates, Scratch, MBB,
-                                           MBB.getFirstTerminator(), nullptr);
+    auto Exit = MBB.getFirstTerminator();
+    return emitZeroCallUsedRegsWithScratch(Candidates, Scratch, MBB, Exit,
+                                           *Exit, nullptr);
+  }
+
+  unsigned countExitUses(const MachineBasicBlock &MBB, MCRegister Reg) {
+    return llvm::count_if(MBB.getFirstTerminator()->operands(),
+                          [Reg](const MachineOperand &MO) {
+                            return MO.isReg() && MO.isUse() &&
+                                   MO.getReg() == Reg && !MO.isUndef();
+                          });
   }
 
   void expectClears(MachineBasicBlock &MBB,
@@ -156,6 +166,19 @@ protected:
       }
       EXPECT_EQ(Count, 1u);
     }
+    BitVector Allocatable = TRI->getAllocatableSet(*MF);
+    for (auto I = MBB.begin(), E = MBB.getFirstTerminator(); I != E; ++I)
+      for (const MachineOperand &MO : I->operands()) {
+        if (!MO.isReg() || !MO.isDef() || !MO.getReg().isPhysical())
+          continue;
+        if (Allocatable.test(MO.getReg())) {
+          EXPECT_FALSE(MO.isDead());
+          EXPECT_EQ(countExitUses(MBB, MO.getReg()), 1u);
+        } else {
+          // Incidental defs such as EFLAGS must not become live at the exit.
+          EXPECT_EQ(countExitUses(MBB, MO.getReg()), 0u);
+        }
+      }
     EXPECT_EQ(Errors, 0u) << Diagnostics;
   }
 
@@ -215,6 +238,70 @@ TEST_P(RegisterClearingTest, EmptyScratchLeavesOnlyCandidates) {
   MCRegister Candidate = reg(GetParam().Candidate);
   ASSERT_TRUE(clear(MBB, regs({Candidate}), regs({})));
   expectClears(MBB, {Candidate});
+}
+
+TEST_P(RegisterClearingTest, LVIKeepAliveProtectsLaterClearingSteps) {
+  if (TM->getTargetTriple().getArch() != Triple::x86_64)
+    GTEST_SKIP() << "Uses X86 LVI return hardening";
+  auto *F = Function::Create(FunctionType::get(Type::getVoidTy(Context), false),
+                             GlobalValue::ExternalLinkage, "lvi", *Mod);
+  F->addFnAttr("target-features", "+lvi-cfi");
+  ReturnInst::Create(Context, BasicBlock::Create(Context, "entry", F));
+  MF = &MMI->getOrCreateMachineFunction(*F);
+  MF->getProperties().set(MachineFunctionProperties::Property::NoVRegs);
+  MF->getRegInfo().freezeReservedRegs();
+  TRI = MF->getSubtarget().getRegisterInfo();
+  TII = MF->getSubtarget().getInstrInfo();
+
+  auto &MBB = addExit();
+  MachineInstr &ExitMI = MBB.back();
+  MachineBasicBlock::iterator InsertPt = ExitMI.getIterator();
+  MCRegister Scratch = reg(GetParam().Scratch);
+  ASSERT_TRUE(emitZeroCallUsedRegsWithScratch(regs({}), regs({Scratch}), MBB,
+                                              InsertPt, ExitMI, nullptr));
+  ASSERT_TRUE(InsertPt->isFakeUse());
+  EXPECT_EQ(std::next(InsertPt), ExitMI.getIterator());
+  EXPECT_TRUE(MF->hasFakeUses());
+  EXPECT_TRUE(InsertPt->readsRegister(Scratch, TRI));
+  EXPECT_FALSE(ExitMI.readsRegister(Scratch, TRI));
+  EXPECT_TRUE(ExitMI.readsRegister(reg(GetParam().ReturnValue), TRI));
+
+  EXPECT_FALSE(emitZeroCallUsedRegsWithScratch(regs({}), regs({Scratch}), MBB,
+                                               InsertPt, ExitMI, nullptr));
+  EXPECT_EQ(Errors, 1u);
+  EXPECT_THAT(Diagnostics, HasSubstr("needed at the exit"));
+}
+
+TEST_P(RegisterClearingTest, OverlappingExitUseDoesNotReplaceExactUse) {
+  if (!TM->getTargetTriple().isAArch64())
+    GTEST_SKIP() << "Uses AArch64 register widths";
+  auto &MBB = addExit();
+  // A W9 use must not stand in for the full X9 definition.
+  MBB.back().addOperand(*MF, MachineOperand::CreateReg(reg("W9"), false, true));
+  ASSERT_TRUE(clear(MBB, regs({reg("X9")}), regs({})));
+  expectClears(MBB, {reg("X9")});
+  EXPECT_EQ(countExitUses(MBB, reg("W9")), 1u);
+}
+
+TEST_P(RegisterClearingTest, ExistingExactExitUseIsNotDuplicated) {
+  if (!TM->getTargetTriple().isAArch64())
+    GTEST_SKIP() << "Uses AArch64 register widths";
+  auto &MBB = addExit();
+  MBB.back().addOperand(*MF, MachineOperand::CreateReg(reg("X9"), false, true));
+  ASSERT_TRUE(clear(MBB, regs({reg("X9")}), regs({})));
+  expectClears(MBB, {reg("X9")});
+}
+
+TEST_P(RegisterClearingTest, UndefExitUseDoesNotReplaceRead) {
+  if (!TM->getTargetTriple().isAArch64())
+    GTEST_SKIP() << "Uses AArch64 register widths";
+  auto &MBB = addExit();
+  MBB.back().addOperand(
+      *MF, MachineOperand::CreateReg(reg("X9"), /*isDef=*/false,
+                                     /*isImp=*/true, /*isKill=*/false,
+                                     /*isDead=*/false, /*isUndef=*/true));
+  ASSERT_TRUE(clear(MBB, regs({reg("X9")}), regs({})));
+  expectClears(MBB, {reg("X9")});
 }
 
 TEST_P(RegisterClearingTest, ReservedRegisterRejected) {
