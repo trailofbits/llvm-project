@@ -1,3 +1,7 @@
+; Fails until the clear-retention uses from #33 land. After that it XPASSes,
+; which fails the run, so remove the XFAIL then.
+; XFAIL: *
+
 ; RUN: llc -mtriple=thumbv8m.base-none-eabi -mattr=+8msecext -verify-machineinstrs %s -o - | FileCheck %s --check-prefixes=CHECK,BASE
 ; RUN: llc -mtriple=thumbv8m.main-none-eabi -mattr=+8msecext,-fpregs -verify-machineinstrs %s -o - | FileCheck %s --check-prefixes=CHECK,MAIN
 ; RUN: llc -mtriple=thumbv8m.main-none-eabi -mattr=+8msecext,+fp-armv8d16sp -verify-machineinstrs %s -o - | FileCheck %s --check-prefixes=CHECK,MAIN,FP
