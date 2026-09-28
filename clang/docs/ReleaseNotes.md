@@ -200,7 +200,8 @@ features cannot lower the translation-unit ABI level;
 
 - Clears emitted for `-fzero-call-used-regs` and the `zero_call_used_regs`
   attribute are preserved through late machine optimizations. X86 LVI return
-  hardening can still reuse available scratch registers after clearing.
+  hardening and AArch64 tail-call authentication can still reuse available
+  scratch registers after clearing.
 
 ### Removed Compiler Flags
 

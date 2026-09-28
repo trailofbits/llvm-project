@@ -141,6 +141,8 @@ Makes programs 10x faster by doing Special New Thing.
   callee-saved registers.
 
 * Emitted register clears remain live through late machine optimizations.
+  AArch64 tail-call authentication can still reuse available scratch registers
+  after clearing.
 
 ### Changes to the Metadata Info
 
