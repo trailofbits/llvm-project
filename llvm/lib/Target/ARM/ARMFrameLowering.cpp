@@ -1564,9 +1564,10 @@ void ARMFrameLowering::emitEpilogue(MachineFunction &MF,
       auto TMBBI = MBB.getFirstTerminator();
       bool IsBXReturn =
           TMBBI != MBB.end() && TMBBI->getOpcode() == ARM::tBX_RET;
-      if (IsBXReturn && CanUseBXAut)
+      if (IsBXReturn && CanUseBXAut) {
         TMBBI->setDesc(STI.getInstrInfo()->get(ARM::t2BXAUT_RET));
-      else
+        TMBBI->addImplicitDefUseOperands(MF);
+      } else
         BuildMI(MBB, MBBI, DebugLoc(), STI.getInstrInfo()->get(ARM::t2AUT));
     }
   }
@@ -1618,10 +1619,13 @@ static bool isFPOrNEONReg(const TargetRegisterInfo &TRI, MCRegister Reg) {
 /// sequence at this exit may not write.
 static void computeLiveUnitsAt(LiveRegUnits &Used, const MachineBasicBlock &MBB,
                                MachineBasicBlock::const_iterator MBBI) {
-  // addLiveOuts rather than addLiveOutsNoPristines: a callee-saved register the
-  // function never touched holds the caller's value here, and writing it would
-  // hand the caller something else back.
+  // Seed callee-saved registers explicitly: trailing Windows SEH directives
+  // can hide the return from addLiveOuts. Restored registers still hold the
+  // caller's values and must not become scratch after their restores.
   Used.addLiveOuts(MBB);
+  const MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
+  for (const MCPhysReg *CSR = MRI.getCalleeSavedRegs(); CSR && *CSR; ++CSR)
+    Used.addReg(*CSR);
   for (auto I = MBB.end(); I != MBBI;) {
     --I;
     if (I->isDebugInstr())

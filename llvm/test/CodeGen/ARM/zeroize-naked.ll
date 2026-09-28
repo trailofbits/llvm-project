@@ -52,4 +52,4 @@ define void @naked_skip() naked "zero-call-used-regs"="skip" {
 }
 
 ; The non-naked control for this attribute lives in
-; zero-call-used-regs-supported.ll.
+; zero-call-used-regs.ll.

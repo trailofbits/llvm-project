@@ -5898,7 +5898,7 @@ let isBranch = 1, isTerminator = 1, isIndirectBranch = 1 in {
 }
 }
 
-let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
+let isReturn = 1, isTerminator = 1, isBarrier = 1, Uses = [R12, LR, SP] in {
   def t2BXAUT_RET : tPseudoExpand<(outs), (ins pred:$p), 4, IIC_Br,
                    [(ARMretglue)], (t2BXAUT pred:$p, R12, LR, SP)>, Sched<[WriteBr]>;
 }

@@ -6,8 +6,10 @@
 ; RUN: llc -mtriple=thumbv7-windows-msvc -verify-machineinstrs %s -o - | FileCheck %s
 ; RUN: llc -mtriple=thumbv7-windows-msvc -verify-machineinstrs -filetype=obj %s -o %t.obj
 ; RUN: llvm-readobj --unwind %t.obj | FileCheck %s --check-prefix=UNWIND
+; RUN: llc -mtriple=thumbv7-windows-msvc -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=SEQ
 
 declare void @sink()
+declare i32 @callee(i32, i32, i32, i32)
 
 ; The clears carry the epilogue's flag, so the size reduction leaves them at
 ; the width their codes recorded.
@@ -96,4 +98,26 @@ define i32 @leaf(i32 %a, i32 %b) uwtable "zero-call-used-regs"="used" {
 ; CHECK-NOT:     .seh_
   %x = mul i32 %a, %b
   ret i32 %x
+}
+
+; R4 has already been restored and must retain the caller's value. A direct
+; tail call leaves R12 available as a zero source for the scalar FP clear.
+define i32 @fp_scratch(float %a, i32 %b, i32 %c, i32 %d) uwtable "zero-call-used-regs"="used" {
+; SEQ-LABEL: clearing sequence for function 'fp_scratch':
+; SEQ-NEXT:    %bb.0 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; CHECK-LABEL: fp_scratch:
+; CHECK:         .seh_startepilogue
+; CHECK-NEXT:    pop.w {r4, lr}
+; CHECK-NEXT:    .seh_save_regs_w {r4, lr}
+; CHECK-NEXT:    mov.w r12, #0
+; CHECK-NEXT:    .seh_nop_w
+; CHECK-NEXT:    vmov s0, r12
+; CHECK-NEXT:    .seh_nop_w
+; CHECK-NEXT:    b.w callee
+; CHECK-NEXT:    .seh_nop_w
+; CHECK-NEXT:    .seh_endepilogue
+  call void asm sideeffect "", "~{r4}"()
+  %x = fptosi float %a to i32
+  %r = tail call i32 @callee(i32 %x, i32 %b, i32 %c, i32 %d)
+  ret i32 %r
 }

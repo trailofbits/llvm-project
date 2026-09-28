@@ -3,6 +3,8 @@
 ; RUN: llc -mtriple=thumbv8m.base-none-eabi -verify-machineinstrs %t/thumb1.ll -o - | FileCheck %s --check-prefix=BASELINE
 ; RUN: not llc -mtriple=armv7-unknown-linux-gnueabihf -mattr=-neon -verify-machineinstrs %t/indirect.ll -o /dev/null 2>&1 | FileCheck %s --check-prefix=TAIL-ERR
 ; RUN: not llc -mtriple=thumbv7-unknown-linux-gnueabihf -mattr=-neon -verify-machineinstrs %t/indirect.ll -o /dev/null 2>&1 | FileCheck %s --check-prefix=TAIL-ERR
+; RUN: not llc -mtriple=thumbv7-windows-msvc -verify-machineinstrs %t/indirect.ll -o /dev/null 2>&1 | FileCheck %s --check-prefix=TAIL-ERR
+; RUN: not llc -mtriple=thumbv8.1m.main-none-eabi -mattr=+pacbti,+fp-armv8d16sp -verify-machineinstrs %t/pac.ll -o /dev/null 2>&1 | FileCheck %s --check-prefix=PAC-ERR
 ; RUN: llc -mtriple=armv7-unknown-linux-gnueabihf -mattr=-neon -verify-machineinstrs %t/direct.ll -o - | FileCheck %s --check-prefix=DIRECT
 ; RUN: llc -mtriple=thumbv7-unknown-linux-gnueabihf -mattr=-neon -verify-machineinstrs %t/direct.ll -o - | FileCheck %s --check-prefix=DIRECT
 
@@ -37,9 +39,11 @@ define <4 x i32> @used_gpr(<4 x i32> %x) "zero-call-used-regs"="used-gpr" {
 ;--- indirect.ll
 ; The conversion uses s0. At the tail call r0-r3 hold the integer arguments,
 ; r12 holds the destination, and the other GPRs must retain the caller's values.
-; There is no free GPR from which to clear s0, even outside Windows epilogues.
-define i32 @indirect_tail(ptr %callee, float %a, i32 %b, i32 %c, i32 %d) "zero-call-used-regs"="used" {
+; R4 is restored before the tail call and must not be borrowed, including when
+; trailing Windows SEH directives hide the return from block live-out queries.
+define i32 @indirect_tail(ptr %callee, float %a, i32 %b, i32 %c, i32 %d) uwtable "zero-call-used-regs"="used" {
 ; TAIL-ERR: error: {{.*}}in function indirect_tail {{.*}}: clearing the call-used registers needs a register to hold zero and none is free at this exit
+  call void asm sideeffect "", "~{r4}"()
   %x = fptosi float %a to i32
   %r = tail call i32 %callee(i32 %x, i32 %b, i32 %c, i32 %d)
   ret i32 %r
@@ -59,4 +63,13 @@ define i32 @direct_tail(float %a, i32 %b, i32 %c, i32 %d) "zero-call-used-regs"=
   %x = fptosi float %a to i32
   %r = tail call i32 @callee(i32 %x, i32 %b, i32 %c, i32 %d)
   ret i32 %r
+}
+
+;--- pac.ll
+; R0-R3 hold the return value and R12 holds the authentication code for BXAUT.
+; Neither the return value nor the authentication code can supply an FP clear.
+define <4 x i32> @signed_fp_return(<4 x i32> %x) "sign-return-address"="all" "zero-call-used-regs"="used" {
+; PAC-ERR: error: {{.*}}in function signed_fp_return {{.*}}: clearing the call-used registers needs a register to hold zero and none is free at this exit
+  call void asm sideeffect "", "~{s0}"()
+  ret <4 x i32> %x
 }
