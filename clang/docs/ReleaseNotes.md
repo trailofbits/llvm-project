@@ -199,7 +199,7 @@ features cannot lower the translation-unit ABI level;
   register.
 
 - The `-fzero-call-used-regs` flag is now supported on 32-bit Arm targets,
-  including Thumb-1 and Thumb-2. Windows on 32-bit Arm is not supported yet.
+  including Thumb-1 and Thumb-2.
 
 ### Removed Compiler Flags
 
