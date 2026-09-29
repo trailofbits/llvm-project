@@ -89,19 +89,19 @@ ARMBaseRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     // Don't save the floating point registers if target does not have floating
     // point registers.
     if (STI.hasFPRegs() && F.hasFnAttribute("save-fp")) {
-      bool HasNEON = STI.hasNEON();
-
       if (STI.isMClass()) {
-        assert(!HasNEON && "NEON is only for Cortex-R/A");
+        assert(!STI.hasNEON() && "NEON is only for Cortex-R/A");
         return PushPopSplit == ARMSubtarget::SplitR7
                    ? CSR_ATPCS_SplitPush_FP_SaveList
                    : CSR_AAPCS_FP_SaveList;
       }
+      // VFP can expose D16-D31 without NEON. Preserve the full register file.
+      const bool HasD32 = STI.hasD32();
       if (F.getFnAttribute("interrupt").getValueAsString() == "FIQ") {
-        return HasNEON ? CSR_FIQ_FP_NEON_SaveList : CSR_FIQ_FP_SaveList;
+        return HasD32 ? CSR_FIQ_FP_D32_SaveList : CSR_FIQ_FP_SaveList;
       }
-      return HasNEON ? CSR_GenericInt_FP_NEON_SaveList
-                     : CSR_GenericInt_FP_SaveList;
+      return HasD32 ? CSR_GenericInt_FP_D32_SaveList
+                    : CSR_GenericInt_FP_SaveList;
     }
 
     if (STI.isMClass()) {
