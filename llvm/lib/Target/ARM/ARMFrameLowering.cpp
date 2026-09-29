@@ -1615,13 +1615,21 @@ static bool isFPOrNEONReg(const TargetRegisterInfo &TRI, MCRegister Reg) {
   return AnyLeaf;
 }
 
+bool ARMFrameLowering::supportsZeroCallUsedRegs(
+    const MachineFunction &MF) const {
+  // TODO: Support Windows. The clears land inside the epilogue that the
+  // unwind info describes, so each one needs its own unwind code, and PEI has
+  // to find the return beneath the SEH directives that follow it.
+  return !STI.isTargetWindows();
+}
+
 /// Record in \p Used what is live at \p MBBI, which is what the clearing
 /// sequence at this exit may not write.
 static void computeLiveUnitsAt(LiveRegUnits &Used, const MachineBasicBlock &MBB,
                                MachineBasicBlock::const_iterator MBBI) {
-  // Seed callee-saved registers explicitly: trailing Windows SEH directives
-  // can hide the return from addLiveOuts. Restored registers still hold the
-  // caller's values and must not become scratch after their restores.
+  // Seed callee-saved registers explicitly rather than rely on addLiveOuts
+  // recognizing the return. Restored registers still hold the caller's values
+  // and must not become scratch after their restores.
   Used.addLiveOuts(MBB);
   const MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
   for (const MCPhysReg *CSR = MRI.getCalleeSavedRegs(); CSR && *CSR; ++CSR)
@@ -1631,47 +1639,6 @@ static void computeLiveUnitsAt(LiveRegUnits &Used, const MachineBasicBlock &MBB,
     if (I->isDebugInstr())
       continue;
     Used.stepBackward(*I);
-  }
-}
-
-/// Whether \p MBBI is inside an epilogue annotated for the Windows unwinder.
-static bool isInsideWinCFIEpilogue(const MachineBasicBlock &MBB,
-                                   MachineBasicBlock::const_iterator MBBI) {
-  for (auto I = MBBI; I != MBB.begin();) {
-    --I;
-    if (I->getOpcode() == ARM::SEH_EpilogStart)
-      return true;
-    if (I->getOpcode() == ARM::SEH_EpilogEnd)
-      return false;
-  }
-  return false;
-}
-
-/// Give each instruction in [\p First, \p End) a no-op unwind code at its
-/// width. The unwinder needs one code per epilogue instruction, and the
-/// assembler rejects a range whose codes and instructions do not add up. The
-/// FrameDestroy flag keeps the size reduction from narrowing an instruction
-/// after its code was recorded, as it does for the epilogue's own.
-static void annotateClearsForWinCFI(MachineBasicBlock &MBB,
-                                    MachineBasicBlock::iterator First,
-                                    MachineBasicBlock::iterator End,
-                                    const ARMBaseInstrInfo &TII) {
-  MachineFunction &MF = *MBB.getParent();
-
-  // Collect first; the codes are inserted into the range being walked.
-  SmallVector<MachineInstr *, 32> Clears;
-  for (MachineInstr &MI : make_range(First, End))
-    Clears.push_back(&MI);
-
-  for (MachineInstr *MI : Clears) {
-    MI->setFlag(MachineInstr::FrameDestroy);
-    unsigned Size = TII.getInstSizeInBytes(*MI);
-    assert((Size == 2 || Size == 4) && "clearing instruction of unknown width");
-    MachineInstrBuilder MIB =
-        BuildMI(MF, MI->getDebugLoc(), TII.get(ARM::SEH_Nop))
-            .addImm(/*Wide=*/Size == 4)
-            .setMIFlags(MachineInstr::FrameDestroy | MachineInstr::NoMerge);
-    MBB.insertAfter(MI->getIterator(), MIB);
   }
 }
 
@@ -1687,12 +1654,6 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
   DebugLoc DL;
   if (MBBI != MBB.end())
     DL = MBBI->getDebugLoc();
-
-  // Everything below goes in front of MBBI. The instruction before it stays
-  // put across the insertions; the block's begin does not.
-  const bool AtBegin = MBBI == MBB.begin();
-  const MachineBasicBlock::iterator Before =
-      AtBegin ? MBB.end() : std::prev(MBBI);
 
   auto report = [&](const Twine &Message) {
     F.getContext().diagnose(DiagnosticInfoUnsupported{F, Message});
@@ -1904,12 +1865,6 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
     BuildMI(MBB, MBBI, DL, TII.get(ARM::VMSR_VPR))
         .addReg(ZeroSrc)
         .add(predOps(ARMCC::AL));
-
-  // On Windows the epilogue was annotated before this ran, and its range ends
-  // after the return, so the sequence sits inside it and needs codes too.
-  if (MF.hasWinCFI() && isInsideWinCFIEpilogue(MBB, MBBI))
-    annotateClearsForWinCFI(MBB, AtBegin ? MBB.begin() : std::next(Before),
-                            MBBI, TII);
 }
 
 /// getFrameIndexReference - Provide a base+offset reference to an FI slot for

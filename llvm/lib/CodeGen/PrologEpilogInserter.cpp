@@ -1427,9 +1427,10 @@ static bool isUnwindResumeCall(const MachineInstr &MI) {
 /// real exit downstream. Clearing at it would also destroy the resumption
 /// address the funclet ABI returns.
 ///
-/// Plain returns, tail calls and cleanupret-to-caller carry isReturn. Find the
-/// return even when target unwind directives follow it. Landing pads can also
-/// resume unwinding through a call instead of a return.
+/// Otherwise a return block is the whole of it: plain return, tail call and
+/// cleanupret-to-caller all carry isReturn, and the usual return-block walk
+/// reaches them. The one it misses is a landing pad that resumes unwinding by a
+/// call, not a return; no existing predicate reaches it, so this does.
 ///
 /// Non-returning calls, non-local jumps that reload another frame's pointers,
 /// and traps are out of scope. A fallback trap or call must not hide an earlier
@@ -1442,11 +1443,8 @@ static MachineInstr *getEnforceableExit(MachineBasicBlock &MBB) {
   if (!MBB.succ_empty())
     return nullptr;
 
-  // Target unwind directives may follow the return. Retained clears must be
-  // used by the return itself, before a tail call's register mask kills them.
-  for (MachineInstr &MI : MBB.terminators())
-    if (MI.isReturn())
-      return &MI;
+  if (MBB.isReturnBlock())
+    return &*MBB.getFirstTerminator();
 
   // Labels, CFI and the rest of the meta instructions carry no control flow, so
   // the shape of the exit is decided by what is underneath them.

@@ -86,7 +86,8 @@ Makes programs 10x faster by doing Special New Thing.
 ### Changes to the ARM Backend
 
 * Added support for the `zero-call-used-regs` function attribute on 32-bit Arm,
-  including ARM, Thumb-1, and Thumb-2 code generation.
+  including ARM, Thumb-1, and Thumb-2 code generation. Windows targets are not
+  supported yet and report an error.
 
 ### Changes to the AVR Backend
 
