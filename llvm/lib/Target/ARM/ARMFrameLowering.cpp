@@ -1682,21 +1682,26 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
   }
   const bool ClearVPR = RegsToZero.test(ARM::VPR) && STI.hasMVEIntegerOps();
 
-  // Defer a requested R12 clear to tBXNS_RET expansion because CMSE itself
-  // needs R12 as scratch. A signed secure return also needs its authentication
-  // code there until the expansion emits the authentication instruction. Keep
-  // R12 live in either case; the expansion clears it after its final use.
-  const bool IsSignedReturn =
-      MF.getInfo<ARMFunctionInfo>()->shouldSignReturnAddress();
-  if (MBBI != MBB.end() && MBBI->getOpcode() == ARM::tBXNS_RET &&
-      (GPRs.test(ARM::R12) || IsSignedReturn)) {
-    GPRs.reset(ARM::R12);
-    if (!MBBI->readsRegister(ARM::R12, &TRI))
+  // A CMSE return already clears R0-R3 and R12 when they do not hold the
+  // return value, but before v8.1-M it copies LR into them. An implicit R12
+  // use on tBXNS_RET asks the expansion to clear with zero instead, so leave
+  // those registers to it: anything written here would be overwritten. R12
+  // also carries the authentication code of a signed return until the
+  // expansion authenticates. The floating-point clears stay, because the
+  // expansion clears those only when secure code has used the FPU.
+  if (MBBI != MBB.end() && MBBI->getOpcode() == ARM::tBXNS_RET) {
+    for (MCRegister Reg : {ARM::R0, ARM::R1, ARM::R2, ARM::R3, ARM::R12})
+      if (!MBBI->readsRegister(Reg, &TRI))
+        GPRs.reset(Reg);
+    if (!MBBI->readsRegister(ARM::R12, &TRI)) {
+      const bool IsSignedReturn =
+          MF.getInfo<ARMFunctionInfo>()->shouldSignReturnAddress();
       MBBI->addOperand(
           MF, MachineOperand::CreateReg(ARM::R12, /*isDef=*/false,
                                         /*isImp=*/true, /*isKill=*/false,
                                         /*isDead=*/false,
                                         /*isUndef=*/!IsSignedReturn));
+    }
   }
 
   // Reduce the leaves to the widest register that covers only leaves that were

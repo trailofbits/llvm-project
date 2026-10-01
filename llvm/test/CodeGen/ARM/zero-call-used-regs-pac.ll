@@ -32,9 +32,13 @@ define i32 @signed_cmse_return(i32 %x) "cmse_nonsecure_entry" "sign-return-addre
 ; V8-NEXT:       aut r12, lr, sp
 ; V8:            mrs r12, control
 ; V8:            vmsr fpscr, r12
-; V8:            mov.w r12, #0
-; V8-NOT:        {{mov.*}} r12,
-; V8:            msr apsr_nzcvq, lr
+; V8-NEXT:       mov.w r12, #0
+; V8:          {{^}}.LBB{{[0-9_]+}}:
+; V8-NEXT:       mov.w r12, #0
+; V8-NEXT:       mov r1, r12
+; V8-NEXT:       mov r2, r12
+; V8-NEXT:       mov r3, r12
+; V8-NEXT:       msr apsr_nzcvq, r12
 ; V8-NEXT:       bxns lr
 ; V81:           aut r12, lr, sp
 ; V81-NEXT:      clrm {r1, r2, r3, r12, apsr}

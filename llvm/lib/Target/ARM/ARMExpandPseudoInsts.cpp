@@ -86,10 +86,12 @@ namespace {
                          const SmallVectorImpl<unsigned> &ClearRegs,
                          unsigned ClobberReg);
     MachineBasicBlock &CMSEClearFPRegs(MachineBasicBlock &MBB,
-                                       MachineBasicBlock::iterator MBBI);
+                                       MachineBasicBlock::iterator MBBI,
+                                       bool ZeroFill);
     MachineBasicBlock &CMSEClearFPRegsV8(MachineBasicBlock &MBB,
                                          MachineBasicBlock::iterator MBBI,
-                                         const BitVector &ClearRegs);
+                                         const BitVector &ClearRegs,
+                                         bool ZeroFill);
     MachineBasicBlock &CMSEClearFPRegsV81(MachineBasicBlock &MBB,
                                           MachineBasicBlock::iterator MBBI,
                                           const BitVector &ClearRegs);
@@ -1248,24 +1250,23 @@ static bool determineFPRegsToClear(const MachineInstr &MI,
   return DefFP;
 }
 
-MachineBasicBlock &
-ARMExpandPseudo::CMSEClearFPRegs(MachineBasicBlock &MBB,
-                                 MachineBasicBlock::iterator MBBI) {
+MachineBasicBlock &ARMExpandPseudo::CMSEClearFPRegs(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI, bool ZeroFill) {
   BitVector ClearRegs(16, true);
   (void)determineFPRegsToClear(*MBBI, ClearRegs);
 
   if (STI->hasV8_1MMainlineOps())
     return CMSEClearFPRegsV81(MBB, MBBI, ClearRegs);
   else
-    return CMSEClearFPRegsV8(MBB, MBBI, ClearRegs);
+    return CMSEClearFPRegsV8(MBB, MBBI, ClearRegs, ZeroFill);
 }
 
-// Clear the FP registers for v8.0-M, by copying over the content
-// of LR. Uses R12 as a scratch register.
+// Clear the FP registers for v8.0-M, by copying over the content of LR, or of
+// a zeroed R12 if \p ZeroFill is set. Uses R12 as a scratch register.
 MachineBasicBlock &
 ARMExpandPseudo::CMSEClearFPRegsV8(MachineBasicBlock &MBB,
                                    MachineBasicBlock::iterator MBBI,
-                                   const BitVector &ClearRegs) {
+                                   const BitVector &ClearRegs, bool ZeroFill) {
   if (!STI->hasFPRegs())
     return MBB;
 
@@ -1323,50 +1324,64 @@ ARMExpandPseudo::CMSEClearFPRegsV8(MachineBasicBlock &MBB,
         .addReg(ARM::CPSR, RegState::Kill);
   }
 
+  // Clear FPSCR bits 0-4, 7, 28-31
+  // The other bits are program global according to the AAPCS
+  auto ClearFPSCR = [&] {
+    BuildMI(ClearBB, DL, TII->get(ARM::VMRS), ARM::R12).add(predOps(ARMCC::AL));
+    BuildMI(ClearBB, DL, TII->get(ARM::t2BICri), ARM::R12)
+        .addReg(ARM::R12)
+        .addImm(0x0000009F)
+        .add(predOps(ARMCC::AL))
+        .add(condCodeOp());
+    BuildMI(ClearBB, DL, TII->get(ARM::t2BICri), ARM::R12)
+        .addReg(ARM::R12)
+        .addImm(0xF0000000)
+        .add(predOps(ARMCC::AL))
+        .add(condCodeOp());
+    BuildMI(ClearBB, DL, TII->get(ARM::VMSR))
+        .addReg(ARM::R12)
+        .add(predOps(ARMCC::AL));
+  };
+
+  // With ZeroFill, update FPSCR first so that R12 is free to hold the zero.
+  Register FillReg = ARM::LR;
+  if (ZeroFill) {
+    ClearFPSCR();
+    DebugLoc ZeroDL = DL;
+    TII->buildClearRegister(ARM::R12, *ClearBB, ClearBB->end(), ZeroDL,
+                            /*AllowSideEffects=*/false);
+    FillReg = ARM::R12;
+  }
+
   // Emit the clearing sequence
   for (unsigned D = 0; D < 8; D++) {
     // Attempt to clear as double
     if (ClearRegs[D * 2 + 0] && ClearRegs[D * 2 + 1]) {
       unsigned Reg = ARM::D0 + D;
       BuildMI(ClearBB, DL, TII->get(ARM::VMOVDRR), Reg)
-          .addReg(ARM::LR)
-          .addReg(ARM::LR)
+          .addReg(FillReg)
+          .addReg(FillReg)
           .add(predOps(ARMCC::AL));
     } else {
       // Clear first part as single
       if (ClearRegs[D * 2 + 0]) {
         unsigned Reg = ARM::S0 + D * 2;
         BuildMI(ClearBB, DL, TII->get(ARM::VMOVSR), Reg)
-            .addReg(ARM::LR)
+            .addReg(FillReg)
             .add(predOps(ARMCC::AL));
       }
       // Clear second part as single
       if (ClearRegs[D * 2 + 1]) {
         unsigned Reg = ARM::S0 + D * 2 + 1;
         BuildMI(ClearBB, DL, TII->get(ARM::VMOVSR), Reg)
-            .addReg(ARM::LR)
+            .addReg(FillReg)
             .add(predOps(ARMCC::AL));
       }
     }
   }
 
-  // Clear FPSCR bits 0-4, 7, 28-31
-  // The other bits are program global according to the AAPCS
-  BuildMI(ClearBB, DL, TII->get(ARM::VMRS), ARM::R12)
-      .add(predOps(ARMCC::AL));
-  BuildMI(ClearBB, DL, TII->get(ARM::t2BICri), ARM::R12)
-      .addReg(ARM::R12)
-      .addImm(0x0000009F)
-      .add(predOps(ARMCC::AL))
-      .add(condCodeOp());
-  BuildMI(ClearBB, DL, TII->get(ARM::t2BICri), ARM::R12)
-      .addReg(ARM::R12)
-      .addImm(0xF0000000)
-      .add(predOps(ARMCC::AL))
-      .add(condCodeOp());
-  BuildMI(ClearBB, DL, TII->get(ARM::VMSR))
-      .addReg(ARM::R12)
-      .add(predOps(ARMCC::AL));
+  if (!ZeroFill)
+    ClearFPSCR();
 
   return *DoneBB;
 }
@@ -2343,16 +2358,18 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
       return true;
     }
     case ARM::tBXNS_RET: {
-      // R12 cannot hold a return value. Register clearing can add an implicit
-      // use to retain its zero or preserve the authentication code until this
-      // expansion. Remove that use before computing live-ins and clearing
-      // sets: CMSE expansion borrows R12, so it must be zeroed afterwards.
-      int ZeroR12Op = MI.findRegisterUseOperandIdx(ARM::R12, /*TRI=*/nullptr);
-      bool ZeroR12 = ZeroR12Op != -1;
-      if (ZeroR12) {
-        assert(MI.getOperand(ZeroR12Op).isImplicit() &&
+      // R12 cannot hold a return value. Register clearing adds an implicit
+      // R12 use to ask for every register cleared here to end up zero, which
+      // v8.1-M CLRM and VSCCLRM do anyway and earlier subtargets do by
+      // copying from a zeroed R12 instead of LR. The use also keeps the
+      // authentication code of a signed return live until it is checked.
+      // Remove it before computing live-ins and clearing sets.
+      int ZeroFillOp = MI.findRegisterUseOperandIdx(ARM::R12, /*TRI=*/nullptr);
+      bool ZeroFill = ZeroFillOp != -1;
+      if (ZeroFill) {
+        assert(MI.getOperand(ZeroFillOp).isImplicit() &&
                "R12 is not a CMSE return-value register");
-        MI.removeOperand(ZeroR12Op);
+        MI.removeOperand(ZeroFillOp);
       }
 
       // For v8.0-M.Main we need to authenticate LR before clearing FPRs, which
@@ -2360,7 +2377,7 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
       if (!STI->hasV8_1MMainlineOps() && AFI->shouldSignReturnAddress())
         BuildMI(MBB, MBBI, DebugLoc(), TII->get(ARM::t2AUT));
 
-      MachineBasicBlock &AfterBB = CMSEClearFPRegs(MBB, MBBI);
+      MachineBasicBlock &AfterBB = CMSEClearFPRegs(MBB, MBBI, ZeroFill);
 
       if (STI->hasV8_1MMainlineOps()) {
         // Restore the non-secure floating point context.
@@ -2381,18 +2398,17 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
       SmallVector<unsigned, 5> ClearRegs;
       determineGPRegsToClear(
           *MBBI, {ARM::R0, ARM::R1, ARM::R2, ARM::R3, ARM::R12}, ClearRegs);
-      // CLRM writes zero on v8.1-M. Earlier subtargets copy LR instead, so
-      // leave R12 out of that copy sequence and explicitly zero it below.
-      if (ZeroR12 && !STI->hasV8_1MMainlineOps())
-        llvm::erase(ClearRegs, ARM::R12);
-      CMSEClearGPRegs(AfterBB, AfterBB.end(), MBBI->getDebugLoc(), ClearRegs,
-                      ARM::LR);
-
-      if (ZeroR12 && !STI->hasV8_1MMainlineOps()) {
+      // Earlier subtargets copy a register into the others. R12 is free
+      // here, after authentication and the FP clear, so zero it and copy it.
+      unsigned ClobberReg = ARM::LR;
+      if (ZeroFill && !STI->hasV8_1MMainlineOps()) {
         DebugLoc DL = MI.getDebugLoc();
         TII->buildClearRegister(ARM::R12, AfterBB, AfterBB.end(), DL,
                                 /*AllowSideEffects=*/false);
+        ClobberReg = ARM::R12;
       }
+      CMSEClearGPRegs(AfterBB, AfterBB.end(), MBBI->getDebugLoc(), ClearRegs,
+                      ClobberReg);
 
       MachineInstrBuilder NewMI =
           BuildMI(AfterBB, AfterBB.end(), MBBI->getDebugLoc(),
@@ -2401,7 +2417,7 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
               .add(predOps(ARMCC::AL));
       for (const MachineOperand &Op : MI.operands())
         NewMI->addOperand(Op);
-      if (ZeroR12)
+      if (ZeroFill)
         NewMI.addReg(ARM::R12, RegState::Implicit);
       MI.eraseFromParent();
       return true;
