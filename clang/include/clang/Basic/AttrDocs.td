@@ -8827,62 +8827,48 @@ flag.
 def ZeroizeOnReturnDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{
-This attribute, when attached to a function, requests that the compiler clear
-the function's stack frame and the caller-observable register state before
-control leaves the function. It is meant for code that holds key material,
-plaintext, or other secrets in local variables, where whatever the function
-leaves behind in its frame or in registers stays readable to the code that
-runs on that storage next.
+The ``zeroize_on_return`` attribute takes no arguments and applies to functions
+only. Clang lowers it to two LLVM IR function attributes:
+``"zero-call-used-regs"="all"`` requests call-used register clearing, and
+``"zeroize-stack"="used"`` requests clearing of the function's used stack memory.
+The register request overrides both ``-fzero-call-used-regs`` and an explicit
+``zero_call_used_regs`` attribute on the same function, including ``"skip"``.
+An explicitly annotated ``main`` also retains both requests.
 
-The name is shorthand for *supported exits*, not only ``return`` statements.
-Clearing is emitted on explicit cleanup paths taken during an exception
-unwind as well, on targets whose exception model provides them.
+**Current implementation limits.** No target implements stack or flag clearing
+yet. The attribute therefore does not currently ensure that stack-resident
+secrets are erased. Register clearing uses the existing target implementation
+of ``zero_call_used_regs("all")``; it does not clear every caller-observable
+register or condition flag. Return-value registers and registers preserved by
+the calling convention are excluded.
 
-The attribute takes no arguments. It is a single request rather than a set of
-modes because it states an obligation over machine state, not a choice of how
-much hardening to apply.
+Unsupported stack requests produce a backend warning, which ``-Werror`` can
+promote to an error. Unsupported register requests produce a backend error,
+including on ARM32. Compilation is therefore not guaranteed to succeed on an
+unsupported target. ``naked`` functions cannot perform the requested clearing
+and receive backend warnings.
 
-**What is cleared.** The stack memory the function used, including storage the
-compiler introduced rather than the source named, such as spill slots and
-alignment padding: those can hold copies of a local. And the registers a
-caller can observe once the function returns.
+Clang rejects coroutine suspension or return statements and ``musttail``
+returns in an annotated function because they are incompatible with the LLVM
+stack request. LLVM's attribute compatibility rules prevent inlining an
+annotated callee into a caller without a stack request, even if
+``always_inline`` is present.
 
-The function's declared return value is excluded. So are the registers the
-calling convention requires the function to preserve, since the epilogue
-restores those to the values the caller already had.
-
-**What is not covered.** The guarantee is about the annotated function's own
-frame and the machine state at its exits. Specifically:
-
-- The property is not inductive across the call graph. A protected function
-  does not clear the frames of the functions it calls; a callee that handles a
-  secret has to carry the attribute itself.
-- Stack memory below the stack pointer at the point of the clear, which is
-  where a callee's frame lived, is not reached.
-- Leaving the frame by a route that never runs its exit code escapes the
-  guarantee entirely. ``longjmp`` past the frame is the common case, as is an
-  unwind for which the target's exception model offers no cleanup path.
-- Copies the program itself made elsewhere, on the heap or in a caller's
-  frame, are neither tracked nor cleared.
-
-On a target that has not implemented the clearing this attribute requests, the
-request has no effect and compilation still succeeds.
+The requests describe the annotated function's own storage. They do not track
+copies in a caller's frame or on the heap, clear callees' frames, or provide
+clearing after a ``longjmp`` that bypasses the function's exit code.
 
 .. code-block:: c
 
   [[clang::zeroize_on_return]]
-  void chacha20_block(uint32_t out[16], const uint32_t key[8], uint32_t ctr) {
-    uint32_t state[16];                 // secret-bearing working state
-    /* ... rounds ... */
-    memcpy(out, state, sizeof(state));  // declared output: not cleared
-  }                                     // at each supported exit, the frame
-                                        // holding `state` and the
-                                        // caller-observable registers are
-                                        // cleared
+  void encrypt(void) {
+    [[clang::sensitive]] unsigned char round_keys[176];
+    /* ... */
+  } // requests register and stack clearing; stack clearing is not implemented
 
-This attribute asks for more than ``zero_call_used_regs``, which requests only
-that some subset of the call-used registers be zeroed and leaves the stack
-frame alone.
+Unlike ``zero_call_used_regs``, this attribute also emits a stack-clearing
+request. The local-variable ``sensitive`` attribute refines allocation metadata,
+but does not change the ``"used"`` mode requested here.
   }];
 }
 
@@ -8902,13 +8888,19 @@ not establish a stack-zeroizing function.
 
 In a protected function, Clang leaves sensitive local allocations unmarked in
 LLVM IR and attaches ``!nozeroize !{}`` to ordinary local allocations that are
-not sensitive. The programmer is responsible for marking every local whose
-storage needs clearing. The ``"sensitive"`` stack-zeroization mode may spare
-these explicitly exempted allocations; the ``"used"`` mode still clears all
-used stack memory. Losing ``!nozeroize`` metadata can only widen clearing.
+not sensitive. Under this source annotation contract, leaving an ordinary local
+unmarked asserts that its storage does not need clearing. This includes local closure
+objects: capturing a sensitive variable does not mark the closure sensitive.
+If the IR is used with the ``"sensitive"`` stack mode, the programmer must mark
+every local whose storage needs clearing so it is not exempted. The current
+``zeroize_on_return`` lowering always requests ``"used"``, which ignores these
+exemptions. No target implements stack clearing yet, so the annotation currently
+changes IR metadata only. Losing ``!nozeroize`` metadata can only widen the
+requested clearing in ``"sensitive"`` mode.
 Compiler-introduced temporary and parameter storage remains unmarked, as does
 storage shared with return objects or Blocks runtime bookkeeping.
-ClangIR currently omits these exemptions and keeps all local allocations covered.
+ClangIR currently omits these exemptions, requesting coverage of all local
+allocations.
 
 This is a storage annotation, not data-flow tracking. Assigning a secret to
 another local does not make that local sensitive. On a pointer or reference,
