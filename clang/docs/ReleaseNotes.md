@@ -211,10 +211,15 @@ features cannot lower the translation-unit ABI level;
   diagnoses invalid subjects and combinations with `naked`, and documents its
   requested stack and register clearing contract. This frontend-only addition
   does not yet emit LLVM zeroization requests or change generated code.
-- Added the `zeroize_on_return` function attribute, which requests that a function clear its stack frame and the caller-observable register state at every supported exit. It takes no arguments and applies to functions only.
+- Added the `zeroize_on_return` function attribute, lowering to
+  `"zero-call-used-regs"="all"` and `"zeroize-stack"="used"` IR requests.
+  Stack and flag clearing are not implemented by any target yet; register
+  clearing and unsupported-target diagnostics use the existing backend support.
+  Coroutines and `musttail` returns in annotated functions are rejected in Sema.
 - Added the `sensitive` attribute for automatic local variables in
   `zeroize_on_return` functions. Sensitive allocations remain unmarked in IR;
-  ordinary local allocations receive `!nozeroize` metadata. Stray uses warn by default.
+  ordinary local allocations receive `!nozeroize` metadata. The currently
+  requested `used` stack mode ignores these exemptions. Stray uses warn by default.
 
 ### Improvements to Clang's diagnostics
 

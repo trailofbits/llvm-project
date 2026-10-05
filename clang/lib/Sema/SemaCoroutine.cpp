@@ -194,6 +194,12 @@ static bool isValidCoroutineContext(Sema &S, SourceLocation Loc,
     return false;
   }
 
+  if (const auto *A = FD->getAttr<ZeroizeOnReturnAttr>()) {
+    S.Diag(Loc, diag::err_coroutine_zeroize_on_return) << Keyword;
+    S.Diag(A->getLocation(), diag::note_zeroize_on_return_here);
+    return false;
+  }
+
   // An enumeration for mapping the diagnostic type to the correct diagnostic
   // selection index.
   enum InvalidFuncDiag {
