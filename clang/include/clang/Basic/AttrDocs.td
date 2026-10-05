@@ -8858,6 +8858,16 @@ The requests describe the annotated function's own storage. They do not track
 copies in a caller's frame or on the heap, clear callees' frames, or provide
 clearing after a ``longjmp`` that bypasses the function's exit code.
 
+The attribute does not propagate to separately emitted bodies of lambdas,
+Blocks, captured statements, or OpenMP outlined regions. Their local storage
+belongs to a separate function frame. A lambda's call operator must be annotated
+independently to request clearing; an OpenMP outlined body receives no request
+from its enclosing function.
+
+Forwarding ABI thunks do not inherit ``zeroize_on_return`` requests. The called
+method retains them. A variadic thunk that clones the method body retains its
+requests because it executes the body itself.
+
 .. code-block:: c
 
   [[clang::zeroize_on_return]]
