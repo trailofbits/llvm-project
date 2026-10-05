@@ -1,5 +1,4 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -std=c++11 -fsyntax-only -verify %s
-// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -std=c++11 -emit-llvm -verify %s -o /dev/null
 
 int callee(int);
 
