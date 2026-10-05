@@ -3570,6 +3570,7 @@ def ZeroizeOnReturn : InheritableAttr {
   let Documentation = [ZeroizeOnReturnDocs];
   let SimpleHandler = 1;
 }
+def : MutualExclusions<[Naked, ZeroizeOnReturn]>;
 
 def Pascal : DeclOrTypeAttr {
   let Spellings = [Clang<"pascal">, CustomKeyword<"__pascal">,
