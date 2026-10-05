@@ -3564,6 +3564,14 @@ def ZeroCallUsedRegs : InheritableAttr {
   let Documentation = [ZeroCallUsedRegsDocs];
 }
 
+def ZeroizeOnReturn : InheritableAttr {
+  let Spellings = [Clang<"zeroize_on_return">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [ZeroizeOnReturnDocs];
+  let SimpleHandler = 1;
+}
+def : MutualExclusions<[Naked, ZeroizeOnReturn]>;
+
 def Pascal : DeclOrTypeAttr {
   let Spellings = [Clang<"pascal">, CustomKeyword<"__pascal">,
                    CustomKeyword<"_pascal">];

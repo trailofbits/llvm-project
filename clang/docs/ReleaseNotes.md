@@ -207,6 +207,11 @@ features cannot lower the translation-unit ABI level;
 
 - Clang now properly propagates attributes on class and variable templates to their redeclarations, which will result in redeclarations not interfering with diagnostics. (#GH209812)
 
+- Clang recognizes the no-argument `zeroize_on_return` function attribute,
+  diagnoses invalid subjects and combinations with `naked`, and documents its
+  requested stack and register clearing contract. This frontend-only addition
+  does not yet emit LLVM zeroization requests or change generated code.
+
 ### Improvements to Clang's diagnostics
 
 - More consistent rendering of Unicode characters in diagnostic messages.

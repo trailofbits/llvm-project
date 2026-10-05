@@ -8824,6 +8824,47 @@ flag.
   }];
 }
 
+def ZeroizeOnReturnDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+The ``zeroize_on_return`` attribute declares a request to clear the function's
+used stack storage and eligible caller-saved register state at every supported
+exit. It takes no arguments and applies only to functions. The annotation is
+inherited by subsequent declarations and definitions of the same function.
+
+.. code-block:: c
+
+  [[clang::zeroize_on_return]] void handle_secret(void);
+  void handle_secret(void) __attribute__((zeroize_on_return));
+
+The attribute cannot be combined with ``naked`` because a naked function has
+no compiler-generated epilogue in which to enforce the request.
+
+**Requested contract.** The request covers the annotated function's own used
+stack storage, including compiler-introduced storage such as spill slots and
+alignment padding. It also covers caller-saved registers eligible for clearing
+under the function's calling convention. The function's return value, live
+exit operands, return-address register, and registers that the calling
+convention requires the function to preserve are excluded.
+
+Supported exits include normal returns and explicit exception cleanup paths
+on targets whose exception model provides them. The request does not cover
+routes that bypass the function's exit code, such as ``longjmp`` past its frame
+or exception unwinding without a cleanup path. It does not clear the frames of
+callees, heap storage, or copies in the caller's frame. A callee that handles a
+secret needs its own request.
+
+Unlike ``zero_call_used_regs``, this attribute requests stack clearing as well
+as register clearing and offers no choice of a weaker register-clearing mode.
+
+**Implementation status.** Clang currently recognizes this attribute and
+diagnoses invalid uses, but does not lower it to LLVM zeroization requests.
+It therefore has no effect on generated code in this implementation. Accepting
+the annotation is not evidence that stack or register clearing has occurred;
+enforcement requires the lowering and target support provided separately.
+  }];
+}
+
 def DocHLSLSemantics : DocumentationCategory<"HLSL Semantics"> {
   let Content = [{
 A semantic is a string attached to a shader input or output that conveys
