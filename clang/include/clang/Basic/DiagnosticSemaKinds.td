@@ -3851,6 +3851,10 @@ def warn_not_xl_compatible
       InGroup<AIXCompat>;
 def note_misaligned_member_used_here : Note<
     "passing byval argument %0 with potentially incompatible alignment here">;
+def warn_sensitive_without_zeroize_on_return : Warning<
+  "%0 attribute has no effect without 'zeroize_on_return' on the enclosing function">,
+  InGroup<IgnoredAttributes>;
+
 def warn_redeclaration_without_attribute_prev_attribute_ignored : Warning<
   "%q0 redeclared without %1 attribute: previous %1 ignored">,
   InGroup<MicrosoftInconsistentDllImport>;

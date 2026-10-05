@@ -8886,6 +8886,47 @@ frame alone.
   }];
 }
 
+def SensitiveDocs : Documentation {
+  let Category = DocCatVariable;
+  let Content = [{
+The ``sensitive`` attribute marks an automatic local variable's own storage as
+holding data that needs clearing at a protected function's exits. It takes no
+arguments and is spelled ``[[clang::sensitive]]`` or
+``__attribute__((sensitive))``. It does not apply to parameters, fields, globals,
+or static local variables.
+
+The enclosing function must carry ``zeroize_on_return``. Outside such a
+function the attribute has no effect, and Clang warns by default. Register-only
+clearing requested by ``zero_call_used_regs`` or ``-fzero-call-used-regs`` does
+not establish a stack-zeroizing function.
+
+In a protected function, Clang leaves sensitive local allocations unmarked in
+LLVM IR and attaches ``!nozeroize !{}`` to ordinary local allocations that are
+not sensitive. The programmer is responsible for marking every local whose
+storage needs clearing. The ``"sensitive"`` stack-zeroization mode may spare
+these explicitly exempted allocations; the ``"used"`` mode still clears all
+used stack memory. Losing ``!nozeroize`` metadata can only widen clearing.
+Compiler-introduced temporary and parameter storage remains unmarked, as does
+storage shared with return objects or Blocks runtime bookkeeping.
+ClangIR currently omits these exemptions and keeps all local allocations covered.
+
+This is a storage annotation, not data-flow tracking. Assigning a secret to
+another local does not make that local sensitive. On a pointer or reference,
+the attribute describes its own storage, not the pointee or referred-to object.
+It does not force storage to remain on the stack through optimization and does
+not insert any clearing itself.
+
+.. code-block:: c
+
+  [[clang::zeroize_on_return]]
+  void encrypt(void) {
+    [[clang::sensitive]] unsigned char round_keys[176];
+    unsigned char scratch[4096]; // must not hold data that needs clearing
+    /* ... */
+  }
+  }];
+}
+
 def DocHLSLSemantics : DocumentationCategory<"HLSL Semantics"> {
   let Content = [{
 A semantic is a string attached to a shader input or output that conveys
