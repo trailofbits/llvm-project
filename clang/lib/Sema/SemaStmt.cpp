@@ -779,6 +779,14 @@ bool Sema::checkMustTailAttr(const Stmt *St, const Attr &MTA) {
 
   const auto *CallerDecl = dyn_cast<FunctionDecl>(CurContext);
 
+  if (CallerDecl) {
+    if (const auto *A = CallerDecl->getAttr<ZeroizeOnReturnAttr>()) {
+      Diag(MTA.getLocation(), diag::err_musttail_zeroize_on_return);
+      Diag(A->getLocation(), diag::note_zeroize_on_return_here);
+      return false;
+    }
+  }
+
   // Find caller function signature.
   if (!CallerDecl) {
     int ContextType;

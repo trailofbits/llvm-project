@@ -8088,6 +8088,14 @@ An unmarked object is cleared, and so is every slot whose contents cannot be
 traced back to a source-level object: spill slots, the callee-save area, and
 alignment padding are cleared whether or not anything is marked.
 
+A frontend producer may rely on a source-language annotation contract that
+makes the programmer responsible for identifying every object whose storage
+needs clearing. Under such a contract, the absence of a sensitivity annotation
+may be an assertion that the object's storage needs no clearing. The assertion
+must cover the object's own storage, including copies in closure objects; it
+is not data-flow or pointee tracking. Absence of an annotation is not evidence
+for adding this metadata unless the source-language contract defines it that way.
+
 Transforms must respect the one-directional rule this sets up:
 
 - Dropping the metadata is always permitted, from some of the marked objects or

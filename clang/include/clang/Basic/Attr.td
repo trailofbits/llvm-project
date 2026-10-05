@@ -3564,6 +3564,13 @@ def ZeroCallUsedRegs : InheritableAttr {
   let Documentation = [ZeroCallUsedRegsDocs];
 }
 
+def ZeroizeOnReturn : InheritableAttr {
+  let Spellings = [Clang<"zeroize_on_return">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [ZeroizeOnReturnDocs];
+  let SimpleHandler = 1;
+}
+
 def Pascal : DeclOrTypeAttr {
   let Spellings = [Clang<"pascal">, CustomKeyword<"__pascal">,
                    CustomKeyword<"_pascal">];
@@ -4945,6 +4952,12 @@ def Uninitialized : InheritableAttr {
   let Subjects = SubjectList<[LocalVar]>;
   let PragmaAttributeSupport = 1;
   let Documentation = [UninitializedDocs];
+}
+
+def Sensitive : InheritableAttr {
+  let Spellings = [Clang<"sensitive">];
+  let Subjects = SubjectList<[LocalVar], ErrorDiag>;
+  let Documentation = [SensitiveDocs];
 }
 
 def LoaderUninitialized : Attr {
