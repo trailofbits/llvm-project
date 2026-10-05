@@ -46,6 +46,19 @@ struct Result { int data[16]; };
     use(&value);
 }
 
+// Captures do not propagate the annotation; the closure needs its own mark.
+// CHECK-LABEL: define {{.*}} @_Z8closuresv(
+// CHECK: %key = alloca i32, align 4{{$}}
+// CHECK: %ordinary = alloca %class.anon, align 4, !nozeroize ![[EMPTY]]{{$}}
+// CHECK: %secret = alloca %class.anon.0, align 4{{$}}
+[[clang::zeroize_on_return]] void closures() {
+  [[clang::sensitive]] int key = 42;
+  auto ordinary = [key] { return key; };
+  [[clang::sensitive]] auto secret = [key] { return key; };
+  use(&ordinary);
+  use(&secret);
+}
+
 template <typename T> [[clang::zeroize_on_return]] void mixed_template() {
   [[clang::sensitive]] T secret;
   T ordinary;
