@@ -503,6 +503,17 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
     fn->setAttr(cir::CIRDialect::getStrictFPAttrName(),
                 mlir::UnitAttr::get(fn.getContext()));
   }
+
+  // constructAttributeList only sees zeroize_on_return if it was visible when
+  // fn was created. A use before a definition that adds the attribute creates
+  // fn from the earlier declaration, so apply the requests from the definition.
+  // Thunks pass no GlobalDecl and are not affected.
+  if (fd && fd->hasAttr<ZeroizeOnReturnAttr>()) {
+    fn->setAttr(cir::CIRDialect::getZeroCallUsedRegsAttrName(),
+                mlir::StringAttr::get(fn.getContext(), "all"));
+    fn->setAttr(cir::CIRDialect::getZeroizeStackAttrName(),
+                mlir::StringAttr::get(fn.getContext(), "used"));
+  }
   prologueCleanupDepth = ehStack.stable_begin();
 
   mlir::Block *entryBB = &fn.getBlocks().front();
