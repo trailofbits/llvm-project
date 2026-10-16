@@ -207,10 +207,16 @@ features cannot lower the translation-unit ABI level;
 
 - Clang now properly propagates attributes on class and variable templates to their redeclarations, which will result in redeclarations not interfering with diagnostics. (#GH209812)
 
-- Clang recognizes the no-argument `zeroize_on_return` function attribute,
-  diagnoses invalid subjects and combinations with `naked`, and documents its
-  requested stack and register clearing contract. This frontend-only addition
-  does not yet emit LLVM zeroization requests or change generated code.
+- Added the `zeroize_on_return` function attribute. It lowers to
+  `"zero-call-used-regs"="all"` and `"zeroize-stack"="used"` IR requests.
+  Stack and flag clearing are not implemented by any target yet; register
+  clearing and unsupported-target diagnostics use the existing backend support.
+  Clang rejects the attribute on `naked` functions and rejects coroutines and
+  `musttail` returns in annotated functions.
+- Added the `sensitive` attribute for automatic local variables in
+  `zeroize_on_return` functions. Sensitive allocations remain unmarked in IR;
+  ordinary local allocations receive `!nozeroize` metadata. The currently
+  requested `used` stack mode ignores these exemptions. Stray uses warn by default.
 
 ### Improvements to Clang's diagnostics
 

@@ -8088,6 +8088,10 @@ An unmarked object is cleared, and so is every slot whose contents cannot be
 traced back to a source-level object: spill slots, the callee-save area, and
 alignment padding are cleared whether or not anything is marked.
 
+A producer may attach the metadata to any object that its source language
+establishes as holding no data that needs clearing, for example when the
+language makes the programmer responsible for annotating every object that does.
+
 Transforms must respect the one-directional rule this sets up:
 
 - Dropping the metadata is always permitted, from some of the marked objects or

@@ -3318,6 +3318,11 @@ def warn_stmt_attribute_ignored_in_function : Warning<
   "use '%0' for functions">,
   InGroup<IgnoredAttributes>;
 
+def err_musttail_zeroize_on_return : Error<
+  "'musttail' cannot be used in a function with 'zeroize_on_return'">;
+def note_zeroize_on_return_here : Note<
+  "'zeroize_on_return' attribute specified here">;
+
 def err_musttail_needs_trivial_args : Error<
   "tail call requires that the return value, all parameters, and any "
   "temporaries created by the expression are trivially destructible">;
@@ -3851,6 +3856,9 @@ def warn_not_xl_compatible
       InGroup<AIXCompat>;
 def note_misaligned_member_used_here : Note<
     "passing byval argument %0 with potentially incompatible alignment here">;
+def warn_sensitive_without_zeroize_on_return : Warning<
+  "%0 attribute has no effect without 'zeroize_on_return' on the enclosing function">,
+  InGroup<IgnoredAttributes>;
 def warn_redeclaration_without_attribute_prev_attribute_ignored : Warning<
   "%q0 redeclared without %1 attribute: previous %1 ignored">,
   InGroup<MicrosoftInconsistentDllImport>;
@@ -12999,6 +13007,8 @@ def err_return_in_coroutine : Error<
   "return statement not allowed in coroutine; did you mean 'co_return'?">;
 def note_declared_coroutine_here : Note<
   "function is a coroutine due to use of '%0' here">;
+def err_coroutine_zeroize_on_return : Error<
+  "'%0' cannot be used in a function with 'zeroize_on_return'">;
 def err_coroutine_objc_method : Error<
   "Objective-C methods as coroutines are not yet supported">;
 def err_coroutine_unevaluated_context : Error<

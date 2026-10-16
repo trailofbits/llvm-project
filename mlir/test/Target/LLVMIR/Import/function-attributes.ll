@@ -574,6 +574,30 @@ declare void @zero_call_used_regs() "zero-call-used-regs"="skip"
 
 // -----
 
+; CHECK-LABEL: @zeroize_stack_used
+; CHECK-SAME: attributes {zeroize_stack = "used"}
+declare void @zeroize_stack_used() "zeroize-stack"="used"
+
+// -----
+
+; CHECK-LABEL: @zeroize_stack_sensitive
+; CHECK-SAME: attributes {zeroize_stack = "sensitive"}
+declare void @zeroize_stack_sensitive() "zeroize-stack"="sensitive"
+
+// -----
+
+; CHECK-LABEL: @zeroize_stack_default
+; CHECK-SAME: attributes {zeroize_stack = ""}
+declare void @zeroize_stack_default() "zeroize-stack"
+
+// -----
+
+; CHECK-LABEL: @zeroize_stack_unknown
+; CHECK-SAME: attributes {zeroize_stack = "future-mode"}
+declare void @zeroize_stack_unknown() "zeroize-stack"="future-mode"
+
+// -----
+
 ; Note: the 'default-func-attrs' aren't recoverable due to the way they lower
 ; to LLVM-IR, so they are handled on import as passthrough attributes.
 ; CHECK-LABEL: @default_func_attrs

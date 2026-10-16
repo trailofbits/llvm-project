@@ -4955,6 +4955,12 @@ def Uninitialized : InheritableAttr {
   let Documentation = [UninitializedDocs];
 }
 
+def Sensitive : InheritableAttr {
+  let Spellings = [Clang<"sensitive">];
+  let Subjects = SubjectList<[LocalVar], ErrorDiag>;
+  let Documentation = [SensitiveDocs];
+}
+
 def LoaderUninitialized : Attr {
   let Spellings = [Clang<"loader_uninitialized">];
   let Subjects = SubjectList<[GlobalVar]>;

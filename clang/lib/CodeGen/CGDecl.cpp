@@ -1484,6 +1484,18 @@ static bool shouldExtendLifetime(const ASTContext &Context,
   return true;
 }
 
+static void emitNoZeroizeMetadata(const VarDecl &D, RawAddress Addr,
+                                  llvm::Function &Fn) {
+  if (!Fn.hasFnAttribute("zeroize-stack") || D.isImplicit() ||
+      D.hasAttr<SensitiveAttr>())
+    return;
+  auto *Alloca = dyn_cast<llvm::AllocaInst>(Addr.getPointer());
+  if (!Alloca)
+    return;
+  Alloca->setMetadata(llvm::LLVMContext::MD_nozeroize,
+                      llvm::MDNode::get(Fn.getContext(), {}));
+}
+
 /// EmitAutoVarAlloca - Emit the alloca and debug information for a
 /// local variable.  Does not emit initialization or destruction.
 CodeGenFunction::AutoVarEmission
@@ -1612,6 +1624,10 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
                                  allocaAlignment, D.getName(),
                                  /*ArraySize=*/nullptr, &AllocaAddr);
 
+      // Byref allocations also contain Blocks runtime state, not just D.
+      if (!isEscapingByRef)
+        emitNoZeroizeMetadata(D, AllocaAddr, *CurFn);
+
       // Don't emit lifetime markers for MSVC catch parameters. The lifetime of
       // the catch parameter starts in the catchpad instruction, and we can't
       // insert code in those basic blocks.
@@ -1713,6 +1729,7 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
       // Allocate memory for the array.
       address = CreateTempAlloca(llvmTy, alignment, "vla", VlaSize.NumElts,
                                  &AllocaAddr);
+      emitNoZeroizeMetadata(D, AllocaAddr, *CurFn);
     }
 
     // If we have debug info enabled, properly describe the VLA dimensions for
