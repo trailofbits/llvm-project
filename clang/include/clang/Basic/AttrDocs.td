@@ -8845,8 +8845,8 @@ the calling convention are excluded.
 Unsupported stack requests produce a backend warning, which ``-Werror`` can
 promote to an error. Unsupported register requests produce a backend error,
 including on ARM32. Compilation is therefore not guaranteed to succeed on an
-unsupported target. ``naked`` functions cannot perform the requested clearing
-and receive backend warnings.
+unsupported target. The attribute cannot be combined with ``naked`` because a
+naked function has no compiler-generated epilogue in which to clear anything.
 
 Clang rejects coroutine suspension or return statements and ``musttail``
 returns in an annotated function because they are incompatible with the LLVM

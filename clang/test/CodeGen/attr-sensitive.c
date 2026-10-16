@@ -61,4 +61,17 @@ void inherited(void) {
   use(&ordinary);
 }
 
+// The definition adds the attribute after the function was already used.
+// CHECK-LABEL: define {{.*}} @after_use(
+// CHECK: %secret = alloca i32, align 4{{$}}
+// CHECK: %ordinary = alloca i32, align 4, !nozeroize ![[EMPTY]]{{$}}
+void after_use(void);
+void early_use(void) { after_use(); }
+[[clang::zeroize_on_return]] void after_use(void) {
+  [[clang::sensitive]] int secret;
+  int ordinary;
+  use(&secret);
+  use(&ordinary);
+}
+
 // CHECK: ![[EMPTY]] = !{}

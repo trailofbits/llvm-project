@@ -19,6 +19,11 @@
 // instruction alone.
 // CHECK:       call void @zeroize_std(){{$}}
 
+// A use before the definition creates the function from a declaration that
+// lacks the attribute. The definition still carries both requests.
+// CHECK:     define {{.*}} @early_caller() #[[PLAIN]]
+// CHECK:     define {{.*}} @zeroize_after_use() #[[PROT]]
+
 // An explicitly annotated main keeps both requests. The exemption that strips
 // the command-line default from an un-annotated main still applies, and
 // zero-call-used-regs.c is what pins that.
@@ -57,5 +62,9 @@ void zeroize_and_skip(void) {}
 void zeroize_on_decl(void) {}
 
 void caller(void) { zeroize_std(); }
+
+void zeroize_after_use(void);
+void early_caller(void) { zeroize_after_use(); }
+[[clang::zeroize_on_return]] void zeroize_after_use(void) {}
 
 [[clang::zeroize_on_return]] int main(void) { return 0; }

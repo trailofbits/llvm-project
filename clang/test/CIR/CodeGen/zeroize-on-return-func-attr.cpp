@@ -36,6 +36,16 @@ extern "C" {
     // CIR-NOT: zeroize_stack
     // LLVM: call void{{.*}}@protected_fn(){{$}}
   }
+
+  // A use before the definition creates the function from a declaration that
+  // lacks the attribute. The definition still carries both requests.
+  void late_fn();
+  void early_caller() { late_fn(); }
+  [[clang::zeroize_on_return]] void late_fn() {}
+  // CIR: cir.func{{.*}}@late_fn()
+  // CIR-SAME: zero_call_used_regs = "all"
+  // CIR-SAME: zeroize_stack = "used"
+  // LLVM: define{{.*}}@late_fn() #[[PROT_ATTR]] {
 }
 
 // LLVM: attributes #[[PROT_ATTR]]
