@@ -9739,6 +9739,9 @@ def err_clear_padding_needs_trivial_copy : Error<
   "trivially-copyable type (%0 invalid)">;
 def err_clear_padding_no_flexible_array : Error<
   "%0 has flexible array member, which is unsupported by __builtin_clear_padding">;
+def err_clear_sensitive_needs_object_pointer : Error<
+  "address argument to __builtin_clear_sensitive must be a pointer to a "
+  "non-const object (%0 invalid)">;
 
 def err_overflow_builtin_must_be_int : Error<
   "operand argument to %select{overflow builtin|checked integer operation}0 "

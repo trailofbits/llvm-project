@@ -1118,6 +1118,12 @@ def BuiltinMemsetInline : Builtin {
   let Prototype = "void(void*, int, _Constant size_t)";
 }
 
+def BuiltinClearSensitive : Builtin {
+  let Spellings = ["__builtin_clear_sensitive"];
+  let Attributes = [NoThrow, CustomTypeChecking];
+  let Prototype = "void(void*, size_t)";
+}
+
 def BuiltinStrcspn : Builtin {
   let Spellings = ["__builtin_strcspn"];
   let Attributes = [FunctionWithBuiltinPrefix, NoThrow];
