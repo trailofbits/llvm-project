@@ -173,6 +173,10 @@ features cannot lower the translation-unit ABI level;
 - Clang now allows GNU computed `goto` extension in `constexpr` functions, matching the relaxed
   `constexpr` function body rules introduced in C++23.
 
+- Added `__builtin_clear_sensitive(void *dst, size_t size)`, which zeroes a
+  region of memory without the write being removed as a dead store. It lowers
+  to a volatile `llvm.memset.inline`, so it normally does not call `memset`.
+
 ### New Compiler Flags
 
 - New option `-fdefined-pointer-subtraction` added to preserve stable semantics
