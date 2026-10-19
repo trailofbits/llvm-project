@@ -3678,14 +3678,19 @@ private:
     }();
 
     // If this doesn't map cleanly onto the alloca type, and that type isn't
-    // a single value type, just emit a memset.
+    // a single value type, just emit a memset. Keep memset.inline inline: its
+    // guarantee not to call memset must survive the split.
     if (!CanContinue) {
       Type *SizeTy = II.getLength()->getType();
       unsigned Sz = NewEndOffset - NewBeginOffset;
       Constant *Size = ConstantInt::get(SizeTy, Sz);
-      MemIntrinsic *New = cast<MemIntrinsic>(IRB.CreateMemSet(
-          getNewAllocaSlicePtr(IRB, OldPtr->getType()), II.getValue(), Size,
-          MaybeAlign(getSliceAlign()), II.isVolatile()));
+      Value *NewPtr = getNewAllocaSlicePtr(IRB, OldPtr->getType());
+      MemIntrinsic *New = cast<MemIntrinsic>(
+          II.getIntrinsicID() == Intrinsic::memset_inline
+              ? IRB.CreateMemSetInline(NewPtr, getSliceAlign(), II.getValue(),
+                                       Size, II.isVolatile())
+              : IRB.CreateMemSet(NewPtr, II.getValue(), Size,
+                                 MaybeAlign(getSliceAlign()), II.isVolatile()));
       if (AATags)
         New->setAAMetadata(
             AATags.adjustForAccess(NewBeginOffset - BeginOffset, Sz));
@@ -3889,8 +3894,14 @@ private:
         SrcPtr = OurPtr;
         SrcAlign = SliceAlign;
       }
-      CallInst *New = IRB.CreateMemCpy(DestPtr, DestAlign, SrcPtr, SrcAlign,
-                                       Size, II.isVolatile());
+      // Keep memcpy.inline inline: its guarantee not to call memcpy must
+      // survive the split.
+      CallInst *New =
+          II.getIntrinsicID() == Intrinsic::memcpy_inline
+              ? IRB.CreateMemCpyInline(DestPtr, DestAlign, SrcPtr, SrcAlign,
+                                       Size, II.isVolatile())
+              : IRB.CreateMemCpy(DestPtr, DestAlign, SrcPtr, SrcAlign, Size,
+                                 II.isVolatile());
       if (AATags)
         New->setAAMetadata(AATags.shift(NewBeginOffset - BeginOffset));
 
