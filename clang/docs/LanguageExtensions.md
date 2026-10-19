@@ -4834,6 +4834,35 @@ Note that the `size` argument must be a compile time constant.
 
 Note that this intrinsic cannot yet be called in a `constexpr` context.
 
+#### Guaranteed clearing of sensitive memory
+
+```c
+void __builtin_clear_sensitive(void *dst, size_t size);
+```
+
+`__builtin_clear_sensitive` sets `size` bytes starting at `dst` to zero. Unlike
+`memset`, the write is not removed when the memory is never read again, for
+example right before a buffer is freed or goes out of scope. The clear is
+emitted without calling an external function such as `memset`, with the
+exception described below. The `size` argument does not need to be a compile
+time constant.
+
+`dst` must point to a non-const object type. It may point to a `volatile`
+object or to an object in a non-default address space.
+
+The builtin clears only the named bytes. It does not follow pointers stored in
+them, and it does not clear copies the compiler made elsewhere, such as in
+registers or spill slots. It is independent of `zeroize_on_return`: use it for
+memory that attribute does not reach, such as heap buffers and objects that
+outlive the function.
+
+It lowers to a volatile [llvm.memset.inline](https://llvm.org/docs/LangRef.html#llvm-memset-inline-intrinsic)
+of zero. A fixed-size clear of a local whose address does not escape may be
+split by the optimizer. The pieces are still written, but each piece may
+become a `memset` call.
+
+The builtin cannot be called in a `constexpr` context.
+
 ### `__is_bitwise_cloneable`
 
 A type trait is used to check whether a type can be safely copied by memcpy.
