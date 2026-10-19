@@ -50,18 +50,19 @@ define void @memset_split() {
   ret void
 }
 
-; A variable length is not split, and the call is updated in place.
+; A variable length is not split. Promote the first byte so that SROA must
+; update the call's destination to the remaining alloca slice in place.
 define void @memset_inline_variable(i64 %n) {
 ; CHECK-LABEL: define void @memset_inline_variable(
 ; CHECK-SAME: i64 [[N:%.*]]) {
-; CHECK-NEXT:    [[BUF:%.*]] = alloca i8, i64 [[N]], align 1
-; CHECK-NEXT:    store i8 1, ptr [[BUF]], align 1
-; CHECK-NEXT:    call void @llvm.memset.inline.p0.i64(ptr [[BUF]], i8 0, i64 [[N]], i1 true)
+; CHECK-NEXT:    [[BUF_SROA_1:%.*]] = alloca [64 x i8], align 1
+; CHECK-NEXT:    call void @llvm.memset.inline.p0.i64(ptr align 1 [[BUF_SROA_1]], i8 0, i64 [[N]], i1 true)
 ; CHECK-NEXT:    ret void
 ;
-  %buf = alloca i8, i64 %n
+  %buf = alloca [65 x i8], align 1
   store i8 1, ptr %buf
-  call void @llvm.memset.inline.p0.i64(ptr %buf, i8 0, i64 %n, i1 true)
+  %tail = getelementptr inbounds i8, ptr %buf, i64 1
+  call void @llvm.memset.inline.p0.i64(ptr %tail, i8 0, i64 %n, i1 true)
   ret void
 }
 
