@@ -14,18 +14,14 @@
 ; distinguish llvm.zeroize from a volatile memory intrinsic. That distinction is
 ; not made here and this file should not be read as making it.
 ;
-; What llvm.zeroize has over the volatile alternatives is a lowering guarantee:
-; a volatile memset over a dynamic or large length lowers to a memset libcall,
-; which spills the values live across the clear and grows the frame, while
-; llvm.zeroize expands in place. That is not an IR-level property, so it is
-; pinned by the X86 lowering test rather than by this one.
+; A volatile plain memset over a dynamic or large length can lower to a memset
+; libcall, while llvm.zeroize expands in place. That lowering behavior is
+; covered by the X86 tests.
 ;
-; Two things this file does show bear on that. llvm.zeroize needs no volatile
-; marker to survive, so it stays a plain analyzable write to its region rather
-; than an opaque one. And the memset_inline rows record that SROA rewrites
-; llvm.memset.inline into a plain llvm.memset under the full pipeline, on
-; exactly the kind of non-escaping stack buffer this feature targets, which is
-; how the no-libcall guarantee is lost before code generation sees it.
+; llvm.zeroize needs no volatile marker to survive, so it stays a plain
+; analyzable write to its region. The memset_inline rows also check that SROA
+; preserves llvm.memset.inline under the full pipeline for non-escaping stack
+; buffers, retaining its no-libcall guarantee.
 
 ; RUN: opt < %s -aa-pipeline=basic-aa -passes=dse -S | FileCheck %s
 ; RUN: opt < %s -passes='default<O2>' -S | FileCheck %s --check-prefix=O2
@@ -76,7 +72,7 @@ define void @memset_inline_at_end_of_function() {
 ; O2-LABEL: define void @memset_inline_at_end_of_function(
 ; O2-SAME: ) local_unnamed_addr #[[ATTR3]] {
 ; O2-NEXT:    [[BUF:%.*]] = alloca [16 x i8], align 1
-; O2-NEXT:    call void @llvm.memset.p0.i64(ptr align 1 [[BUF]], i8 0, i64 16, i1 true)
+; O2-NEXT:    call void @llvm.memset.inline.p0.i64(ptr align 1 [[BUF]], i8 0, i64 16, i1 true)
 ; O2-NEXT:    ret void
 ;
   %buf = alloca [16 x i8], align 1
@@ -228,7 +224,7 @@ define void @memset_inline_before_lifetime_end() {
 ; O2-SAME: ) local_unnamed_addr #[[ATTR3]] {
 ; O2-NEXT:    [[BUF:%.*]] = alloca [16 x i8], align 1
 ; O2-NEXT:    call void @llvm.lifetime.start.p0(ptr nonnull [[BUF]])
-; O2-NEXT:    call void @llvm.memset.p0.i64(ptr align 1 [[BUF]], i8 0, i64 16, i1 true)
+; O2-NEXT:    call void @llvm.memset.inline.p0.i64(ptr align 1 [[BUF]], i8 0, i64 16, i1 true)
 ; O2-NEXT:    call void @llvm.lifetime.end.p0(ptr nonnull [[BUF]])
 ; O2-NEXT:    ret void
 ;
