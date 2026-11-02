@@ -18,6 +18,10 @@
 ; them, which is reported rather than skipped.
 ; RUN: not llc < %t/int.ll -mtriple=x86_64-unknown-linux-gnu -mattr=+mmx,-x87 -verify-machineinstrs -o /dev/null 2>&1 | FileCheck --check-prefix=NOX87 %s
 
+; A supported inline-asm exit can consume a live MMX value. The shared x87
+; clear would overwrite that input, so refuse the request instead.
+; RUN: not llc < %t/live.ll -mtriple=x86_64-unknown-linux-gnu -mattr=+mmx,+sse2 -verify-machineinstrs -o /dev/null 2>&1 | FileCheck --check-prefix=LIVEMMX %s
+
 ;--- mmx.ll
 ; The function wrote %mm0, so the stack is emptied before it is filled.
 define void @used_mmx(ptr %p, ptr %q) "zero-call-used-regs"="used" {
@@ -61,3 +65,11 @@ define i32 @all_int(i32 %a) "zero-call-used-regs"="all" {
 }
 
 ; NOX87: error: {{.*}}in function all_int{{.*}}clearing the call-used registers reached 'MM0, MM1, MM2, MM3, MM4, MM5, MM6, MM7', which this subtarget has no instruction to clear
+
+;--- live.ll
+define void @live_mmx_exit(<1 x i64> %arg) "zero-call-used-regs"="all" {
+  call void asm sideeffect "jmp target", "{mm0}"(<1 x i64> %arg)
+  unreachable
+}
+
+; LIVEMMX: error: {{.*}}in function live_mmx_exit{{.*}}x87 and MMX registers cannot be cleared with live MMX values at the exit

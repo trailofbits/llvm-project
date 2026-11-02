@@ -20,6 +20,7 @@
 #include "X86TargetMachine.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -666,14 +667,112 @@ static void reportUncleared(const MachineFunction &MF,
       DiagnosticLocation(), DS_Error});
 }
 
-// Every register in the set is cleared here or reported as not cleared; the
-// set is the exit's, and what it holds is not this emitter's to narrow. What
-// it never holds: ST0-7 are reserved and FP7 is not allocatable, so the x87
-// stack is requested through the FP0-6 pseudos; the tile registers and the
-// mask pairs are fixed registers (the tiles are the epilogue's to release, and
-// TILEZERO faults on an unconfigured tile); and
-// X86RegisterInfo::getReservedRegs reserves the MMX, XMM and mask registers on
-// a subtarget that has no instruction to write them.
+static bool collectZeroCallUsedGPRs(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
+    BitVector &RegsToZero, BitVector &GPRsToZero,
+    SmallVectorImpl<std::pair<MCRegister, bool>> &ByteRegsToZero) {
+  const MachineFunction &MF = *MBB.getParent();
+  const X86Subtarget &STI = MF.getSubtarget<X86Subtarget>();
+  const TargetRegisterInfo *TRI = STI.getRegisterInfo();
+  // Include artificial upper fragments when checking widened writes.
+  LiveRegUnits NeededAtExit(*TRI);
+  for (const MachineInstr &MI : make_range(MBBI, MBB.end()))
+    for (const MachineOperand &MO : MI.operands())
+      if (MO.isReg() && MO.getReg() && !(MO.isUse() && MO.isUndef()))
+        NeededAtExit.addReg(MO.getReg());
+
+  LiveRegUnits LiveAtInsert(*TRI);
+  for (const MachineInstr &MI : reverse(make_range(MBBI, MBB.end())))
+    if (!MI.isDebugInstr())
+      LiveAtInsert.stepBackward(MI);
+
+  for (MCRegister Reg : RegsToZero.set_bits())
+    if (TRI->isGeneralPurposeRegister(MF, Reg)) {
+      MCRegister Reg32 = getX86SubSuperRegister(Reg, 32);
+      MCRegister FullReg = getX86SubSuperRegister(Reg, STI.is64Bit() ? 64 : 32);
+      if (NeededAtExit.available(FullReg)) {
+        GPRsToZero.set(Reg32);
+      } else {
+        bool CanPreserve =
+            X86::GR8RegClass.contains(Reg) && NeededAtExit.available(Reg);
+        MCRegister LowByte = TRI->getSubReg(Reg32, X86::sub_8bit);
+        bool PreserveLowByte = X86::GR8_ABCD_HRegClass.contains(Reg) &&
+                               !LiveAtInsert.available(LowByte);
+        if (CanPreserve && PreserveLowByte) {
+          LiveRegUnits WidenedUnits = NeededAtExit;
+          WidenedUnits.removeReg(LowByte);
+          CanPreserve = WidenedUnits.available(FullReg);
+        }
+        if (!CanPreserve) {
+          MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+              MF.getFunction(),
+              Twine("\"zero-call-used-regs\" cannot clear register '") +
+                  TRI->getName(Reg32) +
+                  "' without overwriting a value needed at the exit"});
+          return false;
+        }
+        ByteRegsToZero.emplace_back(Reg, PreserveLowByte);
+      }
+      RegsToZero.reset(Reg);
+    }
+  return true;
+}
+
+static void emitZeroCallUsedX87(MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator MBBI,
+                                const DebugLoc &DL) {
+  const MachineFunction &MF = *MBB.getParent();
+  const X86InstrInfo &TII = *MF.getSubtarget<X86Subtarget>().getInstrInfo();
+  // The exit instruction records the live x87 stack: X86FloatingPoint puts
+  // returned values on a return as implicit ST0/ST1 uses and every entry
+  // live across an inline asm as ST uses, and the ABI leaves the stack empty
+  // at a call. Push zeros into the free slots only; pushing over a live
+  // entry overflows the stack and turns the entry into NaN.
+  if (MBBI == MBB.end() ||
+      (!MBBI->isReturn() && !MBBI->isCall() && !MBBI->isInlineAsm())) {
+    MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+        MF.getFunction(),
+        "x87 and MMX registers cannot be cleared at an exit whose stack "
+        "depth is unknown",
+        DiagnosticLocation(), DS_Error});
+  } else {
+    unsigned NumLive = 0;
+    for (const MachineOperand &MO : MBBI->operands()) {
+      if (!MO.isReg() || !MO.isUse() || MO.isUndef())
+        continue;
+      if (X86::VR64RegClass.contains(MO.getReg())) {
+        MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+            MF.getFunction(),
+            "x87 and MMX registers cannot be cleared with live MMX values at "
+            "the exit",
+            DiagnosticLocation(), DS_Error});
+        return;
+      }
+      if (X86::RSTRegClass.contains(MO.getReg()))
+        NumLive = std::max(NumLive, unsigned(MO.getReg().id() - X86::ST0) + 1);
+    }
+    unsigned NumFPRegs = 8 - NumLive;
+
+    // Filling the free slots zeroes the MMX registers that alias them; the
+    // live slots hold the values the exit returns. After an MMX instruction
+    // the tag word marks every slot valid and the first push would
+    // overflow, so empty the stack first. That is only possible when
+    // nothing is live on it, and it is only needed then: a function whose
+    // own x87 code ran after its MMX code has already emptied it.
+    if (NumLive == 0 && functionWritesMMX(MF))
+      BuildMI(MBB, MBBI, DL, TII.get(X86::MMX_EMMS));
+
+    for (unsigned i = 0; i != NumFPRegs; ++i)
+      BuildMI(MBB, MBBI, DL, TII.get(X86::LD_F0));
+
+    for (unsigned i = 0; i != NumFPRegs; ++i)
+      BuildMI(MBB, MBBI, DL, TII.get(X86::ST_FPrr)).addReg(X86::ST0);
+  }
+}
+
+// ST0-7 are reserved and FP7 is not allocatable; the x87 stack is requested
+// through FP0-6. Tiles and mask pairs are fixed registers. Unavailable register
+// files are reserved by X86RegisterInfo::getReservedRegs.
 void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
                                             MachineBasicBlock &MBB,
                                             MachineBasicBlock::iterator MBBI,
@@ -685,31 +784,23 @@ void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
   if (MBBI != MBB.end())
     DL = MBBI->getDebugLoc();
 
-  // Sort the set into one entry per clearing instruction. A GPR is cleared
-  // through its 32-bit form, which zeroes the whole 64-bit register, so AL,
-  // AH, AX, EAX and RAX are one clear. A vector register is cleared through
-  // its XMM lane: a VEX or EVEX encoded xor zeroes the bits above the lane,
-  // and without AVX nothing can have written them, so XMM0, YMM0 and ZMM0 are
-  // one clear. The x87 stack is cleared once, as a stack, and the MMX
-  // registers are cleared with it: MMn is the 64-bit significand of physical
-  // x87 register n. A register whose clearing instruction the subtarget lacks
-  // is reported, as is one this emitter does not know.
+  // Coalesce aliases into one clearing instruction. GPR clears use the
+  // 32-bit form; vector clears use the XMM lane and zero the upper lanes when
+  // AVX is enabled. MMX significands are cleared by filling the x87 stack.
   const bool HasX87 = STI.hasX87() && !STI.useSoftFloat();
   BitVector GPRsToZero(TRI->getNumRegs());
+  SmallVector<std::pair<MCRegister, bool>, 4> ByteRegsToZero;
   BitVector LanesToZero(TRI->getNumRegs());
   BitVector MasksToZero(TRI->getNumRegs());
   bool WantX87 = false;
   SmallVector<MCRegister, 8> NoInstruction;
   SmallVector<MCRegister, 8> NoSequence;
+  if (!collectZeroCallUsedGPRs(MBB, MBBI, RegsToZero, GPRsToZero,
+                               ByteRegsToZero))
+    return;
+
   for (MCRegister Reg : RegsToZero.set_bits()) {
-    if (TRI->isGeneralPurposeRegister(MF, Reg)) {
-      MCRegister Reg32 = getX86SubSuperRegister(Reg, 32);
-      if (Reg32.isValid())
-        GPRsToZero.set(Reg32);
-      else
-        NoSequence.push_back(Reg);
-    } else if (X86::RFP80RegClass.contains(Reg) ||
-               X86::VR64RegClass.contains(Reg)) {
+    if (X86::RFP80RegClass.contains(Reg) || X86::VR64RegClass.contains(Reg)) {
       if (HasX87)
         WantX87 = true;
       else
@@ -736,41 +827,17 @@ void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
     }
   }
 
-  if (WantX87) {
-    // The exit instruction records the live x87 stack: X86FloatingPoint puts
-    // returned values on a return as implicit ST0/ST1 uses and every entry
-    // live across an inline asm as ST uses, and the ABI leaves the stack empty
-    // at a call. Push zeros into the free slots only; pushing over a live
-    // entry overflows the stack and turns the entry into NaN.
-    if (MBBI == MBB.end() ||
-        (!MBBI->isReturn() && !MBBI->isCall() && !MBBI->isInlineAsm())) {
-      MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
-          MF.getFunction(),
-          "x87 and MMX registers cannot be cleared at an exit whose stack "
-          "depth is unknown",
-          DiagnosticLocation(), DS_Error});
+  if (WantX87)
+    emitZeroCallUsedX87(MBB, MBBI, DL);
+
+  for (auto [Reg, PreserveLowByte] : ByteRegsToZero) {
+    if (PreserveLowByte) {
+      // Preserve the live low byte and flags while clearing all upper bits.
+      MCRegister Reg32 = getX86SubSuperRegister(Reg, 32);
+      BuildMI(MBB, MBBI, DL, TII.get(X86::MOVZX32rr8), Reg32)
+          .addReg(TRI->getSubReg(Reg32, X86::sub_8bit));
     } else {
-      unsigned NumLive = 0;
-      for (const MachineOperand &MO : MBBI->operands())
-        if (MO.isReg() && MO.isUse() && X86::RSTRegClass.contains(MO.getReg()))
-          NumLive =
-              std::max(NumLive, unsigned(MO.getReg().id() - X86::ST0) + 1);
-      unsigned NumFPRegs = 8 - NumLive;
-
-      // Filling the free slots zeroes the MMX registers that alias them; the
-      // live slots hold the values the exit returns. After an MMX instruction
-      // the tag word marks every slot valid and the first push would
-      // overflow, so empty the stack first. That is only possible when
-      // nothing is live on it, and it is only needed then: a function whose
-      // own x87 code ran after its MMX code has already emptied it.
-      if (NumLive == 0 && functionWritesMMX(MF))
-        BuildMI(MBB, MBBI, DL, TII.get(X86::MMX_EMMS));
-
-      for (unsigned i = 0; i != NumFPRegs; ++i)
-        BuildMI(MBB, MBBI, DL, TII.get(X86::LD_F0));
-
-      for (unsigned i = 0; i != NumFPRegs; ++i)
-        BuildMI(MBB, MBBI, DL, TII.get(X86::ST_FPrr)).addReg(X86::ST0);
+      BuildMI(MBB, MBBI, DL, TII.get(X86::MOV8ri), Reg).addImm(0);
     }
   }
 

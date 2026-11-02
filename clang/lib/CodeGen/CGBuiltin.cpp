@@ -5186,6 +5186,21 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
     addInstToNewSourceAtom(I, nullptr);
     return RValue::get(nullptr);
   }
+  case Builtin::BI__builtin_clear_sensitive: {
+    // Volatile keeps the clear from being removed as a dead store, and the
+    // inline form keeps it from becoming a memset call, which would leave a
+    // callee frame below the stack pointer.
+    Address Dest = EmitPointerWithAlignment(E->getArg(0));
+    Value *SizeVal = EmitScalarExpr(E->getArg(1));
+    llvm::Value *DestPtr = Dest.emitRawPointer(*this);
+    EmitNonNullArgCheck(RValue::get(DestPtr), E->getArg(0)->getType(),
+                        E->getArg(0)->getExprLoc(), FD, 0);
+    auto *I = Builder.CreateMemSetInline(
+        DestPtr, Dest.getAlignment().getAsAlign(), Builder.getInt8(0), SizeVal,
+        /*IsVolatile=*/true);
+    addInstToNewSourceAtom(I, nullptr);
+    return RValue::get(nullptr);
+  }
   case Builtin::BI__builtin___memset_chk: {
     // fold __builtin_memset_chk(x, y, cst1, cst2) to memset iff cst1<=cst2.
     Expr::EvalResult SizeResult, DstSizeResult;

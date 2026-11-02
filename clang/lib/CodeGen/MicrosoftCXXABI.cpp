@@ -2140,7 +2140,7 @@ MicrosoftCXXABI::EmitVirtualMemPtrThunk(const CXXMethodDecl *MD,
   if (MD->isExternallyVisible())
     ThunkFn->setComdat(CGM.getModule().getOrInsertComdat(ThunkFn->getName()));
 
-  CGM.SetLLVMFunctionAttributes(MD, FnInfo, ThunkFn, /*IsThunk=*/false);
+  CGM.SetLLVMFunctionAttributes(MD, FnInfo, ThunkFn, /*IsThunk=*/true);
   CGM.SetLLVMFunctionAttributesForDefinition(MD, ThunkFn);
 
   // Add the "thunk" attribute so that LLVM knows that the return type is

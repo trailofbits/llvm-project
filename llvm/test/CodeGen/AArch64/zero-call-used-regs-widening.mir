@@ -1,0 +1,137 @@
+# RUN: split-file %s %t
+# RUN: not llc -mtriple=aarch64 -run-pass=prolog-epilog -verify-machineinstrs %t/gpr.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=GPR
+# RUN: not llc -mtriple=aarch64 -run-pass=prolog-epilog -verify-machineinstrs %t/undef-def.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=GPR
+# RUN: not llc -mtriple=aarch64 -run-pass=prolog-epilog -verify-machineinstrs %t/fpr.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=FPR
+# RUN: not llc -mtriple=aarch64 -mattr=-neon -run-pass=prolog-epilog -verify-machineinstrs %t/fpr.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=FPR
+# RUN: not llc -mtriple=aarch64 -mattr=+sve -run-pass=prolog-epilog -verify-machineinstrs %t/sve.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=SVE
+# RUN: llc -mtriple=aarch64 -run-pass=prolog-epilog -verify-machineinstrs %t/safe.mir -o - | FileCheck %s --check-prefixes=SAFE,NEON
+# RUN: llc -mtriple=aarch64 -mattr=+sve -run-pass=prolog-epilog -verify-machineinstrs %t/safe.mir -o - | FileCheck %s --check-prefixes=SAFE,SAFE-SVE
+# RUN: llc -mtriple=aarch64 -mattr=+call-saved-x9 -verify-machineinstrs %t/callee-saved.ll -o - | FileCheck %s --check-prefix=CSR
+
+# These artificial live-outs are not produced by ordinary IR lowering. They
+# exercise the hook's obligation to preserve register units outside the
+# requested subregister when widening a clear.
+
+# GPR: error: {{.*}} "zero-call-used-regs" cannot clear register 'X0' without overwriting a value needed at the exit
+# FPR: error: {{.*}} "zero-call-used-regs" cannot clear register 'Q0' without overwriting a value needed at the exit
+# SVE: error: {{.*}} "zero-call-used-regs" cannot clear register 'Z0' without overwriting a value needed at the exit
+
+#--- gpr.mir
+--- |
+  define i64 @live_upper_gpr() "zero-call-used-regs"="used-gpr" { ret i64 4294967296 }
+...
+---
+name: live_upper_gpr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $x0 = MOVZXi 1, 32
+    RET undef $lr, implicit $w0_hi
+...
+
+#--- undef-def.mir
+--- |
+  define void @undef_upper_def() "zero-call-used-regs"="used-gpr" { ret void }
+...
+---
+name: undef_upper_def
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $x0 = MOVZXi 1, 32
+    RET undef $lr, implicit-def undef $w0_hi
+...
+
+#--- fpr.mir
+--- |
+  define void @live_upper_fpr() "zero-call-used-regs"="all" { ret void }
+...
+---
+name: live_upper_fpr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $q0
+    RET undef $lr, implicit $d0_hi
+...
+
+#--- sve.mir
+--- |
+  define void @live_upper_sve() "zero-call-used-regs"="used" { ret void }
+...
+---
+name: live_upper_sve
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $z0 = DUP_ZI_D 1, 0, implicit $vg
+    RET undef $lr, implicit $q0_hi
+...
+
+#--- safe.mir
+--- |
+  define i32 @live_low_gpr() "zero-call-used-regs"="used-gpr" { ret i32 1 }
+  define void @undef_upper_gpr() "zero-call-used-regs"="used-gpr" { ret void }
+  define float @live_low_fpr() "zero-call-used-regs"="used" { ret float 0.0 }
+...
+---
+name: live_low_gpr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 1, 0
+    RET undef $lr, implicit $w0
+# SAFE-LABEL: name: live_low_gpr
+# SAFE: $w0 = MOVZWi 1, 0
+# SAFE: $x1 = MOVZXi 0, 0
+# SAFE-NEXT: RET undef $lr, implicit $w0
+...
+---
+name: undef_upper_gpr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $x0 = MOVZXi 1, 32
+    RET undef $lr, implicit undef $w0_hi
+# SAFE-LABEL: name: undef_upper_gpr
+# SAFE: $x0 = MOVZXi 0, 0
+# SAFE-NEXT: RET undef $lr, implicit undef $w0_hi
+...
+---
+name: live_low_fpr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $s0 = FMOVS0
+    $q1 = MOVIv2d_ns 255
+    RET undef $lr, implicit $s0
+# SAFE-LABEL: name: live_low_fpr
+# SAFE: $s0 = FMOVS0
+# NEON: $q1 = MOVIv2d_ns 0
+# NEON-NEXT: RET undef $lr, implicit $s0
+# SAFE-SVE: $z1 = DUP_ZI_D 0, 0
+# SAFE-SVE-NEXT: RET undef $lr, implicit $s0
+...
+
+#--- callee-saved.ll
+; Custom callee-saved registers are recorded in MachineRegisterInfo, beyond
+; the target's base list. They must not become candidates for clearing.
+define void @custom_callee_saved() "zero-call-used-regs"="all-gpr" {
+  ret void
+}
+; CSR-LABEL: custom_callee_saved:
+; CSR-NOT: mov x9,
+; CSR: mov x0, #0
+; CSR-NOT: mov x9,
+; CSR: ret
+
+define void @custom_used_callee_saved() "zero-call-used-regs"="used-gpr" {
+  call void asm sideeffect "", "~{x9}"()
+  ret void
+}
+; CSR-LABEL: custom_used_callee_saved:
+; CSR: str x9,
+; CSR: ldr x9,
+; CSR-NOT: mov x9,
+; CSR: ret

@@ -616,15 +616,9 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     for (unsigned n = 0; n != 7; ++n)
       Reserved.set(X86::FP0 + n);
 
-  // A register the subtarget has no instruction to write cannot hold the
-  // function's data, so the call-used register clearing has nothing to clear
-  // there. Reserve such registers, as for the FPn pseudos above, so that the
-  // clearing is not asked for them: the clearer refuses a register it cannot
-  // clear rather than dropping it, and a request it never receives is not a
-  // refusal. Each of the following is the complete file for its feature.
-  //
-  // MMX: no MMX instruction without the feature, and ISel registers no MMX
-  // class under soft float.
+  // Unavailable register files cannot hold this function's data. Reserve
+  // them so call-used register clearing does not request unavailable writes.
+  // ISel also excludes MMX under soft float.
   if (!ST.hasMMX() || ST.useSoftFloat())
     for (unsigned n = 0; n != 8; ++n)
       Reserved.set(X86::MM0 + n);

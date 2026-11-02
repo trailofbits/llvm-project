@@ -10868,12 +10868,8 @@ void X86InstrInfo::buildClearRegister(Register Reg, MachineBasicBlock &MBB,
   const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();
   const TargetRegisterInfo &TRI = getRegisterInfo();
 
-  // This clears one register with one instruction. The MMX registers are the
-  // significands of the x87 register file and are cleared with it, by the
-  // stack sequence in X86FrameLowering::emitZeroCallUsedRegs; that emitter
-  // sorts every register before asking here, and a register with no
-  // instruction to clear it is the emitter's to report, not this function's
-  // to drop.
+  // The caller classifies requests and reports unsupported registers.
+  // MMX registers are cleared by the x87 sequence in X86FrameLowering.
   if (TRI.isGeneralPurposeRegister(MF, Reg)) {
     // Convert register to the 32-bit version. Both 'movl' and 'xorl' clear the
     // upper bits of a 64-bit register automagically.

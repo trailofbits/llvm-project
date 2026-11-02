@@ -1,4 +1,5 @@
-//===- X86RegisterClearingTest.cpp --------------------===//
+//===- X86RegisterClearingTest.cpp
+//-----------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -31,6 +32,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include <cctype>
 
 using namespace llvm;
 using testing::HasSubstr;
@@ -146,9 +148,8 @@ protected:
   }
 
   unsigned count(const MachineBasicBlock &MBB, unsigned Opcode) {
-    return llvm::count_if(MBB, [&](const MachineInstr &MI) {
-      return MI.getOpcode() == Opcode;
-    });
+    return llvm::count_if(
+        MBB, [&](const MachineInstr &MI) { return MI.getOpcode() == Opcode; });
   }
 
   /// Whether an emitted instruction writes \p Reg or a register overlapping
@@ -193,8 +194,8 @@ TEST_P(X86RegisterClearingTest, EveryRequestedRegisterClearedOrReported) {
   const bool X87Filled = count(MBB, X86::LD_F0) == 8;
   EXPECT_EQ(count(MBB, X86::LD_F0), count(MBB, X86::ST_FPrr));
   for (MCRegister Reg : Set.set_bits()) {
-    bool IsX87 = X86::RFP80RegClass.contains(Reg) ||
-                 X86::VR64RegClass.contains(Reg);
+    bool IsX87 =
+        X86::RFP80RegClass.contains(Reg) || X86::VR64RegClass.contains(Reg);
     EXPECT_TRUE((IsX87 && X87Filled) || cleared(MBB, Reg) || reported(Reg))
         << "register " << TRI->getName(Reg) << " neither cleared nor reported";
   }
@@ -253,6 +254,114 @@ TEST_P(X86RegisterClearingTest, MMXUseEmptiesTheStackFirst) {
   EXPECT_EQ(Errors, 0u) << Diagnostics;
 }
 
+TEST_P(X86RegisterClearingTest, UnknownRegisterIsReported) {
+  auto &MBB = addExit();
+  MCRegister GPR = STI->is64Bit() ? X86::RAX : X86::EAX;
+  clear(MBB, regs({X86::EFLAGS, GPR}));
+
+  EXPECT_EQ(Errors, 1u) << Diagnostics;
+  EXPECT_TRUE(reported(X86::EFLAGS));
+  EXPECT_THAT(Diagnostics, HasSubstr("does not know how to clear"));
+  EXPECT_TRUE(cleared(MBB, GPR));
+}
+
+TEST_P(X86RegisterClearingTest, MissingInstructionIsReported) {
+  if (STI->hasAVX512())
+    GTEST_SKIP() << "all register clearing instructions are available";
+  auto &MBB = addExit();
+  BitVector Set = regs({X86::XMM16, X86::K0});
+  if (!STI->hasSSE1())
+    Set.set(X86::XMM0);
+  if (!STI->hasX87() || STI->useSoftFloat())
+    Set.set(X86::MM0);
+  clear(MBB, Set);
+
+  EXPECT_EQ(Errors, 1u) << Diagnostics;
+  EXPECT_THAT(Diagnostics, HasSubstr("no instruction to clear"));
+  for (MCRegister Reg : Set.set_bits()) {
+    EXPECT_TRUE(reported(Reg)) << TRI->getName(Reg);
+    EXPECT_FALSE(cleared(MBB, Reg)) << TRI->getName(Reg);
+  }
+}
+
+TEST_P(X86RegisterClearingTest, OverlappingRequestsAreClearedOnce) {
+  auto &MBB = addExit();
+  BitVector Set = regs({X86::AL, X86::AH, X86::AX, X86::EAX});
+  if (STI->is64Bit())
+    Set.set(X86::RAX);
+  if (STI->hasSSE1()) {
+    Set.set(X86::XMM0);
+    Set.set(X86::YMM0);
+    Set.set(X86::ZMM0);
+  }
+  if (STI->hasAVX512()) {
+    Set.set(X86::XMM16);
+    Set.set(X86::YMM16);
+    Set.set(X86::ZMM16);
+  }
+  clear(MBB, Set);
+
+  EXPECT_EQ(count(MBB, X86::XOR32rr), 1u);
+  EXPECT_EQ(count(MBB, X86::V_SET0), unsigned(STI->hasSSE1()));
+  EXPECT_EQ(count(MBB, X86::AVX512_128_SET0), unsigned(STI->hasAVX512()));
+  EXPECT_EQ(Errors, 0u) << Diagnostics;
+}
+
+TEST_P(X86RegisterClearingTest, X87ReturnValueIsPreserved) {
+  if (!hasX87AndMMX())
+    GTEST_SKIP() << "needs x87 and MMX";
+  auto &MBB = addExit();
+  MBB.back().addOperand(*MF, MachineOperand::CreateReg(X86::ST0, false, true));
+  clear(MBB, regs({X86::FP0, X86::MM0}));
+
+  EXPECT_EQ(count(MBB, X86::LD_F0), 7u);
+  EXPECT_EQ(count(MBB, X86::ST_FPrr), 7u);
+  EXPECT_EQ(count(MBB, X86::MMX_EMMS), 0u);
+  EXPECT_EQ(Errors, 0u) << Diagnostics;
+}
+
+TEST_P(X86RegisterClearingTest, LiveMMXValueIsNotOverwritten) {
+  if (!hasX87AndMMX())
+    GTEST_SKIP() << "needs x87 and MMX";
+  auto &MBB = addExit();
+  MBB.back().addOperand(*MF, MachineOperand::CreateReg(X86::MM0, false, true));
+  clear(MBB, regs({X86::MM1}));
+
+  EXPECT_EQ(Errors, 1u) << Diagnostics;
+  EXPECT_THAT(Diagnostics, HasSubstr("live MMX"));
+  EXPECT_EQ(count(MBB, X86::LD_F0), 0u);
+  EXPECT_EQ(count(MBB, X86::MMX_EMMS), 0u);
+}
+
+TEST_P(X86RegisterClearingTest, UndefExitValuesDoNotPreventX87Clearing) {
+  if (!hasX87AndMMX())
+    GTEST_SKIP() << "needs x87 and MMX";
+  auto &MBB = addExit();
+  for (MCRegister Reg : {X86::ST7, X86::MM0}) {
+    MachineOperand MO = MachineOperand::CreateReg(Reg, false, true);
+    MO.setIsUndef();
+    MBB.back().addOperand(*MF, MO);
+  }
+  clear(MBB, regs({X86::FP0, X86::MM1}));
+
+  EXPECT_EQ(Errors, 0u) << Diagnostics;
+  EXPECT_EQ(count(MBB, X86::LD_F0), 8u);
+  EXPECT_EQ(count(MBB, X86::ST_FPrr), 8u);
+}
+
+TEST_P(X86RegisterClearingTest, MissingExitIsAnError) {
+  if (!hasX87AndMMX())
+    GTEST_SKIP() << "needs x87 and MMX";
+  auto &MBB = addExit();
+  MBB.back().eraseFromParent();
+  const TargetFrameLowering &TFI = *STI->getFrameLowering();
+  TFI.emitZeroCallUsedRegs(regs({X86::MM0}), MBB, MBB.end(), nullptr);
+
+  EXPECT_EQ(Errors, 1u) << Diagnostics;
+  EXPECT_THAT(Diagnostics, HasSubstr("stack depth is unknown"));
+  EXPECT_EQ(count(MBB, X86::LD_F0), 0u);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     Subtargets, X86RegisterClearingTest,
     testing::Values(
@@ -271,18 +380,23 @@ INSTANTIATE_TEST_SUITE_P(
                           "'MM0, MM1, MM2, MM3, MM4, MM5, MM6, MM7'"},
         ClearingSubtarget{"x86_64-unknown-linux-gnu", "+amx-tile,+avx512f",
                           nullptr},
+        ClearingSubtarget{"x86_64-unknown-linux-gnu", "+soft-float", nullptr},
+        ClearingSubtarget{"x86_64-pc-windows-msvc", "+avx512f", nullptr},
+        ClearingSubtarget{"i386-pc-windows-msvc", "+sse2,+mmx", nullptr},
         ClearingSubtarget{"i386-unknown-linux-gnu", "", nullptr},
         ClearingSubtarget{"i386-unknown-linux-gnu", "+sse2,+mmx", nullptr},
         ClearingSubtarget{"i386-unknown-linux-gnu", "+avx512f,+avx512vl",
                           nullptr}),
     [](const testing::TestParamInfo<ClearingSubtarget> &Info) {
-      std::string Name = Triple(Info.param.Triple).getArchName().str();
+      std::string Name;
+      for (char C : StringRef(Info.param.Triple))
+        Name += std::isalnum(static_cast<unsigned char>(C)) ? C : '_';
       for (char C : StringRef(Info.param.Features)) {
         if (C == '+')
           Name += "_with_";
         else if (C == '-')
           Name += "_without_";
-        else if (isalnum(static_cast<unsigned char>(C)))
+        else if (std::isalnum(static_cast<unsigned char>(C)))
           Name += C;
         else
           Name += '_';

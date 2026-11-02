@@ -3044,6 +3044,46 @@ static QualType getVectorElementType(ASTContext &Context, QualType VecTy) {
   return QualType();
 }
 
+/// Check __builtin_clear_sensitive(ptr, size). The pointer may point to any
+/// non-const object type, including volatile objects and objects in other
+/// address spaces, which a void * parameter would not accept.
+static bool BuiltinClearSensitive(Sema &S, CallExpr *TheCall) {
+  if (S.checkArgCount(TheCall, 2))
+    return true;
+
+  ExprResult PtrArg =
+      S.DefaultFunctionArrayLvalueConversion(TheCall->getArg(0));
+  if (PtrArg.isInvalid())
+    return true;
+  TheCall->setArg(0, PtrArg.get());
+
+  Expr *SizeArg = TheCall->getArg(1);
+  if (convertArgumentToType(S, SizeArg, S.Context.getSizeType()))
+    return true;
+  TheCall->setArg(1, SizeArg);
+
+  const Expr *Ptr = PtrArg.get();
+  if (Ptr->isTypeDependent())
+    return false;
+  QualType PtrTy = Ptr->getType();
+  const auto *PT = PtrTy->getAs<PointerType>();
+  if (!PT || PT->getPointeeType().isConstQualified() ||
+      PT->getPointeeType()->isFunctionType()) {
+    S.Diag(Ptr->getBeginLoc(), diag::err_clear_sensitive_needs_object_pointer)
+        << PtrTy << Ptr->getSourceRange();
+    return true;
+  }
+
+  // Warn about clearing through a null pointer when the size is known to be
+  // nonzero, as for __builtin_memset_inline.
+  if (!SizeArg->isValueDependent()) {
+    Expr::EvalResult Size;
+    if (SizeArg->EvaluateAsInt(Size, S.Context) && !Size.Val.getInt().isZero())
+      CheckNonNullArgument(S, Ptr, TheCall->getExprLoc());
+  }
+  return false;
+}
+
 ExprResult
 Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
                                CallExpr *TheCall) {
@@ -3487,6 +3527,10 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
     }
     break;
   }
+  case Builtin::BI__builtin_clear_sensitive:
+    if (BuiltinClearSensitive(*this, TheCall))
+      return ExprError();
+    break;
   case Builtin::BI__builtin_memset_inline: {
     clang::Expr *SizeOp = TheCall->getArg(2);
     // We warn about filling to `nullptr` pointers when `size` is greater than

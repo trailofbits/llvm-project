@@ -1,0 +1,104 @@
+# RUN: split-file %s %t
+# RUN: not llc -mtriple=x86_64 -run-pass=prolog-epilog -verify-machineinstrs %t/high-word.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=EAX
+# RUN: not llc -mtriple=x86_64 -run-pass=prolog-epilog -verify-machineinstrs %t/high-and-low.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=EAX
+# RUN: not llc -mtriple=x86_64 -run-pass=prolog-epilog -verify-machineinstrs %t/high-di.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=EDI
+# RUN: not llc -mtriple=x86_64 -run-pass=prolog-epilog -verify-machineinstrs %t/undef-def.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=EAX
+# RUN: llc -mtriple=x86_64 -run-pass=prolog-epilog -verify-machineinstrs %t/safe.mir -o - | FileCheck %s --check-prefix=SAFE
+
+# Artificial live upper fragments must survive clears of disjoint low parts.
+# EAX: error: {{.*}} "zero-call-used-regs" cannot clear register 'EAX' without overwriting a value needed at the exit
+# EDI: error: {{.*}} "zero-call-used-regs" cannot clear register 'EDI' without overwriting a value needed at the exit
+
+#--- high-word.mir
+--- |
+  define void @live_high_word() "zero-call-used-regs"="used-gpr" { ret void }
+...
+---
+name: live_high_word
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $rax = MOV64ri 305419896
+    RET64 implicit $hax
+...
+
+#--- high-and-low.mir
+--- |
+  define i8 @live_high_and_low() "zero-call-used-regs"="used-gpr" { ret i8 120 }
+...
+---
+name: live_high_and_low
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $rax = MOV64ri 305419896
+    RET64 implicit $hax, implicit $al
+...
+
+#--- high-di.mir
+--- |
+  define void @live_high_di() "zero-call-used-regs"="used-gpr" { ret void }
+...
+---
+name: live_high_di
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $rdi = MOV64ri 305419896
+    RET64 implicit $hdi
+...
+
+#--- undef-def.mir
+--- |
+  define void @undef_high_def() "zero-call-used-regs"="used-gpr" { ret void }
+...
+---
+name: undef_high_def
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $rax = MOV64ri 305419896
+    RET64 implicit-def undef $hax
+...
+
+#--- safe.mir
+--- |
+  define void @live_high_byte() "zero-call-used-regs"="used-gpr" { ret void }
+  define void @undef_high_word() "zero-call-used-regs"="used-gpr" { ret void }
+  define void @def_low_byte() "zero-call-used-regs"="used-gpr" { ret void }
+...
+---
+name: live_high_byte
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $rdi = MOV64ri 305419896
+    RET64 implicit $dih
+# SAFE-LABEL: name: live_high_byte
+# SAFE: $rdi = MOV64ri 305419896
+# SAFE-NEXT: $dil = MOV8ri 0
+# SAFE-NEXT: RET64 implicit $dih
+...
+---
+name: undef_high_word
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $rax = MOV64ri 305419896
+    RET64 implicit undef $hax
+# SAFE-LABEL: name: undef_high_word
+# SAFE: $eax = XOR32rr
+# SAFE-NEXT: RET64 implicit undef $hax
+...
+---
+name: def_low_byte
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $ah = MOV8ri 90
+    RET64 implicit-def $al
+# SAFE-LABEL: name: def_low_byte
+# SAFE: $ah = MOV8ri 90
+# SAFE-NEXT: $ah = MOV8ri 0
+# SAFE-NEXT: RET64 implicit-def $al
+...

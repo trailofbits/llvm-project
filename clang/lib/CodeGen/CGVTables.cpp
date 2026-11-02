@@ -583,7 +583,7 @@ llvm::Constant *CodeGenVTables::maybeEmitThunk(GlobalDecl GD,
     OldThunkFn->setName(StringRef());
     ThunkFn = llvm::Function::Create(ThunkFnTy, llvm::Function::ExternalLinkage,
                                      Name.str(), &CGM.getModule());
-    CGM.SetLLVMFunctionAttributes(MD, FnInfo, ThunkFn, /*IsThunk=*/false);
+    CGM.SetLLVMFunctionAttributes(MD, FnInfo, ThunkFn, /*IsThunk=*/true);
 
     if (!OldThunkFn->use_empty()) {
       OldThunkFn->replaceAllUsesWith(ThunkFn);

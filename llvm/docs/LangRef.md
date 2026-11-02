@@ -2664,7 +2664,16 @@ fn -> other_fn -> other_fn ; fn is norecurse
     These values are accepted at the IR layer; a target that does not support register clearing diagnoses the resulting request as unsupported, just as for an explicit `"all"` request.
     Use `"skip"` or omit the attribute to request no clearing.
 
-    Registers needed by the exit instruction, callee-saved registers, and the target's return-address register are excluded from clearing.
+    Register use and argument live-ins are tracked through their allocatable
+    subregisters. Registers are filtered separately at each supported exit.
+    Explicit and implicit machine-register definitions and non-`undef` uses from
+    the clearing insertion point through the exit exclude overlapping registers
+    from clearing. Callee-saved registers, including per-function additions, and
+    the target's return-address register remain excluded.
+
+    Targets must preserve live register units when widening a clear. On x86-64,
+    a live `AL` return can coexist with clearing `AH` and the remaining upper
+    bits of `RAX`.
 
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
@@ -8078,6 +8087,10 @@ obligation to clear a frame comes from the `"zeroize-stack"` attribute alone.
 An unmarked object is cleared, and so is every slot whose contents cannot be
 traced back to a source-level object: spill slots, the callee-save area, and
 alignment padding are cleared whether or not anything is marked.
+
+A producer may attach the metadata to any object that its source language
+establishes as holding no data that needs clearing, for example when the
+language makes the programmer responsible for annotating every object that does.
 
 Transforms must respect the one-directional rule this sets up:
 

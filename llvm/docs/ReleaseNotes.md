@@ -71,6 +71,9 @@ Makes programs 10x faster by doing Special New Thing.
 
 ### Changes to the AArch64 Backend
 
+* Register clearing now diagnoses widened writes that would overwrite live
+  upper register fragments.
+
 ### Changes to the AMDGPU Backend
 
 * Replaced `xnack` and `sramecc` target features with `amdgpu.xnack`
@@ -81,6 +84,12 @@ Makes programs 10x faster by doing Special New Thing.
   is used, it will be zero-extended or truncated as needed.
 
 ### Changes to the ARM Backend
+
+* Added support for the `zero-call-used-regs` function attribute on 32-bit Arm,
+  including ARM, Thumb-1, and Thumb-2 code generation. Windows targets are not
+  supported yet and report an error. Thumb-1 functions do not clear VFP
+  registers, which the Thumb-1 instruction set cannot write, even on cores
+  that have them.
 
 ### Changes to the AVR Backend
 
@@ -114,6 +123,10 @@ Makes programs 10x faster by doing Special New Thing.
 
 ### Changes to the X86 Backend
 
+* For byte return values, register clearing can clear unused upper bits while
+  preserving the live byte. Unsupported clears of live upper register fragments
+  are diagnosed.
+
 * `llvm.zeroize` now lowers to a clearing sequence on x86-64 (LP64). Other
   subtargets, segment-relative and 32-bit-pointer address spaces, and counts
   that cannot be shown to fit are reported as unsupported rather than
@@ -126,6 +139,12 @@ Makes programs 10x faster by doing Special New Thing.
 ### Changes to the C API
 
 ### Changes to the CodeGen infrastructure
+
+* Register clearing tracks allocatable subregisters and preserves custom
+  callee-saved registers.
+
+* Register clearing ignores register uses marked `undef` when filtering exit
+  operands, while preserving definitions and non-undef uses.
 
 ### Changes to the Metadata Info
 
