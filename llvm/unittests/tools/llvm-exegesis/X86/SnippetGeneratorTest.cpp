@@ -208,6 +208,30 @@ TEST_F(X86SerialSnippetGeneratorTest, DependencyThroughOtherOpcode) {
   }
 }
 
+TEST_F(X86SerialSnippetGeneratorTest, AvoidHelpersWithUnavailableRegisters) {
+  const LLVMState State = cantFail(LLVMState::Create(kTriple, "x86-64", ""));
+  SnippetGenerator::Options Opts;
+  Opts.MaxConfigsPerOpcode = 8192;
+  SerialSnippetGenerator Generator(State, Opts);
+  const Instruction &Instr = State.getIC().getInstr(X86::CVTSD2SI64rr);
+  const BitVector &ReservedRegs = State.getRATC().reservedRegisters();
+  for (unsigned Seed = 0; Seed != 16; ++Seed) {
+    SCOPED_TRACE(Seed);
+    randomGenerator().seed(Seed);
+    std::vector<BenchmarkCode> Configs;
+    auto Err = Generator.generateConfigurations(&Instr, Configs, ReservedRegs);
+    ASSERT_FALSE(bool(Err)) << toString(std::move(Err));
+    ASSERT_THAT(Configs, Not(IsEmpty()));
+    for (const BenchmarkCode &Config : Configs) {
+      EXPECT_EQ(Config.Key.Instructions.front().getOpcode(), X86::CVTSD2SI64rr);
+      for (const MCInst &Inst : Config.Key.Instructions)
+        for (const MCOperand &Op : Inst)
+          if (Op.isReg())
+            EXPECT_FALSE(ReservedRegs.test(Op.getReg()));
+    }
+  }
+}
+
 TEST_F(X86SerialSnippetGeneratorTest, LAHF) {
   // - LAHF
   // - Op0 Implicit Def Reg(AH)
