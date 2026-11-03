@@ -22,7 +22,7 @@ set(LLVM_LINK_COMPONENTS
   X86Info
   )
 
-add_llvm_unittest(X86Tests
+add_llvm_target_unittest(X86Tests
   MachineSizeOptsTest.cpp
   TernlogTest.cpp
   X86RegisterClearingTest.cpp
