@@ -2,6 +2,7 @@
 ; RUN: llc < %s -mtriple=x86_64-- -mattr=+sse2                        -verify-machineinstrs | FileCheck %s --check-prefixes=SSE
 ; RUN: llc < %s -mtriple=x86_64-- -mattr=+avx                         -verify-machineinstrs | FileCheck %s --check-prefixes=AVX,AVX1
 ; RUN: llc < %s -mtriple=x86_64-- -mattr=+avx2                        -verify-machineinstrs | FileCheck %s --check-prefixes=AVX,AVX2
+; RUN: llc < %s -mtriple=x86_64-- -mattr=+avx512f                    -verify-machineinstrs | FileCheck %s --check-prefixes=AVX512,AVX512F
 ; RUN: llc < %s -mtriple=x86_64-- -mattr=+avx512f,+avx512vl           -verify-machineinstrs | FileCheck %s --check-prefixes=AVX512,AVX512VL
 ; RUN: llc < %s -mtriple=x86_64-- -mattr=+avx512f,+avx512vl,+avx512bw -verify-machineinstrs | FileCheck %s --check-prefixes=AVX512,AVX512BW
 
@@ -182,6 +183,19 @@ define void @zero_k(<8 x i32> %arg, <8 x i1> %mask) #0 {
 ; AVX2-NEXT:    vzeroupper
 ; AVX2-NEXT:    retq
 ;
+; AVX512F-LABEL: zero_k:
+; AVX512F:       # %bb.0:
+; AVX512F-NEXT:    # kill: def $ymm0 killed $ymm0 def $zmm0
+; AVX512F-NEXT:    vpmovsxwq %xmm1, %zmm1
+; AVX512F-NEXT:    vpsllq $63, %zmm1, %zmm1
+; AVX512F-NEXT:    vptestmq %zmm1, %zmm1, %k1
+; AVX512F-NEXT:    vmovdqu32 %zmm0, 0 {%k1}
+; AVX512F-NEXT:    vpxor %xmm0, %xmm0, %xmm0
+; AVX512F-NEXT:    vpxor %xmm1, %xmm1, %xmm1
+; AVX512F-NEXT:    kxorw %k0, %k0, %k1
+; AVX512F-NEXT:    vzeroupper
+; AVX512F-NEXT:    retq
+;
 ; AVX512VL-LABEL: zero_k:
 ; AVX512VL:       # %bb.0:
 ; AVX512VL-NEXT:    vpmovsxwd %xmm1, %ymm1
@@ -199,8 +213,8 @@ define void @zero_k(<8 x i32> %arg, <8 x i1> %mask) #0 {
 ; AVX512BW-NEXT:    vpsllw $15, %xmm1, %xmm1
 ; AVX512BW-NEXT:    vpmovw2m %xmm1, %k1
 ; AVX512BW-NEXT:    vmovdqa32 %ymm0, 0 {%k1}
-; AVX512BW-NEXT:    vpxor %xmm1, %xmm1, %xmm1
 ; AVX512BW-NEXT:    vpxor %xmm0, %xmm0, %xmm0
+; AVX512BW-NEXT:    vpxor %xmm1, %xmm1, %xmm1
 ; AVX512BW-NEXT:    kxorq %k0, %k0, %k1
 ; AVX512BW-NEXT:    vzeroupper
 ; AVX512BW-NEXT:    retq

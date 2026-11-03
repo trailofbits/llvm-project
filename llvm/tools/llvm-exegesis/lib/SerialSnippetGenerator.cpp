@@ -11,6 +11,7 @@
 #include "CodeTemplate.h"
 #include "MCInstrDescView.h"
 #include "Target.h"
+#include "llvm/ADT/STLExtras.h"
 #include <algorithm>
 #include <numeric>
 #include <vector>
@@ -34,6 +35,26 @@ struct ExecutionClass {
 
 static constexpr size_t kMaxAliasingInstructions = 10;
 
+static bool isUsableAliasingInstruction(const LLVMState &State,
+                                        const Instruction &Instr,
+                                        const BitVector &ForbiddenRegisters) {
+  const auto &ET = State.getExegesisTarget();
+  if (ET.getIgnoredOpcodeReasonOrNull(State, Instr.getOpcode()))
+    return false;
+  if (Instr.hasMemoryOperands())
+    return false;
+  // Some loads/stores have no memory operands, such as X86's CLUI.
+  if (Instr.Description.mayLoad() || Instr.Description.mayStore())
+    return false;
+  if (!ET.allowAsBackToBack(Instr))
+    return false;
+  // Closing the dependency cycle can leave unrelated operands unassigned.
+  return llvm::none_of(Instr.Operands, [&](const Operand &Op) {
+    return Op.isExplicit() && Op.isReg() &&
+           !Op.getRegisterAliasing().sourceBits().test(ForbiddenRegisters);
+  });
+}
+
 static std::vector<const Instruction *>
 computeAliasingInstructions(const LLVMState &State, const Instruction *Instr,
                             size_t MaxAliasingInstructions,
@@ -53,17 +74,7 @@ computeAliasingInstructions(const LLVMState &State, const Instruction *Instr,
     if (OtherOpcode == Instr->Description.getOpcode())
       continue;
     const Instruction &OtherInstr = State.getIC().getInstr(OtherOpcode);
-    if (ET.getIgnoredOpcodeReasonOrNull(State, OtherInstr.getOpcode()))
-      continue;
-    if (OtherInstr.hasMemoryOperands())
-      continue;
-    // Filtering out loads/stores might belong in hasMemoryOperands(), but that
-    // complicates things as there are instructions with may load/store that
-    // don't have operands (e.g. X86's CLUI instruction). So, it's easier to
-    // filter them out here.
-    if (OtherInstr.Description.mayLoad() || OtherInstr.Description.mayStore())
-      continue;
-    if (!ET.allowAsBackToBack(OtherInstr))
+    if (!isUsableAliasingInstruction(State, OtherInstr, ForbiddenRegisters))
       continue;
     if (Instr->hasAliasingRegistersThrough(OtherInstr, ForbiddenRegisters))
       AliasingInstructions.push_back(&OtherInstr);
