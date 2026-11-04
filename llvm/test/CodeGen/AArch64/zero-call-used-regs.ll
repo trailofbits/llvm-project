@@ -140,74 +140,74 @@ define dso_local i32 @all_arg(i32 noundef %a, i32 noundef %b, i32 noundef %c) lo
 ; DEFAULT-LABEL: all_arg:
 ; DEFAULT:       // %bb.0: // %entry
 ; DEFAULT-NEXT:    mul w8, w1, w0
+; DEFAULT-NEXT:    movi v0.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v1.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v2.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v3.2d, #0000000000000000
 ; DEFAULT-NEXT:    mov x1, #0 // =0x0
+; DEFAULT-NEXT:    movi v4.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v5.2d, #0000000000000000
 ; DEFAULT-NEXT:    mov x3, #0 // =0x0
+; DEFAULT-NEXT:    movi v6.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v7.2d, #0000000000000000
+; DEFAULT-NEXT:    orr w0, w8, w2
+; DEFAULT-NEXT:    mov x2, #0 // =0x0
 ; DEFAULT-NEXT:    mov x4, #0 // =0x0
 ; DEFAULT-NEXT:    mov x5, #0 // =0x0
 ; DEFAULT-NEXT:    mov x6, #0 // =0x0
 ; DEFAULT-NEXT:    mov x7, #0 // =0x0
-; DEFAULT-NEXT:    mov x15, #0 // =0x0
-; DEFAULT-NEXT:    movi v0.2d, #0000000000000000
-; DEFAULT-NEXT:    orr w0, w8, w2
-; DEFAULT-NEXT:    mov x2, #0 // =0x0
 ; DEFAULT-NEXT:    mov x8, #0 // =0x0
-; DEFAULT-NEXT:    movi v1.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v2.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v3.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v4.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v5.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v6.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v7.2d, #0000000000000000
+; DEFAULT-NEXT:    mov x15, #0 // =0x0
 ; DEFAULT-NEXT:    ret
 ;
 ; SVE-OR-SME-LABEL: all_arg:
 ; SVE-OR-SME:       // %bb.0: // %entry
 ; SVE-OR-SME-NEXT:    mul w8, w1, w0
-; SVE-OR-SME-NEXT:    mov x1, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x3, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x4, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x5, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x6, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x7, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x15, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z0.d, #0 // =0x0
-; SVE-OR-SME-NEXT:    orr w0, w8, w2
-; SVE-OR-SME-NEXT:    mov x2, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x8, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z1.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z2.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z3.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x1, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z4.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z5.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x3, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z6.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z7.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    orr w0, w8, w2
 ; SVE-OR-SME-NEXT:    pfalse p0.b
+; SVE-OR-SME-NEXT:    mov x2, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x4, #0 // =0x0
 ; SVE-OR-SME-NEXT:    pfalse p1.b
+; SVE-OR-SME-NEXT:    mov x5, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x6, #0 // =0x0
 ; SVE-OR-SME-NEXT:    pfalse p2.b
+; SVE-OR-SME-NEXT:    mov x7, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x8, #0 // =0x0
 ; SVE-OR-SME-NEXT:    pfalse p3.b
+; SVE-OR-SME-NEXT:    mov x15, #0 // =0x0
 ; SVE-OR-SME-NEXT:    ret
 ;
 ; STREAMING-COMPAT-LABEL: all_arg:
 ; STREAMING-COMPAT:       // %bb.0: // %entry
 ; STREAMING-COMPAT-NEXT:    mul w8, w1, w0
+; STREAMING-COMPAT-NEXT:    fmov d0, xzr
+; STREAMING-COMPAT-NEXT:    fmov d1, xzr
+; STREAMING-COMPAT-NEXT:    fmov d2, xzr
+; STREAMING-COMPAT-NEXT:    fmov d3, xzr
 ; STREAMING-COMPAT-NEXT:    mov x1, #0 // =0x0
+; STREAMING-COMPAT-NEXT:    fmov d4, xzr
+; STREAMING-COMPAT-NEXT:    fmov d5, xzr
 ; STREAMING-COMPAT-NEXT:    mov x3, #0 // =0x0
+; STREAMING-COMPAT-NEXT:    fmov d6, xzr
+; STREAMING-COMPAT-NEXT:    fmov d7, xzr
+; STREAMING-COMPAT-NEXT:    orr w0, w8, w2
+; STREAMING-COMPAT-NEXT:    mov x2, #0 // =0x0
 ; STREAMING-COMPAT-NEXT:    mov x4, #0 // =0x0
 ; STREAMING-COMPAT-NEXT:    mov x5, #0 // =0x0
 ; STREAMING-COMPAT-NEXT:    mov x6, #0 // =0x0
 ; STREAMING-COMPAT-NEXT:    mov x7, #0 // =0x0
-; STREAMING-COMPAT-NEXT:    mov x15, #0 // =0x0
-; STREAMING-COMPAT-NEXT:    fmov d0, xzr
-; STREAMING-COMPAT-NEXT:    orr w0, w8, w2
-; STREAMING-COMPAT-NEXT:    mov x2, #0 // =0x0
 ; STREAMING-COMPAT-NEXT:    mov x8, #0 // =0x0
-; STREAMING-COMPAT-NEXT:    fmov d1, xzr
-; STREAMING-COMPAT-NEXT:    fmov d2, xzr
-; STREAMING-COMPAT-NEXT:    fmov d3, xzr
-; STREAMING-COMPAT-NEXT:    fmov d4, xzr
-; STREAMING-COMPAT-NEXT:    fmov d5, xzr
-; STREAMING-COMPAT-NEXT:    fmov d6, xzr
-; STREAMING-COMPAT-NEXT:    fmov d7, xzr
+; STREAMING-COMPAT-NEXT:    mov x15, #0 // =0x0
 ; STREAMING-COMPAT-NEXT:    ret
 
 entry:
@@ -220,17 +220,41 @@ define dso_local i32 @all(i32 noundef %a, i32 noundef %b, i32 noundef %c) local_
 ; DEFAULT-LABEL: all:
 ; DEFAULT:       // %bb.0: // %entry
 ; DEFAULT-NEXT:    mul w8, w1, w0
+; DEFAULT-NEXT:    movi v0.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v1.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v2.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v3.2d, #0000000000000000
 ; DEFAULT-NEXT:    mov x1, #0 // =0x0
+; DEFAULT-NEXT:    movi v4.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v5.2d, #0000000000000000
 ; DEFAULT-NEXT:    mov x3, #0 // =0x0
-; DEFAULT-NEXT:    mov x4, #0 // =0x0
-; DEFAULT-NEXT:    mov x5, #0 // =0x0
-; DEFAULT-NEXT:    mov x6, #0 // =0x0
-; DEFAULT-NEXT:    mov x7, #0 // =0x0
-; DEFAULT-NEXT:    mov x9, #0 // =0x0
-; DEFAULT-NEXT:    mov x10, #0 // =0x0
+; DEFAULT-NEXT:    movi v6.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v7.2d, #0000000000000000
 ; DEFAULT-NEXT:    orr w0, w8, w2
+; DEFAULT-NEXT:    movi v16.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v17.2d, #0000000000000000
 ; DEFAULT-NEXT:    mov x2, #0 // =0x0
+; DEFAULT-NEXT:    movi v18.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v19.2d, #0000000000000000
+; DEFAULT-NEXT:    mov x4, #0 // =0x0
+; DEFAULT-NEXT:    movi v20.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v21.2d, #0000000000000000
+; DEFAULT-NEXT:    mov x5, #0 // =0x0
+; DEFAULT-NEXT:    movi v22.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v23.2d, #0000000000000000
+; DEFAULT-NEXT:    mov x6, #0 // =0x0
+; DEFAULT-NEXT:    movi v24.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v25.2d, #0000000000000000
+; DEFAULT-NEXT:    mov x7, #0 // =0x0
+; DEFAULT-NEXT:    movi v26.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v27.2d, #0000000000000000
 ; DEFAULT-NEXT:    mov x8, #0 // =0x0
+; DEFAULT-NEXT:    movi v28.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v29.2d, #0000000000000000
+; DEFAULT-NEXT:    mov x9, #0 // =0x0
+; DEFAULT-NEXT:    movi v30.2d, #0000000000000000
+; DEFAULT-NEXT:    movi v31.2d, #0000000000000000
+; DEFAULT-NEXT:    mov x10, #0 // =0x0
 ; DEFAULT-NEXT:    mov x11, #0 // =0x0
 ; DEFAULT-NEXT:    mov x12, #0 // =0x0
 ; DEFAULT-NEXT:    mov x13, #0 // =0x0
@@ -239,82 +263,58 @@ define dso_local i32 @all(i32 noundef %a, i32 noundef %b, i32 noundef %c) local_
 ; DEFAULT-NEXT:    mov x16, #0 // =0x0
 ; DEFAULT-NEXT:    mov x17, #0 // =0x0
 ; DEFAULT-NEXT:    mov x18, #0 // =0x0
-; DEFAULT-NEXT:    movi v0.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v1.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v2.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v3.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v4.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v5.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v6.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v7.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v16.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v17.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v18.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v19.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v20.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v21.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v22.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v23.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v24.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v25.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v26.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v27.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v28.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v29.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v30.2d, #0000000000000000
-; DEFAULT-NEXT:    movi v31.2d, #0000000000000000
 ; DEFAULT-NEXT:    ret
 ;
 ; SVE-OR-SME-LABEL: all:
 ; SVE-OR-SME:       // %bb.0: // %entry
 ; SVE-OR-SME-NEXT:    mul w8, w1, w0
-; SVE-OR-SME-NEXT:    mov x1, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x3, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x4, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x5, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x6, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x7, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x9, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x10, #0 // =0x0
-; SVE-OR-SME-NEXT:    orr w0, w8, w2
-; SVE-OR-SME-NEXT:    mov x2, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x8, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x11, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x12, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x13, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x14, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x15, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x16, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x17, #0 // =0x0
-; SVE-OR-SME-NEXT:    mov x18, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z0.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z1.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z2.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z3.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x1, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z4.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z5.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x3, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z6.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z7.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    orr w0, w8, w2
 ; SVE-OR-SME-NEXT:    mov z16.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z17.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x2, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z18.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z19.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x4, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z20.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z21.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x5, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z22.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z23.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x6, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z24.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z25.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x7, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z26.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z27.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x8, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z28.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z29.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x9, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z30.d, #0 // =0x0
 ; SVE-OR-SME-NEXT:    mov z31.d, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x10, #0 // =0x0
 ; SVE-OR-SME-NEXT:    pfalse p0.b
+; SVE-OR-SME-NEXT:    mov x11, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x12, #0 // =0x0
 ; SVE-OR-SME-NEXT:    pfalse p1.b
+; SVE-OR-SME-NEXT:    mov x13, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x14, #0 // =0x0
 ; SVE-OR-SME-NEXT:    pfalse p2.b
+; SVE-OR-SME-NEXT:    mov x15, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x16, #0 // =0x0
 ; SVE-OR-SME-NEXT:    pfalse p3.b
+; SVE-OR-SME-NEXT:    mov x17, #0 // =0x0
+; SVE-OR-SME-NEXT:    mov x18, #0 // =0x0
 ; SVE-OR-SME-NEXT:    pfalse p4.b
 ; SVE-OR-SME-NEXT:    pfalse p5.b
 ; SVE-OR-SME-NEXT:    pfalse p6.b
@@ -332,17 +332,41 @@ define dso_local i32 @all(i32 noundef %a, i32 noundef %b, i32 noundef %c) local_
 ; STREAMING-COMPAT-LABEL: all:
 ; STREAMING-COMPAT:       // %bb.0: // %entry
 ; STREAMING-COMPAT-NEXT:    mul w8, w1, w0
+; STREAMING-COMPAT-NEXT:    fmov d0, xzr
+; STREAMING-COMPAT-NEXT:    fmov d1, xzr
+; STREAMING-COMPAT-NEXT:    fmov d2, xzr
+; STREAMING-COMPAT-NEXT:    fmov d3, xzr
 ; STREAMING-COMPAT-NEXT:    mov x1, #0 // =0x0
+; STREAMING-COMPAT-NEXT:    fmov d4, xzr
+; STREAMING-COMPAT-NEXT:    fmov d5, xzr
 ; STREAMING-COMPAT-NEXT:    mov x3, #0 // =0x0
-; STREAMING-COMPAT-NEXT:    mov x4, #0 // =0x0
-; STREAMING-COMPAT-NEXT:    mov x5, #0 // =0x0
-; STREAMING-COMPAT-NEXT:    mov x6, #0 // =0x0
-; STREAMING-COMPAT-NEXT:    mov x7, #0 // =0x0
-; STREAMING-COMPAT-NEXT:    mov x9, #0 // =0x0
-; STREAMING-COMPAT-NEXT:    mov x10, #0 // =0x0
+; STREAMING-COMPAT-NEXT:    fmov d6, xzr
+; STREAMING-COMPAT-NEXT:    fmov d7, xzr
 ; STREAMING-COMPAT-NEXT:    orr w0, w8, w2
+; STREAMING-COMPAT-NEXT:    fmov d16, xzr
+; STREAMING-COMPAT-NEXT:    fmov d17, xzr
 ; STREAMING-COMPAT-NEXT:    mov x2, #0 // =0x0
+; STREAMING-COMPAT-NEXT:    fmov d18, xzr
+; STREAMING-COMPAT-NEXT:    fmov d19, xzr
+; STREAMING-COMPAT-NEXT:    mov x4, #0 // =0x0
+; STREAMING-COMPAT-NEXT:    fmov d20, xzr
+; STREAMING-COMPAT-NEXT:    fmov d21, xzr
+; STREAMING-COMPAT-NEXT:    mov x5, #0 // =0x0
+; STREAMING-COMPAT-NEXT:    fmov d22, xzr
+; STREAMING-COMPAT-NEXT:    fmov d23, xzr
+; STREAMING-COMPAT-NEXT:    mov x6, #0 // =0x0
+; STREAMING-COMPAT-NEXT:    fmov d24, xzr
+; STREAMING-COMPAT-NEXT:    fmov d25, xzr
+; STREAMING-COMPAT-NEXT:    mov x7, #0 // =0x0
+; STREAMING-COMPAT-NEXT:    fmov d26, xzr
+; STREAMING-COMPAT-NEXT:    fmov d27, xzr
 ; STREAMING-COMPAT-NEXT:    mov x8, #0 // =0x0
+; STREAMING-COMPAT-NEXT:    fmov d28, xzr
+; STREAMING-COMPAT-NEXT:    fmov d29, xzr
+; STREAMING-COMPAT-NEXT:    mov x9, #0 // =0x0
+; STREAMING-COMPAT-NEXT:    fmov d30, xzr
+; STREAMING-COMPAT-NEXT:    fmov d31, xzr
+; STREAMING-COMPAT-NEXT:    mov x10, #0 // =0x0
 ; STREAMING-COMPAT-NEXT:    mov x11, #0 // =0x0
 ; STREAMING-COMPAT-NEXT:    mov x12, #0 // =0x0
 ; STREAMING-COMPAT-NEXT:    mov x13, #0 // =0x0
@@ -351,30 +375,6 @@ define dso_local i32 @all(i32 noundef %a, i32 noundef %b, i32 noundef %c) local_
 ; STREAMING-COMPAT-NEXT:    mov x16, #0 // =0x0
 ; STREAMING-COMPAT-NEXT:    mov x17, #0 // =0x0
 ; STREAMING-COMPAT-NEXT:    mov x18, #0 // =0x0
-; STREAMING-COMPAT-NEXT:    fmov d0, xzr
-; STREAMING-COMPAT-NEXT:    fmov d1, xzr
-; STREAMING-COMPAT-NEXT:    fmov d2, xzr
-; STREAMING-COMPAT-NEXT:    fmov d3, xzr
-; STREAMING-COMPAT-NEXT:    fmov d4, xzr
-; STREAMING-COMPAT-NEXT:    fmov d5, xzr
-; STREAMING-COMPAT-NEXT:    fmov d6, xzr
-; STREAMING-COMPAT-NEXT:    fmov d7, xzr
-; STREAMING-COMPAT-NEXT:    fmov d16, xzr
-; STREAMING-COMPAT-NEXT:    fmov d17, xzr
-; STREAMING-COMPAT-NEXT:    fmov d18, xzr
-; STREAMING-COMPAT-NEXT:    fmov d19, xzr
-; STREAMING-COMPAT-NEXT:    fmov d20, xzr
-; STREAMING-COMPAT-NEXT:    fmov d21, xzr
-; STREAMING-COMPAT-NEXT:    fmov d22, xzr
-; STREAMING-COMPAT-NEXT:    fmov d23, xzr
-; STREAMING-COMPAT-NEXT:    fmov d24, xzr
-; STREAMING-COMPAT-NEXT:    fmov d25, xzr
-; STREAMING-COMPAT-NEXT:    fmov d26, xzr
-; STREAMING-COMPAT-NEXT:    fmov d27, xzr
-; STREAMING-COMPAT-NEXT:    fmov d28, xzr
-; STREAMING-COMPAT-NEXT:    fmov d29, xzr
-; STREAMING-COMPAT-NEXT:    fmov d30, xzr
-; STREAMING-COMPAT-NEXT:    fmov d31, xzr
 ; STREAMING-COMPAT-NEXT:    ret
 
 entry:

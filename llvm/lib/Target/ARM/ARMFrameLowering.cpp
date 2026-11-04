@@ -1815,11 +1815,6 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
     // Before v6 the flags-free copy needs a high register on one side, so a
     // low register is cleared directly instead, writing the flags once more.
     // The check above established that the flags are free here.
-    //
-    // TODO: Nothing keeps these copies alive after PEI. Copy propagation run
-    // with the non-default -mcp-use-is-copy-instr treats each tMOVr as a dead
-    // copy and deletes it, leaving the register uncleared. The exit needs a
-    // use of each cleared register to prevent this.
     const bool LowCopyIsLegal = STI.hasV6Ops();
     TII.buildClearRegister(ZeroSrc, MBB, MBBI, DL);
     for (MCRegister Reg : GPRs.set_bits()) {

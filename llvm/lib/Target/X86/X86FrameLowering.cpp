@@ -633,6 +633,14 @@ bool X86FrameLowering::isZeroCallUsedRegsScratchReg(const MachineFunction &MF,
                        : X86::GR32RegClass.contains(Reg);
 }
 
+bool X86FrameLowering::useFakeUseForZeroCallUsedRegs(
+    const MachineInstr &ExitMI) const {
+  if (!STI.is64Bit() || !STI.useLVIControlFlowIntegrity())
+    return false;
+  return ExitMI.getOpcode() == X86::RET64 ||
+         (ExitMI.getOpcode() == X86::RET && ExitMI.getOperand(0).getImm() == 0);
+}
+
 void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
                                             MachineBasicBlock &MBB,
                                             MachineBasicBlock::iterator MBBI,

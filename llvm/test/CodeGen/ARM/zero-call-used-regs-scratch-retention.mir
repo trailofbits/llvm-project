@@ -1,0 +1,26 @@
+# A VFP-only clear still materializes a zero in a target-selected GPR. Keep
+# that scratch register and the S2 clear live without overwriting the S0 result.
+# RUN: llc -mtriple=armv7-none-eabi -mattr=+vfp3,-neon \
+# RUN:   -run-pass=prolog-epilog,machine-cp,dead-mi-elimination \
+# RUN:   -mcp-use-is-copy-instr -verify-machineinstrs %s -o - | FileCheck %s
+
+
+--- |
+  define float @fp_scratch(float %x) "zero-call-used-regs"="used" {
+    ret float %x
+  }
+...
+---
+name: fp_scratch
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $s0
+    INLINEASM &"", 1, 12, implicit-def dead $s2
+    BX_RET 14, $noreg, implicit $s0
+# CHECK-LABEL: name: fp_scratch
+# CHECK: INLINEASM
+# CHECK-NEXT: $r0 = {{(t2)?}}MOVi 0,
+# CHECK-NEXT: $s2 = VMOVSR {{(killed )?}}$r0,
+# CHECK-NEXT: BX_RET {{.*}}implicit {{(killed )?}}$s0
+...
