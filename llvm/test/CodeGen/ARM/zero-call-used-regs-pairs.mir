@@ -1,0 +1,70 @@
+# RUN: llc -mtriple=armv7-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mtriple=armebv7-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s
+
+# Clear the scalar components of LDREXD/STREXD operands while preserving
+# either half or all of a returned pair. The non-GPR mode also exercises the
+# ARM emitter's decomposition of tuple candidates.
+--- |
+  define void @pair_def() "zero-call-used-regs"="used" { ret void }
+  define void @pair_use() "zero-call-used-regs"="used-gpr" { ret void }
+  define i32 @return_half(i64 %x, ptr %p) "zero-call-used-regs"="used" { ret i32 0 }
+  define i64 @return_pair(ptr %p) "zero-call-used-regs"="used-gpr" { ret i64 0 }
+...
+---
+name: pair_def
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2, $lr
+    dead $r0_r1 = LDREXD $r2, 14, $noreg
+    BX_RET 14, $noreg, implicit $lr
+# CHECK-LABEL: name: pair_def
+# CHECK: $r0_r1 = LDREXD
+# CHECK-NEXT: $r0 = MOVi 0,
+# CHECK-NEXT: $r1 = MOVi 0,
+# CHECK-NEXT: $r2 = MOVi 0,
+# CHECK-NEXT: BX_RET
+...
+---
+name: pair_use
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0_r1, $r2, $lr
+    dead early-clobber $r3 = STREXD $r0_r1, $r2, 14, $noreg
+    BX_RET 14, $noreg, implicit $lr
+# CHECK-LABEL: name: pair_use
+# CHECK: $r3 = STREXD
+# CHECK-NEXT: $r0 = MOVi 0,
+# CHECK-NEXT: $r1 = MOVi 0,
+# CHECK-NEXT: $r2 = MOVi 0,
+# CHECK-NEXT: $r3 = MOVi 0,
+# CHECK-NEXT: BX_RET
+...
+---
+name: return_half
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0_r1, $r2, $lr
+    $r0_r1 = LDREXD $r2, 14, $noreg
+    BX_RET 14, $noreg, implicit $lr, implicit $r0
+# CHECK-LABEL: name: return_half
+# CHECK: $r0_r1 = LDREXD
+# CHECK-NEXT: $r1 = MOVi 0,
+# CHECK-NEXT: $r2 = MOVi 0,
+# CHECK-NEXT: BX_RET {{.*}}implicit $r0
+...
+---
+name: return_pair
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2, $lr
+    $r0_r1 = LDREXD $r2, 14, $noreg
+    BX_RET 14, $noreg, implicit $lr, implicit $r0_r1
+# CHECK-LABEL: name: return_pair
+# CHECK: $r0_r1 = LDREXD
+# CHECK-NEXT: $r2 = MOVi 0,
+# CHECK-NEXT: BX_RET {{.*}}implicit $r0_r1
+...

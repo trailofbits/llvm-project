@@ -242,6 +242,17 @@ public:
   /// exits, or the exit call otherwise. This preserves PEI's ClearingSequence
   /// ordering.
   ///
+  /// PEI filters \p RegsToZero using register operands from
+  /// \p MBBI to the block end, excluding aliases. Mode selection excludes
+  /// nonallocatable and fixed registers, plus sub- and superregisters of
+  /// callee-saved registers and the return-address register.
+  ///
+  /// Disjoint siblings may remain live. Targets must preserve required state
+  /// not covered by PEI's filtering and diagnose requests they cannot emit
+  /// safely. Widened writes must preserve additional units unless safe to
+  /// clobber; absence from \p RegsToZero is no guarantee. PEI does not validate
+  /// widened writes.
+  ///
   /// PEI clears dead flags on all inserted allocatable physical defs, including
   /// target-selected scratch. It adds missing exact, non-undef exit uses as
   /// implicit operands, optionally on a separate FAKE_USE as requested by

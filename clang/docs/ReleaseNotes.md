@@ -173,6 +173,10 @@ features cannot lower the translation-unit ABI level;
 - Clang now allows GNU computed `goto` extension in `constexpr` functions, matching the relaxed
   `constexpr` function body rules introduced in C++23.
 
+- Added `__builtin_clear_sensitive(void *dst, size_t size)`, which zeroes a
+  region of memory without the write being removed as a dead store. It lowers
+  to a volatile `llvm.memset.inline`, so it normally does not call `memset`.
+
 ### New Compiler Flags
 
 - New option `-fdefined-pointer-subtraction` added to preserve stable semantics
@@ -203,11 +207,31 @@ features cannot lower the translation-unit ABI level;
   hardening and AArch64 tail-call authentication can still reuse available
   scratch registers after clearing.
 
+- Register uses marked `undef` at exits no longer prevent otherwise eligible
+  clears for `-fzero-call-used-regs` and the `zero_call_used_regs` attribute.
+
+- The `-fzero-call-used-regs` flag is now supported on 32-bit Arm targets,
+  including Thumb-1 and Thumb-2. Windows on 32-bit Arm is not supported yet.
+  Thumb-1 code clears only general-purpose registers: the Thumb-1 instruction
+  set cannot write VFP registers, so values left there by ARM or Thumb-2
+  callees survive the return on cores such as the ARM1176JZF-S.
+
 ### Removed Compiler Flags
 
 ### Attribute Changes in Clang
 
 - Clang now properly propagates attributes on class and variable templates to their redeclarations, which will result in redeclarations not interfering with diagnostics. (#GH209812)
+
+- Added the `zeroize_on_return` function attribute. It lowers to
+  `"zero-call-used-regs"="all"` and `"zeroize-stack"="used"` IR requests.
+  Stack and flag clearing are not implemented by any target yet; register
+  clearing and unsupported-target diagnostics use the existing backend support.
+  Clang rejects the attribute on `naked` functions and rejects coroutines and
+  `musttail` returns in annotated functions.
+- Added the `sensitive` attribute for automatic local variables in
+  `zeroize_on_return` functions. Sensitive allocations remain unmarked in IR;
+  ordinary local allocations receive `!nozeroize` metadata. The currently
+  requested `used` stack mode ignores these exemptions. Stray uses warn by default.
 
 ### Improvements to Clang's diagnostics
 

@@ -2666,10 +2666,10 @@ fn -> other_fn -> other_fn ; fn is norecurse
 
     Register use and argument live-ins are tracked through their allocatable
     subregisters. Registers are filtered separately at each supported exit.
-    Explicit and implicit register operands from the clearing insertion point
-    through the exit exclude overlapping registers from clearing. Callee-saved
-    registers, including per-function additions, and the target's return-address
-    register remain excluded.
+    Explicit and implicit machine-register definitions and non-`undef` uses from
+    the clearing insertion point through the exit exclude overlapping registers
+    from clearing. Callee-saved registers, including per-function additions, and
+    the target's return-address register remain excluded.
 
     Targets must preserve live register units when widening a clear. On x86-64,
     a live `AL` return can coexist with clearing `AH` and the remaining upper
@@ -8091,6 +8091,10 @@ obligation to clear a frame comes from the `"zeroize-stack"` attribute alone.
 An unmarked object is cleared, and so is every slot whose contents cannot be
 traced back to a source-level object: spill slots, the callee-save area, and
 alignment padding are cleared whether or not anything is marked.
+
+A producer may attach the metadata to any object that its source language
+establishes as holding no data that needs clearing, for example when the
+language makes the programmer responsible for annotating every object that does.
 
 Transforms must respect the one-directional rule this sets up:
 

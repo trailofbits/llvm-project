@@ -214,6 +214,15 @@ public:
                    bool KillSrc, bool RenamableDest = false,
                    bool RenamableSrc = false) const override;
 
+  /// Write zero to \p Reg with one instruction. Handles GPRs (on classic
+  /// Thumb-1 only R0-R7, and only if \p AllowSideEffects permits a flag
+  /// write), D and Q registers with NEON, and Q0-Q7 with MVE. Anything else
+  /// needs a zeroed source register and is a fatal error here; see
+  /// ARMFrameLowering::emitZeroCallUsedRegs.
+  void buildClearRegister(Register Reg, MachineBasicBlock &MBB,
+                          MachineBasicBlock::iterator Iter, DebugLoc &DL,
+                          bool AllowSideEffects = true) const override;
+
   void storeRegToStackSlot(
       MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI, Register SrcReg,
       bool isKill, int FrameIndex, const TargetRegisterClass *RC, Register VReg,

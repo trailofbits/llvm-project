@@ -7160,6 +7160,13 @@ static void handleUninitializedAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   D->addAttr(::new (S.Context) UninitializedAttr(S.Context, AL));
 }
 
+static void handleSensitiveAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+  const auto *FD = dyn_cast<FunctionDecl>(D->getDeclContext());
+  if (!FD || !FD->hasAttr<ZeroizeOnReturnAttr>())
+    S.Diag(AL.getLoc(), diag::warn_sensitive_without_zeroize_on_return) << AL;
+  D->addAttr(SensitiveAttr::Create(S.Context, AL));
+}
+
 static void handleMIGServerRoutineAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   // Check that the return type is a `typedef int kern_return_t` or a typedef
   // around it, because otherwise MIG convention checks make no sense.
@@ -8417,6 +8424,9 @@ ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D, const ParsedAttr &AL,
 
   case ParsedAttr::AT_Uninitialized:
     handleUninitializedAttr(S, D, AL);
+    break;
+  case ParsedAttr::AT_Sensitive:
+    handleSensitiveAttr(S, D, AL);
     break;
 
   case ParsedAttr::AT_ObjCExternallyRetained:

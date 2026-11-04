@@ -85,6 +85,12 @@ Makes programs 10x faster by doing Special New Thing.
 
 ### Changes to the ARM Backend
 
+* Added support for the `zero-call-used-regs` function attribute on 32-bit Arm,
+  including ARM, Thumb-1, and Thumb-2 code generation. Windows targets are not
+  supported yet and report an error. Thumb-1 functions do not clear VFP
+  registers, which the Thumb-1 instruction set cannot write, even on cores
+  that have them.
+
 ### Changes to the AVR Backend
 
 ### Changes to the DirectX Backend
@@ -143,6 +149,9 @@ Makes programs 10x faster by doing Special New Thing.
 * Emitted register clears remain live through late machine optimizations.
   AArch64 tail-call authentication can still reuse available scratch registers
   after clearing.
+
+* Register clearing ignores register uses marked `undef` when filtering exit
+  operands, while preserving definitions and non-undef uses.
 
 ### Changes to the Metadata Info
 

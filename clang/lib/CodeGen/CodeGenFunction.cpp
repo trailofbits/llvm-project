@@ -1107,8 +1107,20 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
              CGM.getCodeGenOpts().StackAlignment))
     Fn->addFnAttr("stackrealign");
 
-  // "main" doesn't need to zero out call-used registers.
-  if (FD && FD->isMain())
+  // ConstructAttributeList only sees zeroize_on_return if it was visible when
+  // Fn was created. A use before a definition that adds the attribute creates
+  // Fn from the earlier declaration, so apply the requests from the definition.
+  // Thunks pass no GlobalDecl and are not affected.
+  if (FD && FD->hasAttr<ZeroizeOnReturnAttr>()) {
+    Fn->removeFnAttr("zero-call-used-regs");
+    Fn->addFnAttr("zero-call-used-regs", "all");
+    Fn->addFnAttr("zeroize-stack", "used");
+  }
+
+  // Preserve the existing main exemption for both the command-line default
+  // and an explicit zero_call_used_regs attribute. An explicit
+  // zeroize_on_return requests both capabilities even on main.
+  if (FD && FD->isMain() && !FD->hasAttr<ZeroizeOnReturnAttr>())
     Fn->removeFnAttr("zero-call-used-regs");
 
   // Add vscale_range attribute if appropriate.
