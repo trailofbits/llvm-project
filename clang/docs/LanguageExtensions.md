@@ -4843,9 +4843,8 @@ void __builtin_clear_sensitive(void *dst, size_t size);
 `__builtin_clear_sensitive` sets `size` bytes starting at `dst` to zero. Unlike
 `memset`, the write is not removed when the memory is never read again, for
 example right before a buffer is freed or goes out of scope. The clear is
-emitted without calling an external function such as `memset`, with the
-exception described below. The `size` argument does not need to be a compile
-time constant.
+emitted without calling an external function such as `memset`. The `size`
+argument does not need to be a compile time constant.
 
 `dst` must point to a non-const object type. It may point to a `volatile`
 object or to an object in a non-default address space.
@@ -4857,9 +4856,8 @@ memory that attribute does not reach, such as heap buffers and objects that
 outlive the function.
 
 It lowers to a volatile [llvm.memset.inline](https://llvm.org/docs/LangRef.html#llvm-memset-inline-intrinsic)
-of zero. A fixed-size clear of a local whose address does not escape may be
-split by the optimizer. The pieces are still written, but each piece may
-become a `memset` call.
+of zero. If scalar replacement splits the clear into memory intrinsics, those
+intrinsics retain the inline form.
 
 The builtin cannot be called in a `constexpr` context.
 
