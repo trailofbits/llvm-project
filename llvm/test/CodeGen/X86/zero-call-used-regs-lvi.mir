@@ -1,0 +1,67 @@
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu -mattr=+lvi-cfi -run-pass=prolog-epilog,dead-mi-elimination,machine-cp -mcp-use-is-copy-instr -verify-machineinstrs %s -o %t.mir
+# RUN: FileCheck %s --check-prefix=PEI < %t.mir
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu -mattr=+lvi-cfi -run-pass=x86-lvi-ret -verify-machineinstrs %t.mir -o - | FileCheck %s --check-prefix=LVI
+
+--- |
+  define i8 @implicit_byte() "zero-call-used-regs"="all-gpr" { ret i8 1 }
+  define i64 @implicit_integer() "zero-call-used-regs"="all-gpr" { ret i64 1 }
+  define void @all_gprs_live() "zero-call-used-regs"="all-gpr" { ret void }
+...
+---
+name: implicit_byte
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $eax = MOV32ri 305419897
+    RET64 implicit $al
+# PEI-LABEL: name: implicit_byte
+# PEI: hasFakeUses: true
+# PEI: $eax = MOV32ri 305419897
+# PEI-NOT: $eax = XOR32rr
+# PEI: FAKE_USE {{.*}}implicit {{(killed )?}}$ecx
+# PEI-NEXT: RET64 implicit {{(killed )?}}$al
+# LVI-LABEL: name: implicit_byte
+# LVI: $eax = MOV32ri 305419897
+# LVI-NOT: $eax = XOR32rr
+# LVI: FAKE_USE {{.*}}implicit {{(killed )?}}$ecx
+# LVI-NEXT: $rcx = frame-destroy POP64r
+# LVI-NEXT: LFENCE
+# LVI-NEXT: JMP64r $rcx
+...
+---
+name: implicit_integer
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $rax = MOV64ri 123
+    RET64 implicit $rax
+# PEI-LABEL: name: implicit_integer
+# PEI: hasFakeUses: true
+# PEI: $rax = MOV64ri 123
+# PEI-NOT: $eax =
+# PEI: FAKE_USE implicit {{(killed )?}}$ecx
+# PEI-NEXT: RET64 implicit {{(killed )?}}$rax
+# LVI-LABEL: name: implicit_integer
+# LVI: $rax = MOV64ri 123
+# LVI-NOT: $eax =
+# LVI: FAKE_USE implicit {{(killed )?}}$ecx
+# LVI-NEXT: $rcx = frame-destroy POP64r
+# LVI-NEXT: LFENCE
+# LVI-NEXT: JMP64r $rcx
+...
+---
+name: all_gprs_live
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $rax, $rcx, $rdx, $rsi, $rdi, $r8, $r9, $r10, $r11
+    RET64 implicit $rax, implicit $rcx, implicit $rdx, implicit $rsi, implicit $rdi, implicit $r8, implicit $r9, implicit $r10, implicit $r11
+# PEI-LABEL: name: all_gprs_live
+# PEI-NOT: FAKE_USE
+# PEI: RET64 implicit $rax, implicit $rcx, implicit $rdx
+# LVI-LABEL: name: all_gprs_live
+# LVI-NOT: FAKE_USE
+# LVI: SHL64mi $rsp, 1, $noreg, 0, $noreg, 0
+# LVI-NEXT: LFENCE
+# LVI-NEXT: RET64 implicit $rax, implicit $rcx, implicit $rdx
+...

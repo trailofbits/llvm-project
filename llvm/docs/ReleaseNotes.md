@@ -127,6 +127,9 @@ Makes programs 10x faster by doing Special New Thing.
   preserving the live byte. Unsupported clears of live upper register fragments
   are diagnosed.
 
+* LVI return hardening can reuse registers kept live solely to preserve emitted
+  clears.
+
 * `llvm.zeroize` now lowers to a clearing sequence on x86-64 (LP64). Other
   subtargets, segment-relative and 32-bit-pointer address spaces, and counts
   that cannot be shown to fit are reported as unsupported rather than
@@ -145,6 +148,10 @@ Makes programs 10x faster by doing Special New Thing.
 
 * Register clearing ignores register uses marked `undef` when filtering exit
   operands, while preserving definitions and non-undef uses.
+
+* Emitted register clears remain live through late machine optimizations.
+  AArch64 tail-call authentication can still reuse available scratch registers
+  after clearing.
 
 ### Changes to the Metadata Info
 
