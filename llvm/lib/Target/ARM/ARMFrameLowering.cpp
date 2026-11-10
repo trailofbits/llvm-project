@@ -1589,6 +1589,20 @@ void ARMFrameLowering::emitEpilogue(MachineFunction &MF,
 // return value.
 //===----------------------------------------------------------------------===//
 
+bool ARMFrameLowering::supportsZeroCallUsedRegs(
+    const MachineFunction &MF) const {
+  // VFP registers may exist on a Thumb-1 target even though Thumb-1 has no
+  // instructions that can clear them. Keep core-only modes available, but do
+  // not advertise a request that may need floating-point clearing there.
+  if (!STI.isThumb1Only() || !STI.hasFPRegs())
+    return true;
+
+  StringRef Mode =
+      MF.getFunction().getFnAttribute("zero-call-used-regs").getValueAsString();
+  return Mode == "used-gpr-arg" || Mode == "used-gpr" ||
+         Mode == "all-gpr-arg" || Mode == "all-gpr";
+}
+
 /// Whether every leaf of \p Reg is an S or D register. Checking leaves covers
 /// the NEON tuple classes without listing them.
 static bool isFPOrNEONReg(const TargetRegisterInfo &TRI, MCRegister Reg) {
@@ -1699,10 +1713,8 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
       for (MCPhysReg Sub : TRI.subregs(Reg))
         GPRs.set(Sub);
     } else if (isFPOrNEONReg(TRI, Reg)) {
-      // Skip FP registers when they are unavailable in the current instruction
-      // set. Thumb-1 cannot access them even when the CPU has VFP hardware, so
-      // values an ARM or Thumb-2 callee left there survive; the release notes
-      // say so.
+      // FP registers are unavailable in these instruction sets. The capability
+      // query rejects Thumb-1 requests that could require clearing VFP state.
       if (!STI.hasFPRegs() || STI.isThumb1Only())
         continue;
       // Non-M-class interrupts share FP state with the interrupted code.
@@ -1742,6 +1754,16 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
                                         /*isUndef=*/!IsSignedReturn));
     }
   }
+
+  // PEI excludes subregisters and superregisters of live exit operands, but a
+  // partially overlapping tuple can survive that exclusion. Expanding it above
+  // can therefore reintroduce live leaves (for example, D0_D2 overlaps a Q0
+  // return value). Remove those leaves before choosing the clearing widths.
+  LiveRegUnits LiveUnits(TRI);
+  computeLiveUnitsAt(LiveUnits, MBB, MBBI);
+  for (MCRegister Reg : FPLeaves.set_bits())
+    if (!LiveUnits.available(Reg))
+      FPLeaves.reset(Reg);
 
   // Reduce the leaves to the widest register that covers only leaves that were
   // asked for. Q first, then D, and whatever is left stays an S.
@@ -1818,7 +1840,9 @@ void ARMFrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
       LiveRegUnits Used(TRI);
       computeLiveUnitsAt(Used, MBB, MBBI);
       for (MCRegister Reg : ZeroSrcRC)
-        if (!MRI.isReserved(Reg) && Used.available(Reg)) {
+        // A return can read LR without naming it as a machine operand, and
+        // not every calling convention lists it as callee-saved.
+        if (Reg != ARM::LR && !MRI.isReserved(Reg) && Used.available(Reg)) {
           ZeroSrc = Reg;
           break;
         }
