@@ -10,8 +10,8 @@
 ; clears together with its bx, so they still run exactly when that exit does.
 
 ; SEQ-LABEL:  clearing sequence for function 'two_exits':
-; SEQ-NEXT:   %bb.1 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
-; SEQ-NEXT:   %bb.2 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:   %bb.1 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
+; SEQ-NEXT:   %bb.2 return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; SEQ-NEXT:   end clearing sequence for function 'two_exits'
 
 declare i32 @callee(i32, i32)

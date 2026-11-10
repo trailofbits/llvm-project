@@ -10,8 +10,8 @@ declare void @sink()
 declare i32 @__CxxFrameHandler3(...)
 
 ; SEQ-LABEL: clearing sequence for function 'cleanup_funclet':
-; SEQ-NEXT:  %bb.1 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
-; SEQ-NEXT:  %bb.2 eh-scope-return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:  %bb.1 return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
+; SEQ-NEXT:  %bb.2 eh-scope-return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; SEQ-NEXT:  end clearing sequence for function 'cleanup_funclet'
 ;
 ; CHECK-LABEL: cleanup_funclet:
