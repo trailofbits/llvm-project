@@ -8,11 +8,12 @@
 // RUN: %if x86-registered-target %{ %clang_cc1 -triple x86_64-unknown-linux-gnu \
 // RUN:   -S -Werror -verify=error %s -o /dev/null %}
 // RUN: %if arm-registered-target %{ %clang_cc1 -triple armv7-unknown-linux-gnueabi \
-// RUN:   -S -verify=warning %s -o /dev/null %}
+// RUN:   -S -verify=arm %s -o /dev/null %}
 // RUN: %if arm-registered-target %{ %clang_cc1 -triple armv7-unknown-linux-gnueabi \
-// RUN:   -S -Werror -verify=error %s -o /dev/null %}
+// RUN:   -S -Werror -verify=arm %s -o /dev/null %}
 
-// These targets support register clearing, but stack clearing remains unsupported.
+// ARM supports this static frame; X86 and AArch64 still diagnose stack clearing.
+// arm-no-diagnostics
 // warning-warning@+2 {{"zeroize-stack" is not supported by this target}}
 // error-error@+1 {{"zeroize-stack" is not supported by this target}}
 [[clang::zeroize_on_return]] void unsupported(void) {

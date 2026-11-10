@@ -1,6 +1,7 @@
 ; RUN: llc -mtriple=armv7-unknown-linux-gnueabi < %s -o /dev/null 2>&1 | \
 ; RUN:   FileCheck %s --implicit-check-not='in function plain_naked' \
-; RUN:     --implicit-check-not='in function naked_skip'
+; RUN:     --implicit-check-not='in function naked_skip' \
+; RUN:     --implicit-check-not='in function not_naked'
 
 ; PEI generates no frame for a naked function, so "zeroize-stack" cannot be
 ; honored on any target. The message names the attribute rather than the target
@@ -29,8 +30,7 @@ define void @plain_naked() naked {
   ret void
 }
 
-; Control: a non-naked function still gets the target-worded report.
-; CHECK: warning: {{.*}}in function not_naked i32 (i32): "zeroize-stack" is not supported by this target
+; Control: a supported non-naked function has no diagnostic.
 define i32 @not_naked(i32 %x) "zeroize-stack"="used" {
   ret i32 %x
 }

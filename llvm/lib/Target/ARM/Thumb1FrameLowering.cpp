@@ -48,6 +48,12 @@ Thumb1FrameLowering::Thumb1FrameLowering(const ARMSubtarget &sti)
     : ARMFrameLowering(sti) {}
 
 bool Thumb1FrameLowering::hasReservedCallFrame(const MachineFunction &MF) const{
+  // Keep outgoing arguments inside the allocation erased by the protected
+  // epilogue, even when reserving a large call frame costs extra addressing.
+  if (MF.getFunction().hasFnAttribute("zeroize-stack") &&
+      !MF.getFrameInfo().hasVarSizedObjects())
+    return true;
+
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   unsigned CFSize = MFI.getMaxCallFrameSize();
   // It's not always a good idea to include the call frame as part of the
@@ -471,6 +477,11 @@ void Thumb1FrameLowering::emitPrologue(MachineFunction &MF,
 
 void Thumb1FrameLowering::emitEpilogue(MachineFunction &MF,
                                    MachineBasicBlock &MBB) const {
+  // The stack emitter restores saved values without releasing their slots.
+  if (MF.getFunction().hasFnAttribute("zeroize-stack") &&
+      supportsZeroizeStack(MF))
+    return;
+
   MachineBasicBlock::iterator MBBI = MBB.getFirstTerminator();
   DebugLoc dl = MBBI != MBB.end() ? MBBI->getDebugLoc() : DebugLoc();
   MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -1148,6 +1159,13 @@ bool Thumb1FrameLowering::spillCalleeSavedRegisters(
 bool Thumb1FrameLowering::restoreCalleeSavedRegisters(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
     MutableArrayRef<CalleeSavedInfo> CSI, const TargetRegisterInfo *TRI) const {
+  if (MBB.getParent()->getFunction().hasFnAttribute("zeroize-stack") &&
+      supportsZeroizeStack(*MBB.getParent())) {
+    for (CalleeSavedInfo &Info : CSI)
+      Info.setRestored(true);
+    return true;
+  }
+
   if (CSI.empty())
     return false;
 
