@@ -1,0 +1,67 @@
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu -run-pass=prolog-epilog \
+# RUN:   -verify-machineinstrs %s -o - | FileCheck %s
+
+# The loop bound excludes the byte tail, so it reaches zero. The tail writes
+# only the remaining byte, before releasing any allocated part of the frame.
+# CHECK-LABEL: name: byte_tail
+# CHECK: $r11 = LEA64r $rsp, 1, $noreg, -65, $noreg
+# CHECK: $r10 = MOV64ri32 64
+# CHECK: MOV64mi32 $r11, 1, $noreg, 0, $noreg, 0 :: (volatile store (s64), align 1)
+# CHECK: $r10 = SUB64ri8 $r10, 8
+# CHECK: JCC_1
+# CHECK: MOV8mi $rsp, 1, $noreg, -1, $noreg, 0 :: (volatile store (s8))
+# CHECK-DAG: $r10d = XOR32rr
+# CHECK-DAG: $r11d = XOR32rr
+# CHECK: RET64 0, implicit $rax
+# CHECK-LABEL: name: byte_tail_no_red_zone
+# CHECK: $r11 = LEA64r $rsp, 1, $noreg, 0, $noreg
+# CHECK: $r10 = MOV64ri32 64
+# CHECK: MOV64mi32 $r11, 1, $noreg, 0, $noreg, 0 :: (volatile store (s64), align 1)
+# CHECK: $r10 = SUB64ri8 $r10, 8
+# CHECK: JCC_1
+# CHECK: MOV8mi $rsp, 1, $noreg, 64, $noreg, 0 :: (volatile store (s8))
+# CHECK-NEXT: $rsp = frame-destroy LEA64r $rsp, 1, $noreg, 65, $noreg
+# CHECK-DAG: $r10d = XOR32rr
+# CHECK-DAG: $r11d = XOR32rr
+# CHECK: RET64 0, implicit $rax
+
+# CHECK-LABEL: name: seven_bytes
+# CHECK: MOV32mi $rsp, 1, $noreg, -7, $noreg, 0 :: (volatile store (s32), align 1)
+# CHECK-NEXT: MOV16mi $rsp, 1, $noreg, -3, $noreg, 0 :: (volatile store (s16), align 1)
+# CHECK-NEXT: MOV8mi $rsp, 1, $noreg, -1, $noreg, 0 :: (volatile store (s8))
+# CHECK-NEXT: RET64 0, implicit $rax
+--- |
+  define void @byte_tail() "zeroize-stack"="used" { ret void }
+  define void @byte_tail_no_red_zone() noredzone "zeroize-stack"="used" { ret void }
+  define void @seven_bytes() "zeroize-stack"="used" { ret void }
+...
+---
+name: byte_tail
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 65, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $rax
+    RET64 0, implicit $rax
+...
+---
+name: byte_tail_no_red_zone
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 65, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $rax
+    RET64 0, implicit $rax
+...
+---
+name: seven_bytes
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 7, alignment: 1 }
+body: |
+  bb.0:
+    liveins: $rax
+    RET64 0, implicit $rax
+...

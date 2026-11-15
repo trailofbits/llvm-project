@@ -148,6 +148,10 @@ bool X86CallFrameOptimizationImpl::isLegal(MachineFunction &MF) {
   if (NoX86CFOpt.getValue())
     return false;
 
+  // Keep outgoing arguments in the reserved frame until the exit clear.
+  if (MF.getFunction().hasZeroizeStack())
+    return false;
+
   // We can't encode multiple DW_CFA_GNU_args_size or DW_CFA_def_cfa_offset
   // in the compact unwind encoding that Darwin uses. So, bail if there
   // is a danger of that being generated.

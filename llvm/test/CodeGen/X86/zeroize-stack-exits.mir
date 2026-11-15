@@ -1,0 +1,47 @@
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu -run-pass=prolog-epilog -verify-machineinstrs %s -o %t
+# RUN: FileCheck %s < %t
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu -x mir \
+# RUN:   -run-pass=postmisched,dead-mi-elimination -verify-machineinstrs %t -o - \
+# RUN:   | FileCheck %s
+
+# Each exit gets its own bounded red-zone loop without destroying live returns.
+# CHECK-LABEL: name: separate_exits
+# CHECK: $r11 = LEA64r $rsp, 1, $noreg, -128, $noreg
+# CHECK: $r10 = MOV64ri32 128
+# CHECK: MOV64mi32 $r11, 1, $noreg, 0, $noreg, 0 :: (volatile store (s64))
+# CHECK: $r11 = ADD64ri8 $r11, 8
+# CHECK: $r10 = SUB64ri8 $r10, 8
+# CHECK: JCC_1
+# CHECK-DAG: $r10d = XOR32rr
+# CHECK-DAG: $r11d = XOR32rr
+# CHECK: RET64 0, implicit $rax
+# CHECK: $r11 = LEA64r $rsp, 1, $noreg, -128, $noreg
+# CHECK: $r10 = MOV64ri32 128
+# CHECK: MOV64mi32 $r11, 1, $noreg, 0, $noreg, 0 :: (volatile store (s64))
+# CHECK: $r11 = ADD64ri8 $r11, 8
+# CHECK: $r10 = SUB64ri8 $r10, 8
+# CHECK: JCC_1
+# CHECK-DAG: $r10d = XOR32rr
+# CHECK-DAG: $r11d = XOR32rr
+# CHECK: RET64 0, implicit $rdx
+--- |
+  define void @separate_exits() "zeroize-stack"="used" { ret void }
+...
+---
+name: separate_exits
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 128, alignment: 8 }
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $rax, $rdx, $rdi
+    TEST64rr $rdi, $rdi, implicit-def $eflags
+    JCC_1 %bb.2, 4, implicit killed $eflags
+  bb.1:
+    liveins: $rax
+    RET64 0, implicit $rax
+  bb.2:
+    liveins: $rdx
+    RET64 0, implicit $rdx
+...

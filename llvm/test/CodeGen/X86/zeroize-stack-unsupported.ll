@@ -1,16 +1,17 @@
-; RUN: llc -mtriple=x86_64-unknown-linux-gnu < %s -o /dev/null 2>&1 | FileCheck %s
-; RUN: llc -mtriple=i386-unknown-linux-gnu < %s -o /dev/null 2>&1 | FileCheck %s
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu < %s -o /dev/null 2>&1 | count 0
+; RUN: not llc -mtriple=i386-unknown-linux-gnu < %s -o /dev/null 2>&1 | FileCheck %s
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu -mattr=+lvi-cfi \
+; RUN:   < %s -o /dev/null 2>&1 | FileCheck %s
 
-; No target clears the stack frame yet, so every "zeroize-stack" request is
-; reported. llc runs without "not" to pin that it warns: an error would fire
-; everywhere and leave the attribute impossible to compile at all.
+; The LP64 implementation accepts both modes. Other frame/ABI protocols are
+; diagnosed rather than compiling an annotation that clears nothing.
 
-; CHECK: warning: {{.*}}in function used i32 (i32): "zeroize-stack" is not supported by this target
+; CHECK: error: {{.*}}in function used i32 (i32): X86 stack clearing does not support
 define i32 @used(i32 %x) "zeroize-stack"="used" {
   ret i32 %x
 }
 
-; CHECK: warning: {{.*}}in function sensitive i32 (i32): "zeroize-stack" is not supported by this target
+; CHECK: error: {{.*}}in function sensitive i32 (i32): X86 stack clearing does not support
 define i32 @sensitive(i32 %x) "zeroize-stack"="sensitive" {
   ret i32 %x
 }
