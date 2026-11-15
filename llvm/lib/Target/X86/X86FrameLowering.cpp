@@ -791,7 +791,7 @@ static MCRegister getZeroCallUsedVectorLane(const X86Subtarget &ST,
 
 // ST0-7 are reserved and FP7 is not allocatable; the x87 stack is requested
 // through FP0-6. Tiles and mask pairs are fixed registers. Unavailable register
-// files are reserved by X86RegisterInfo::getReservedRegs.
+// files are excluded by X86RegisterInfo::isFixedRegister.
 void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
                                             MachineBasicBlock &MBB,
                                             MachineBasicBlock::iterator MBBI,

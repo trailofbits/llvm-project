@@ -616,33 +616,6 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     for (unsigned n = 0; n != 7; ++n)
       Reserved.set(X86::FP0 + n);
 
-  // Reserve register files outside this function's enabled features so
-  // call-used register clearing does not request unavailable writes.
-  // ISel also excludes MMX under soft float.
-  if (!ST.hasMMX() || ST.useSoftFloat())
-    for (unsigned n = 0; n != 8; ++n)
-      Reserved.set(X86::MM0 + n);
-
-  // Reserve disabled vector widths without reserving their enabled
-  // subregisters. XMM16-31 and their aliases are reserved below without
-  // AVX-512.
-  if (!ST.hasSSE1())
-    for (unsigned n = 0; n != 16; ++n)
-      for (MCRegAliasIterator AI(X86::XMM0 + n, this, true); AI.isValid(); ++AI)
-        Reserved.set(*AI);
-  if (!ST.hasAVX())
-    for (unsigned n = 0; n != 16; ++n)
-      markSuperRegs(Reserved, X86::YMM0 + n);
-  if (!ST.hasAVX512())
-    for (unsigned n = 0; n != 16; ++n)
-      Reserved.set(X86::ZMM0 + n);
-
-  // Mask registers and their pairs: mask instructions are AVX-512.
-  if (!ST.hasAVX512())
-    for (unsigned n = 0; n != 8; ++n)
-      for (MCRegAliasIterator AI(X86::K0 + n, this, true); AI.isValid(); ++AI)
-        Reserved.set(*AI);
-
   // Reserve the registers that only exist in 64-bit mode.
   if (!Is64Bit) {
     // These 8-bit registers are part of the x86-64 extension even though their
@@ -791,10 +764,29 @@ bool X86RegisterInfo::isArgumentRegister(const MachineFunction &MF,
   return X86GenRegisterInfo::isArgumentRegister(MF, Reg);
 }
 
+static bool isUnavailableZeroCallUsedRegister(const X86Subtarget &ST,
+                                              MCRegister PhysReg) {
+  if (X86::VR64RegClass.contains(PhysReg))
+    return !ST.hasMMX() || ST.useSoftFloat();
+  if (X86::VR128XRegClass.contains(PhysReg))
+    return !ST.hasSSE1();
+  if (X86::VR256XRegClass.contains(PhysReg))
+    return !ST.hasAVX();
+  if (X86::VR512RegClass.contains(PhysReg) ||
+      X86::VK1RegClass.contains(PhysReg))
+    return !ST.hasAVX512();
+  return false;
+}
+
 bool X86RegisterInfo::isFixedRegister(const MachineFunction &MF,
                                       MCRegister PhysReg) const {
   const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();
   const TargetRegisterInfo &TRI = *ST.getRegisterInfo();
+
+  // Limit clearing to enabled register files without changing allocator
+  // reservations, which also apply to MIR with explicit physical registers.
+  if (isUnavailableZeroCallUsedRegister(ST, PhysReg))
+    return true;
 
   // Stack pointer.
   if (TRI.isSuperOrSubRegisterEq(X86::RSP, PhysReg))
