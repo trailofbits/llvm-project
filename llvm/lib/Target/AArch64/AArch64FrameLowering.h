@@ -108,7 +108,7 @@ public:
 
   /// Returns true if the target will correctly handle shrink wrapping.
   bool enableShrinkWrapping(const MachineFunction &MF) const override {
-    return true;
+    return !MF.getFunction().hasZeroizeStack();
   }
 
   bool enableStackSlotScavenging(const MachineFunction &MF) const override;
@@ -214,6 +214,19 @@ private:
   bool supportsZeroCallUsedRegs(const MachineFunction &MF) const override {
     return true;
   }
+
+  bool supportsZeroizeStack(const MachineFunction &MF) const override;
+  void emitZeroizeStack(MachineBasicBlock &MBB,
+                        MachineBasicBlock::iterator InsertPt,
+                        BitVector &ScratchRegs) const override;
+  bool supportsZeroizeFlags(const MachineFunction &MF) const override;
+  bool prepareZeroizeFlags(MachineBasicBlock &MBB,
+                           MachineBasicBlock::iterator InsertPt,
+                           BitVector &ScratchRegs) const override;
+  void emitZeroizeFlags(MachineBasicBlock &MBB,
+                        MachineBasicBlock::iterator InsertPt,
+                        const BitVector &ScratchRegs,
+                        BitVector &ClearedRegs) const override;
 
   bool isZeroCallUsedRegsScratchReg(const MachineFunction &MF,
                                     MCRegister Reg) const override;

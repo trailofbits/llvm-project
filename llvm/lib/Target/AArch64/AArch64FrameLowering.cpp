@@ -406,6 +406,8 @@ bool AArch64FrameLowering::hasSVECalleeSavesAboveFrameRecord(
 /// When Exit block is given, this check is for epilog.
 bool AArch64FrameLowering::homogeneousPrologEpilog(
     MachineFunction &MF, MachineBasicBlock *Exit) const {
+  if (MF.getFunction().hasZeroizeStack())
+    return false;
   if (!MF.getFunction().hasMinSize())
     return false;
   if (!EnableHomogeneousPrologEpilog)
@@ -539,6 +541,8 @@ AArch64FrameLowering::getFixedObjectSize(const MachineFunction &MF,
 }
 
 bool AArch64FrameLowering::canUseRedZone(const MachineFunction &MF) const {
+  if (MF.getFunction().hasZeroizeStack())
+    return false;
   if (!EnableRedZone)
     return false;
 
@@ -1293,6 +1297,8 @@ void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
 
 void AArch64FrameLowering::emitEpilogue(MachineFunction &MF,
                                         MachineBasicBlock &MBB) const {
+  if (MF.getFunction().hasZeroizeStack() && supportsZeroizeStack(MF))
+    return;
   AArch64EpilogueEmitter EpilogueEmitter(MF, MBB, *this);
   EpilogueEmitter.emitEpilogue();
 }
@@ -2247,6 +2253,11 @@ bool AArch64FrameLowering::restoreCalleeSavedRegisters(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
     MutableArrayRef<CalleeSavedInfo> CSI, const TargetRegisterInfo *TRI) const {
   MachineFunction &MF = *MBB.getParent();
+  if (MF.getFunction().hasZeroizeStack() && supportsZeroizeStack(MF)) {
+    for (CalleeSavedInfo &Info : CSI)
+      Info.setRestored(true);
+    return true;
+  }
   const AArch64InstrInfo &TII =
       *MF.getSubtarget<AArch64Subtarget>().getInstrInfo();
   DebugLoc DL;
@@ -3069,6 +3080,13 @@ void AArch64FrameLowering::processFunctionBeforeFrameFinalized(
          "Upwards growing stack unsupported");
 
   (void)determineSVEStackSizes(MF, AssignObjectOffsets::Yes);
+
+  if (MF.getFunction().hasZeroizeStack() &&
+      !MF.getFunction().hasFnAttribute(Attribute::Naked) &&
+      !supportsZeroizeStack(MF))
+    MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+        MF.getFunction(), "AArch64 stack clearing does not support this frame, "
+                          "calling convention, or exit"});
 
   // If this function isn't doing Win64-style C++ EH, we don't need to do
   // anything.
