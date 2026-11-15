@@ -12,10 +12,13 @@
 // RUN: %if arm-registered-target %{ %clang_cc1 -triple armv7-unknown-linux-gnueabi \
 // RUN:   -S -Werror -verify=arm %s -o /dev/null %}
 
-// ARM supports this static frame; X86 and AArch64 still diagnose stack clearing.
+// ARM supports this static frame and flags clearing. X86 and AArch64 diagnose
+// the stack request as a warning and the flags request as an error.
 // arm-no-diagnostics
-// warning-warning@+2 {{"zeroize-stack" is not supported by this target}}
-// error-error@+1 {{"zeroize-stack" is not supported by this target}}
+// warning-warning@+4 {{"zeroize-stack" is not supported by this target}}
+// warning-error@+3 {{"zeroize-flags" is not supported by this target or exit protocol}}
+// error-error@+2 {{"zeroize-stack" is not supported by this target}}
+// error-error@+1 {{"zeroize-flags" is not supported by this target or exit protocol}}
 [[clang::zeroize_on_return]] void unsupported(void) {
   [[clang::sensitive]] volatile int key = 42;
 }

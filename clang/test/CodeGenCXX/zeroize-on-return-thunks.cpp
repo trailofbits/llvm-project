@@ -17,9 +17,10 @@ void C::f(int, ...) { [[clang::sensitive]] volatile int key = 42; }
 // CHECK-NEXT: ret void
 
 // CHECK: attributes #[[PROTECTED]] = {
-// CHECK-SAME: "zero-call-used-regs"="all" "zeroize-stack"="used"
+// CHECK-SAME: "zero-call-used-regs"="all" "zeroize-flags" "zeroize-stack"="used"
 // CHECK: attributes #[[FORWARD]] = {
 // DEFAULT-NOT: "zero-call-used-regs"
 // REGS-SAME: "zero-call-used-regs"="used-gpr"
+// CHECK-NOT: "zeroize-flags"
 // CHECK-NOT: "zeroize-stack"
 // CHECK-SAME: }
