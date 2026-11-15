@@ -298,12 +298,10 @@ TEST_P(X86RegisterClearingTest, RequestedVectorWidthsFollowFunctionFeatures) {
   for (MCRegister Reg : {X86::XMM16, X86::YMM16, X86::ZMM16})
     EXPECT_EQ(Set.test(Reg), HasHighVectors) << TRI->getName(Reg);
 
-  // Reserving unavailable upper lanes must not reserve the enabled low lanes.
+  // Clearing selection must not reserve registers for ordinary allocation.
   const MachineRegisterInfo &MRI = MF->getRegInfo();
-  for (MCRegUnit Unit : TRI->regunits(X86::XMM0))
-    EXPECT_EQ(MRI.isReservedRegUnit(Unit), !STI->hasSSE1());
-  if (STI->hasAVX())
-    for (MCRegUnit Unit : TRI->regunits(X86::YMM0))
+  for (MCRegister Reg : {X86::XMM0, X86::YMM0, X86::ZMM0})
+    for (MCRegUnit Unit : TRI->regunits(Reg))
       EXPECT_FALSE(MRI.isReservedRegUnit(Unit));
 }
 
