@@ -1,0 +1,75 @@
+# RUN: llc -mtriple=aarch64-linux-gnu -mattr=+sve2p1 -run-pass=prolog-epilog \
+# RUN:   -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mtriple=aarch64-linux-gnu -mattr=+sme2 -force-streaming \
+# RUN:   -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s
+
+--- |
+  define preserve_nonecc void @used_high_gprs() "zero-call-used-regs"="used-gpr" { ret void }
+  define preserve_nonecc void @live_high_gpr() "zero-call-used-regs"="used-gpr" { ret void }
+  define void @used_counter() "zero-call-used-regs"="used" { ret void }
+  define void @live_predicate() "zero-call-used-regs"="used" { ret void }
+  define void @live_counter() "zero-call-used-regs"="used" { ret void }
+...
+---
+name: used_high_gprs
+tracksRegLiveness: true
+body: |
+  bb.0:
+    ; CHECK-LABEL: name: used_high_gprs
+    ; CHECK: dead $x19 = MOVZXi 42, 0
+    ; CHECK-NEXT: dead $x28 = MOVZXi 43, 0
+    ; CHECK-NEXT: $x19 = MOVZXi 0, 0
+    ; CHECK-NEXT: $x28 = MOVZXi 0, 0
+    ; CHECK-NEXT: RET_ReallyLR implicit $x19, implicit $x28
+    dead $x19 = MOVZXi 42, 0
+    dead $x28 = MOVZXi 43, 0
+    RET_ReallyLR
+...
+---
+name: live_high_gpr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    ; CHECK-LABEL: name: live_high_gpr
+    ; CHECK: $x19 = MOVZXi 42, 0
+    ; CHECK-NEXT: dead $x28 = MOVZXi 43, 0
+    ; CHECK-NEXT: $x28 = MOVZXi 0, 0
+    ; CHECK-NEXT: RET_ReallyLR implicit $x19, implicit $x28
+    $x19 = MOVZXi 42, 0
+    dead $x28 = MOVZXi 43, 0
+    RET_ReallyLR implicit $x19
+...
+---
+name: used_counter
+tracksRegLiveness: true
+body: |
+  bb.0:
+    ; CHECK-LABEL: name: used_counter
+    ; CHECK: dead $pn8 = PTRUE_C_B implicit $vg
+    ; CHECK-NEXT: $p8 = PFALSE
+    ; CHECK-NEXT: RET_ReallyLR implicit $p8
+    dead $pn8 = PTRUE_C_B implicit $vg
+    RET_ReallyLR
+...
+---
+name: live_predicate
+tracksRegLiveness: true
+body: |
+  bb.0:
+    ; CHECK-LABEL: name: live_predicate
+    ; CHECK: $p8 = PTRUE_B 31, implicit $vg
+    ; CHECK-NEXT: RET_ReallyLR implicit $p8
+    $p8 = PTRUE_B 31, implicit $vg
+    RET_ReallyLR implicit $p8
+...
+---
+name: live_counter
+tracksRegLiveness: true
+body: |
+  bb.0:
+    ; CHECK-LABEL: name: live_counter
+    ; CHECK: $pn8 = PTRUE_C_B implicit $vg
+    ; CHECK-NEXT: RET_ReallyLR implicit $pn8
+    $pn8 = PTRUE_C_B implicit $vg
+    RET_ReallyLR implicit $pn8
+...
