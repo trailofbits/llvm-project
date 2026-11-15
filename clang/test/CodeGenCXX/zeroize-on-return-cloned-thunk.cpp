@@ -23,4 +23,4 @@ C *C::clone(int, ...) {
 // CHECK: ret ptr
 
 // CHECK: attributes #[[PROTECTED]] = {
-// CHECK-SAME: "zero-call-used-regs"="all" "zeroize-stack"="used"
+// CHECK-SAME: "zero-call-used-regs"="all" "zeroize-flags" "zeroize-stack"="used"

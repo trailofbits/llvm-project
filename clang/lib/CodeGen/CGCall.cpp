@@ -2912,12 +2912,14 @@ void CodeGenModule::ConstructAttributeList(StringRef Name,
         TargetDecl->hasAttr<ZeroizeOnReturnAttr>()) {
       // Forwarding thunks leave the method's requests on the callee. A thunk
       // that clones its body also clones the original function attributes.
-      // Request register and stack clearing together, overriding both the
-      // command-line mode and an explicit zero_call_used_regs on the function.
-      // Use "all" to include registers clobbered by callees: the "used" modes
-      // count explicit and implicit register operands, but not call regmasks.
+      // Request register, stack, and flags clearing together, overriding both
+      // the command-line mode and an explicit zero_call_used_regs on the
+      // function. Use "all" to include registers clobbered by callees: the
+      // "used" modes count explicit and implicit register operands, but not
+      // call regmasks.
       FuncAttrs.removeAttribute("zero-call-used-regs");
       FuncAttrs.addAttribute("zero-call-used-regs", "all");
+      FuncAttrs.addAttribute("zeroize-flags");
       FuncAttrs.addAttribute("zeroize-stack", "used");
     }
 

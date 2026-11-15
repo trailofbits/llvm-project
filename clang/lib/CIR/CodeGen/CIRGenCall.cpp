@@ -485,12 +485,14 @@ void CIRGenModule::constructAttributeList(
               ZeroCallUsedRegsAttr::ConvertZeroCallUsedRegsKindToStr(kind)));
     }
     if (!attrOnCallSite && targetDecl->hasAttr<ZeroizeOnReturnAttr>()) {
-      // Function-boundary zeroization requests register clearing and stack
+      // Function-boundary zeroization requests register, stack, and flags
       // clearing together, and wins over both the command-line mode and an
       // explicit zero_call_used_regs on the same function. See the matching
       // block in CGCall.cpp for why the "all" mode.
       attrs.set(cir::CIRDialect::getZeroCallUsedRegsAttrName(),
                 mlir::StringAttr::get(&getMLIRContext(), "all"));
+      attrs.set(cir::CIRDialect::getZeroizeFlagsAttrName(),
+                mlir::UnitAttr::get(&getMLIRContext()));
       attrs.set(cir::CIRDialect::getZeroizeStackAttrName(),
                 mlir::StringAttr::get(&getMLIRContext(), "used"));
     }

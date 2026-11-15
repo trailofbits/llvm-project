@@ -32,5 +32,6 @@ F f;
 // CHECK: attributes #[[THUNK]] = {
 // DEFAULT-NOT: "zero-call-used-regs"
 // REGS-SAME: "zero-call-used-regs"="used-gpr"
+// CHECK-NOT: "zeroize-flags"
 // CHECK-NOT: "zeroize-stack"
 // CHECK-SAME: }
