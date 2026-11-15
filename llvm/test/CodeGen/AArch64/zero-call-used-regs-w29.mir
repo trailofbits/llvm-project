@@ -1,0 +1,74 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=aarch64-linux-gnu -run-pass=prolog-epilog -verify-machineinstrs \
+# RUN:   %t/safe.mir -o - | FileCheck %s --check-prefix=SAFE
+# RUN: not llc -mtriple=aarch64-linux-gnu -run-pass=prolog-epilog \
+# RUN:   -verify-machineinstrs %t/live-upper.mir -o /dev/null 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=UPPER
+
+#--- safe.mir
+--- |
+  define ghccc void @used_w29() "zero-call-used-regs"="used-gpr" { ret void }
+  define ghccc void @live_w29() "zero-call-used-regs"="used-gpr" { ret void }
+  define ghccc void @reserved_fp() "zero-call-used-regs"="used-gpr" "frame-pointer"="all" {
+    ret void
+  }
+...
+---
+name: used_w29
+tracksRegLiveness: true
+frameInfo:
+  maxCallFrameSize: 0
+body: |
+  bb.0:
+    ; SAFE-LABEL: name: used_w29
+    ; SAFE: dead $w29 = MOVZWi 42, 0
+    ; SAFE-NEXT: $fp = MOVZXi 0, 0
+    ; SAFE-NEXT: RET_ReallyLR implicit $fp
+    dead $w29 = MOVZWi 42, 0
+    RET_ReallyLR
+...
+---
+name: live_w29
+tracksRegLiveness: true
+frameInfo:
+  maxCallFrameSize: 0
+body: |
+  bb.0:
+    ; SAFE-LABEL: name: live_w29
+    ; SAFE: $w29 = MOVZWi 42, 0
+    ; SAFE-NEXT: RET_ReallyLR implicit $w29
+    $w29 = MOVZWi 42, 0
+    RET_ReallyLR implicit $w29
+...
+---
+name: reserved_fp
+tracksRegLiveness: true
+frameInfo:
+  maxCallFrameSize: 0
+body: |
+  bb.0:
+    liveins: $fp
+    ; SAFE-LABEL: name: reserved_fp
+    ; SAFE: dead $w0 = COPY $w29
+    ; SAFE-NEXT: $x0 = MOVZXi 0, 0
+    ; SAFE-NEXT: RET_ReallyLR implicit $x0
+    dead $w0 = COPY $w29
+    RET_ReallyLR
+...
+
+#--- live-upper.mir
+--- |
+  define ghccc void @live_upper_w29() "zero-call-used-regs"="used-gpr" { ret void }
+...
+---
+name: live_upper_w29
+tracksRegLiveness: true
+frameInfo:
+  maxCallFrameSize: 0
+body: |
+  bb.0:
+    $fp = MOVZXi 1, 32
+    RET_ReallyLR implicit $w29_hi
+...
+# UPPER: error: {{.*}} "zero-call-used-regs" cannot clear register 'FP'
+# UPPER-SAME: without overwriting a value needed at the exit
