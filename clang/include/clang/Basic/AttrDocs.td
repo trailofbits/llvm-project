@@ -8836,10 +8836,11 @@ The register request overrides both ``-fzero-call-used-regs`` and an explicit
 ``zero_call_used_regs`` attribute on the same function, including ``"skip"``.
 An explicitly annotated ``main`` also retains all three requests.
 
-**Current implementation limits.** ARM32 and X86-64 LP64 ELF support stack and
-condition-state clearing for supported static frames and ordinary return
-protocols. X86 condition-state clearing requires SAHF support. Other targets
-and unsupported configurations are diagnosed; see the LLVM IR
+**Current implementation limits.** ARM32, AArch64 ELF, and X86-64 LP64 ELF support
+stack and condition-state clearing for supported frames and ordinary return
+protocols. AArch64 also covers scalable SVE spill storage. X86 condition-state
+clearing requires SAHF support. Other targets and unsupported configurations
+are diagnosed; see the LLVM IR
 ``zeroize-stack`` and ``zeroize-flags`` documentation for the target limits.
 Register clearing uses the target implementation of ``zero_call_used_regs("all")``.
 Return-value registers and registers preserved by the calling convention are
