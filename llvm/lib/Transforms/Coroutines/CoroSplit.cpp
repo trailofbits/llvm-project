@@ -1034,9 +1034,12 @@ void coro::BaseCloner::create() {
   }
   case coro::ABI::Retcon:
   case coro::ABI::RetconOnce:
-    // If we have a continuation prototype, just use its attributes,
-    // full-stop.
+    // Use the continuation prototype's ABI attributes, while retaining the
+    // original coroutine's flags-clearing obligation.
     NewAttrs = Shape.RetconLowering.ResumePrototype->getAttributes();
+    if (OrigF.hasFnAttribute("zeroize-flags"))
+      NewAttrs = NewAttrs.addFnAttribute(Context,
+                                         OrigF.getFnAttribute("zeroize-flags"));
 
     /// FIXME: Is it really good to add the NoAlias attribute?
     addFramePointerAttrs(NewAttrs, Context, 0,
