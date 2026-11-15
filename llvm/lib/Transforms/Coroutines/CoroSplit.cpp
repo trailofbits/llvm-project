@@ -2315,6 +2315,52 @@ CoroSplitPass::CoroSplitPass(
       }),
       OptimizeFrame(OptimizeFrame) {}
 
+static bool checkAsyncHelperZeroizeAttributes(Function &Caller,
+                                              const Function *Helper) {
+  if (!Helper)
+    return true;
+
+  const char *Reason = nullptr;
+  if (!AttributeFuncs::isZeroizeStackInlineCompatible(Caller, *Helper))
+    Reason = "incompatible zeroize-stack attributes";
+  else if (!AttributeFuncs::isZeroizeFlagsInlineCompatible(Caller, *Helper))
+    Reason = "incompatible zeroize-flags attributes";
+  if (!Reason)
+    return true;
+
+  Caller.getContext().emitError(
+      Twine("cannot inline async coroutine helper '") + Helper->getName() +
+      "': " + Reason);
+  return false;
+}
+
+static bool checkAsyncHelpersZeroizeAttributes(Function &F,
+                                               const coro::Shape &Shape) {
+  if (Shape.ABI != coro::ABI::Async)
+    return true;
+
+  // Async continuations inherit F's function attributes. Check mandatory
+  // inlining before splitting the function or creating musttail helper calls.
+  for (auto *Suspend : Shape.CoroSuspends) {
+    auto *AsyncSuspend = cast<CoroSuspendAsyncInst>(Suspend);
+    if (!checkAsyncHelperZeroizeAttributes(
+            F, AsyncSuspend->getAsyncContextProjectionFunction()))
+      return false;
+    if (!checkAsyncHelperZeroizeAttributes(
+            F, AsyncSuspend->getMustTailCallFunction()))
+      return false;
+  }
+  for (auto *End : Shape.CoroEnds) {
+    auto *AsyncEnd = dyn_cast<CoroAsyncEndInst>(End);
+    if (!AsyncEnd)
+      continue;
+    if (!checkAsyncHelperZeroizeAttributes(F,
+                                           AsyncEnd->getMustTailCallFunction()))
+      return false;
+  }
+  return true;
+}
+
 PreservedAnalyses CoroSplitPass::run(LazyCallGraph::SCC &C,
                                      CGSCCAnalysisManager &AM,
                                      LazyCallGraph &CG, CGSCCUpdateResult &UR) {
@@ -2353,6 +2399,8 @@ PreservedAnalyses CoroSplitPass::run(LazyCallGraph::SCC &C,
 
     coro::Shape Shape(F);
     if (!Shape.CoroBegin)
+      continue;
+    if (!checkAsyncHelpersZeroizeAttributes(F, Shape))
       continue;
 
     F.setSplittedCoroutine();
