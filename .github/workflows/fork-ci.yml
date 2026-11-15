@@ -30,12 +30,18 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: |
+            .ci
             cmake
             llvm
             mlir
             clang
             libc
             third-party
+
+      - name: Test the compatibility gate
+        run: |
+          set -euo pipefail
+          python3 .ci/check_zeroization_compatibility_test.py
 
       - name: Install build dependencies
         run: |
@@ -66,6 +72,16 @@ jobs:
             -DLLVM_PARALLEL_LINK_JOBS=1 \
             -DLLVM_LIT_ARGS="${LLVM_LIT_ARGS} --xunit-xml-output=${PWD}/build/test-results.xml" \
             2>&1 | tee artifacts/configure.log
+
+      - name: Check frozen register-zeroing compatibility
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel "$(nproc)" \
+            --target llvm-test-depends clang-test-depends \
+            2>&1 | tee artifacts/compatibility-build.log
+          python3 .ci/check_zeroization_compatibility.py \
+            --build-dir build --report artifacts/zeroization-compatibility.json \
+            2>&1 | tee artifacts/compatibility.log
 
       - name: Build and run full test suites
         run: |
