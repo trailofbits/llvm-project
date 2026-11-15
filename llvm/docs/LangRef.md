@@ -2720,6 +2720,16 @@ fn -> other_fn -> other_fn ; fn is norecurse
     diagnosed. Thumb-2 A/R targets require DSP instruction support. Flags
     clearing alone does not erase stack storage.
 
+    X86-64 LP64 ELF targets with LAHF/SAHF support clear the arithmetic condition
+    flags OF, SF, ZF, AF, PF, and CF. Control flags and floating-point
+    control/status registers are preserved. Ordinary C and fast-convention
+    returns are supported, including integer return values in RAX and RDX.
+    Exception handling, XRay instrumentation, return thunks, LVI return
+    hardening, and other exit protocols are unsupported. Ordinary tail-call
+    optimization is disabled;
+    mandatory tail calls are diagnosed. The sequence does not write stack
+    memory after stack clearing.
+
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
     returning, so that data the frame held is not left readable to whatever
@@ -2765,6 +2775,20 @@ fn -> other_fn -> other_fn ; fn is norecurse
     It also diagnoses insufficient scratch registers or live condition flags at a
     clearing exit. Ordinary tail-call optimization is disabled for these functions.
     Explicit condition-flag zeroization is not implemented by this stack clear.
+
+    X86-64 LP64 ELF targets support ordinary static frames, with or without a
+    frame pointer. Both modes clear the whole owned frame, including red-zone
+    storage, padding, saved-register slots, and reserved outgoing arguments;
+    the incoming return address and caller-owned arguments are excluded.
+    Saved registers are restored before their slots are erased, and storage is
+    released afterward. Dynamic or realigned frames, SafeStack, split stacks,
+    variadic functions, XRay instrumentation or events, flag intrinsics
+    requiring transient stack storage,
+    exceptional exits, return thunks, and LVI return hardening are unsupported.
+    Clearing loops require two dead caller-saved
+    registers and dead condition flags. Ordinary tail calls are disabled,
+    and mandatory tail calls are diagnosed. This stack clear alone does not
+    request final condition-flag clearing.
 
     Inlining is constrained accordingly. A function that carries this attribute
     is inlined only into a caller that carries it as well, and only where the
