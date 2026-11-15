@@ -776,8 +776,6 @@ void AArch64FrameLowering::resetCFIToInitialState(
 static MCRegister getRegisterOrZero(MCRegister Reg, bool HasSVE) {
   switch (Reg.id()) {
   default:
-    // The called routine is expected to preserve r19-r28
-    // r29 and r30 are used as frame pointer and link register resp.
     return 0;
 
     // GPRs
@@ -804,7 +802,21 @@ static MCRegister getRegisterOrZero(MCRegister Reg, bool HasSVE) {
   CASE(16);
   CASE(17);
   CASE(18);
+  CASE(19);
+  CASE(20);
+  CASE(21);
+  CASE(22);
+  CASE(23);
+  CASE(24);
+  CASE(25);
+  CASE(26);
+  CASE(27);
+  CASE(28);
 #undef CASE
+
+  // Some calling conventions leave W29 call-used even though FP is fixed.
+  case AArch64::W29:
+    return AArch64::FP;
 
     // FPRs
 #define CASE(n)                                                                \
@@ -852,8 +864,8 @@ static MCRegister getRegisterOrZero(MCRegister Reg, bool HasSVE) {
 
 bool AArch64FrameLowering::isZeroCallUsedRegsScratchReg(
     const MachineFunction &MF, MCRegister Reg) const {
-  // The emitter skips X19-X30 even for calling conventions that do not
-  // preserve them. Accept only full-width GPRs that it actually clears.
+  // The shared scratch validator checks the function's final CSR and live-out
+  // sets. The emitter can clear any selected full-width GPR except FP and LR.
   return AArch64::GPR64RegClass.contains(Reg) &&
          getRegisterOrZero(Reg, /*HasSVE=*/false) == Reg;
 }
@@ -872,43 +884,58 @@ bool AArch64FrameLowering::useFakeUseForZeroCallUsedRegs(
              AArch64PAuth::AuthCheckMethod::None;
 }
 
-void AArch64FrameLowering::emitZeroCallUsedRegs(
-    BitVector RegsToZero, MachineBasicBlock &MBB,
-    MachineBasicBlock::iterator MBBI, RegScavenger *) const {
-  // Fake a debug loc.
-  DebugLoc DL;
-  if (MBBI != MBB.end())
-    DL = MBBI->getDebugLoc();
+static MCRegister getPredicateToZero(MCRegister Reg,
+                                     const AArch64RegisterInfo &TRI) {
+  if (AArch64::PPRRegClass.contains(Reg))
+    return Reg;
+  if (AArch64::PNRRegClass.contains(Reg))
+    return TRI.getMatchingSuperReg(Reg, AArch64::psub, &AArch64::PPRRegClass);
+  return 0;
+}
 
-  const MachineFunction &MF = *MBB.getParent();
+static void collectZeroCallUsedRegs(const MachineFunction &MF,
+                                    const BitVector &RegsToZero,
+                                    BitVector &GPRsToZero,
+                                    BitVector &FPRsToZero,
+                                    BitVector &PredicatesToZero) {
   const AArch64Subtarget &STI = MF.getSubtarget<AArch64Subtarget>();
   const AArch64RegisterInfo &TRI = *STI.getRegisterInfo();
-
-  BitVector GPRsToZero(TRI.getNumRegs());
-  BitVector FPRsToZero(TRI.getNumRegs());
   bool HasSVE = STI.isSVEorStreamingSVEAvailable();
   // Without an FP unit (e.g. -mgeneral-regs-only) the FP/vector registers can't
   // hold a value and there is no instruction to clear them, so leave them out.
   bool HasFPR = STI.hasFPARMv8();
   for (MCRegister Reg : RegsToZero.set_bits()) {
-    if (TRI.isGeneralPurposeRegister(MF, Reg)) {
-      // For GPRs, we only care to clear out the 64-bit register.
-      if (MCRegister XReg = getRegisterOrZero(Reg, HasSVE))
-        GPRsToZero.set(XReg);
-    } else if (HasFPR && AArch64InstrInfo::isFpOrNEON(Reg)) {
-      // For FPRs,
-      if (MCRegister XReg = getRegisterOrZero(Reg, HasSVE))
-        FPRsToZero.set(XReg);
+    if (MCRegister FullReg = getRegisterOrZero(Reg, HasSVE)) {
+      if (TRI.isGeneralPurposeRegister(MF, Reg))
+        GPRsToZero.set(FullReg);
+      else if (HasFPR)
+        FPRsToZero.set(FullReg);
+    } else if (HasSVE) {
+      if (MCRegister PReg = getPredicateToZero(Reg, TRI))
+        PredicatesToZero.set(PReg);
     }
   }
+}
 
-  // Check widened writes for live upper fragments (e.g. W0_HI or Q0_HI)
-  // before emitting any clears.
+static LiveRegUnits
+getZeroCallUsedRegsExitUnits(const MachineBasicBlock &MBB,
+                             MachineBasicBlock::const_iterator MBBI,
+                             const AArch64RegisterInfo &TRI) {
   LiveRegUnits NeededAtExit(TRI);
   for (const MachineInstr &MI : make_range(MBBI, MBB.end()))
     for (const MachineOperand &MO : MI.operands())
       if (MO.isReg() && MO.getReg() && !(MO.isUse() && MO.isUndef()))
         NeededAtExit.addReg(MO.getReg());
+  return NeededAtExit;
+}
+
+static bool validateZeroCallUsedRegsWidening(
+    const BitVector &RegsToZero, const BitVector &FullRegsToZero,
+    const MachineBasicBlock &MBB, MachineBasicBlock::const_iterator MBBI) {
+  const MachineFunction &MF = *MBB.getParent();
+  const AArch64RegisterInfo &TRI =
+      *MF.getSubtarget<AArch64Subtarget>().getRegisterInfo();
+  LiveRegUnits NeededAtExit = getZeroCallUsedRegsExitUnits(MBB, MBBI, TRI);
   // Recheck only units added by widening.
   for (MCRegister Reg : RegsToZero.set_bits())
     NeededAtExit.removeReg(Reg);
@@ -919,8 +946,6 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
        MCPhysReg CSReg = *CSRegs; ++CSRegs)
     NeededAtExit.addReg(CSReg);
 
-  BitVector FullRegsToZero = GPRsToZero;
-  FullRegsToZero |= FPRsToZero;
   for (MCRegister Reg : FullRegsToZero.set_bits()) {
     if (!NeededAtExit.available(Reg)) {
       MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
@@ -928,11 +953,35 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
           Twine("\"zero-call-used-regs\" cannot clear register '") +
               TRI.getName(Reg) +
               "' without overwriting a value needed at the exit"});
-      return;
+      return false;
     }
   }
+  return true;
+}
 
+void AArch64FrameLowering::emitZeroCallUsedRegs(
+    BitVector RegsToZero, MachineBasicBlock &MBB,
+    MachineBasicBlock::iterator MBBI, RegScavenger *) const {
+  DebugLoc DL;
+  if (MBBI != MBB.end())
+    DL = MBBI->getDebugLoc();
+
+  const AArch64Subtarget &STI =
+      MBB.getParent()->getSubtarget<AArch64Subtarget>();
+  const AArch64RegisterInfo &TRI = *STI.getRegisterInfo();
   const AArch64InstrInfo &TII = *STI.getInstrInfo();
+  BitVector GPRsToZero(TRI.getNumRegs());
+  BitVector FPRsToZero(TRI.getNumRegs());
+  BitVector PredicatesToZero(TRI.getNumRegs());
+  collectZeroCallUsedRegs(*MBB.getParent(), RegsToZero, GPRsToZero, FPRsToZero,
+                          PredicatesToZero);
+
+  // Check widened writes for live fragments before emitting any clears.
+  BitVector FullRegsToZero = GPRsToZero;
+  FullRegsToZero |= FPRsToZero;
+  FullRegsToZero |= PredicatesToZero;
+  if (!validateZeroCallUsedRegsWidening(RegsToZero, FullRegsToZero, MBB, MBBI))
+    return;
 
   // Zero out GPRs.
   for (MCRegister Reg : GPRsToZero.set_bits())
@@ -942,16 +991,8 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
   for (MCRegister Reg : FPRsToZero.set_bits())
     TII.buildClearRegister(Reg, MBB, MBBI, DL);
 
-  if (HasSVE) {
-    for (MCRegister PReg :
-         {AArch64::P0, AArch64::P1, AArch64::P2, AArch64::P3, AArch64::P4,
-          AArch64::P5, AArch64::P6, AArch64::P7, AArch64::P8, AArch64::P9,
-          AArch64::P10, AArch64::P11, AArch64::P12, AArch64::P13, AArch64::P14,
-          AArch64::P15}) {
-      if (RegsToZero[PReg])
-        BuildMI(MBB, MBBI, DL, TII.get(AArch64::PFALSE), PReg);
-    }
-  }
+  for (MCRegister PReg : PredicatesToZero.set_bits())
+    BuildMI(MBB, MBBI, DL, TII.get(AArch64::PFALSE), PReg);
 }
 
 bool AArch64FrameLowering::windowsRequiresStackProbe(
