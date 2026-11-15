@@ -2675,6 +2675,22 @@ fn -> other_fn -> other_fn ; fn is norecurse
     a live `AL` return can coexist with clearing `AH` and the remaining upper
     bits of `RAX`.
 
+    On X86, vector selection follows the function's enabled target features:
+    SSE enables the 128-bit `XMM` width, AVX adds the 256-bit `YMM` width, and
+    AVX-512 adds the 512-bit `ZMM` width. Vector registers numbered 8 through 15
+    additionally require 64-bit mode, and registers 16 through 31 require both
+    64-bit mode and AVX-512. The exit exclusions above still apply. In particular,
+    `"all"` does not request every physical vector width present on the CPU.
+    Wider state written by a callee or inline assembly using additional features
+    is outside this selection; this attribute alone does not promise to erase
+    that state.
+
+    For X86, every selected register must be cleared across its full width or
+    diagnosed as unsupported. A write to an overlapping subregister is sufficient
+    only when the instruction also clears the remaining bits. On X86, a legacy
+    SSE `XMM` clear cannot satisfy an explicit `YMM` or `ZMM` request; such a
+    request is diagnosed if AVX is unavailable.
+
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
     returning, so that data the frame held is not left readable to whatever

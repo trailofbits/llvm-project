@@ -1,9 +1,11 @@
-; "all" requests every vector register through every class that holds it, so
-; XMM0 arrives alongside YMM0 and ZMM0. Each lane is cleared once, through its
-; XMM register: a VEX or EVEX encoded xor zeroes the bits above the lane, and
-; without AVX nothing can have written them.
+; "all" requests vector widths enabled by the function's target features.
+; AVX adds YMM aliases and AVX-512 adds ZMM aliases. Each lane is cleared once,
+; through its XMM register: a VEX or EVEX encoded xor zeroes the upper bits.
+; Legacy SSE clears only XMM, even if a callee could have written wider state.
 
 ; RUN: llc < %s -mtriple=x86_64-unknown-linux-gnu -mattr=+sse2 -verify-machineinstrs | FileCheck --check-prefix=SSE %s
+; RUN: llc < %s -mtriple=x86_64-unknown-linux-gnu -mattr=+amx-tile,-avx \
+; RUN:   -verify-machineinstrs | FileCheck --check-prefix=SSE %s
 ; RUN: llc < %s -mtriple=x86_64-unknown-linux-gnu -mattr=+avx -verify-machineinstrs | FileCheck --check-prefix=AVX %s
 ; RUN: llc < %s -mtriple=x86_64-unknown-linux-gnu -mattr=+avx512f -verify-machineinstrs | FileCheck --check-prefixes=AVX512,AVX512F %s
 ; RUN: llc < %s -mtriple=x86_64-unknown-linux-gnu -mattr=+avx512f,+avx512bw -verify-machineinstrs | FileCheck --check-prefixes=AVX512,AVX512BW %s

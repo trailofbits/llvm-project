@@ -10886,7 +10886,7 @@ void X86InstrInfo::buildClearRegister(Register Reg, MachineBasicBlock &MBB,
              X86::VR256XRegClass.contains(Reg) ||
              X86::VR512RegClass.contains(Reg)) {
     // XMM#, YMM#, ZMM#: clear the XMM lane. A VEX or EVEX encoded xor zeroes
-    // the bits above the lane, and without AVX nothing can have written them.
+    // the bits above the lane. The caller rejects wider requests without AVX.
     // XMM16-31 have only EVEX encodings; AVX512_128_SET0 picks one that the
     // subtarget has, with or without VLX.
     Register Lane = X86::VR128XRegClass.contains(Reg)
