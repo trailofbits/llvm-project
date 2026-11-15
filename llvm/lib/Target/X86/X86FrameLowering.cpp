@@ -19,6 +19,7 @@
 #include "X86Subtarget.h"
 #include "X86TargetMachine.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/CodeGen/CFIInstBuilder.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -27,6 +28,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
+#include "llvm/CodeGen/StackZeroization.h"
 #include "llvm/CodeGen/WinEHFuncInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DiagnosticInfo.h"
@@ -875,6 +877,419 @@ void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
                   "this subtarget has no instruction to clear");
   reportUncleared(MF, *TRI, NoSequence,
                   "this target does not know how to clear");
+}
+
+static bool isZeroizeReturn(const MachineInstr &MI) {
+  return MI.getOpcode() == X86::RET64 ||
+         (MI.getOpcode() == X86::RET && MI.getOperand(0).getImm() == 0);
+}
+
+static bool hasZeroizeABI(const MachineFunction &MF) {
+  const Function &F = MF.getFunction();
+  const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();
+  return ST.is64Bit() && !ST.isTarget64BitILP32() &&
+         MF.getTarget().getTargetTriple().isOSBinFormatELF() &&
+         (F.getCallingConv() == CallingConv::C ||
+          F.getCallingConv() == CallingConv::Fast);
+}
+
+static bool hasZeroizeReturnProtocol(const MachineFunction &MF) {
+  const Function &F = MF.getFunction();
+  return !F.hasPersonalityFn() &&
+         !F.hasFnAttribute(Attribute::FnRetThunkExtern) &&
+         !F.hasFnAttribute(Attribute::ShadowCallStack) &&
+         !MF.getSubtarget<X86Subtarget>().useLVIControlFlowIntegrity();
+}
+
+static bool mayInstrumentZeroizeExits(const Function &F) {
+  Attribute Instrument = F.getFnAttribute("function-instrument");
+  if (Instrument.isStringAttribute()) {
+    if (Instrument.getValueAsString() == "xray-never")
+      return false;
+    if (Instrument.getValueAsString() == "xray-always")
+      return true;
+  }
+  return F.hasFnAttribute("xray-instruction-threshold");
+}
+
+static bool hasZeroizeBlockExits(const MachineBasicBlock &MBB) {
+  if (MBB.isEHPad())
+    return false;
+  for (const MachineInstr &MI : MBB)
+    if (MI.isEHScopeReturn() ||
+        (MI.isReturn() && (!isZeroizeReturn(MI) || !MBB.succ_empty())))
+      return false;
+  return true;
+}
+
+static bool hasOrdinaryZeroizeExits(const MachineFunction &MF) {
+  return !mayInstrumentZeroizeExits(MF.getFunction()) && hasZeroizeABI(MF) &&
+         hasZeroizeReturnProtocol(MF) && llvm::all_of(MF, hasZeroizeBlockExits);
+}
+
+static void zeroizeLiveUnitsAt(LiveRegUnits &Live, const MachineBasicBlock &MBB,
+                               MachineBasicBlock::const_iterator InsertPt) {
+  Live.addLiveOuts(MBB);
+  for (const MachineInstr &MI : reverse(make_range(InsertPt, MBB.end())))
+    if (!MI.isDebugInstr())
+      Live.stepBackward(MI);
+}
+
+bool X86FrameLowering::supportsZeroizeFlags(const MachineFunction &MF) const {
+  return STI.canUseLAHFSAHF() && hasOrdinaryZeroizeExits(MF);
+}
+
+bool X86FrameLowering::prepareZeroizeFlags(MachineBasicBlock &MBB,
+                                           MachineBasicBlock::iterator InsertPt,
+                                           BitVector &ScratchRegs) const {
+  MachineFunction &MF = *MBB.getParent();
+  auto Fail = [&](StringRef Message) {
+    MF.getFunction().getContext().diagnose(
+        DiagnosticInfoUnsupported{MF.getFunction(), Message});
+    return false;
+  };
+  if (InsertPt == MBB.end() || !isZeroizeReturn(*InsertPt))
+    return Fail("X86 flags clearing requires an ordinary return");
+  if (MF.getRegInfo().isReserved(X86::RAX))
+    return Fail("X86 flags clearing needs an unreserved RAX register");
+  LiveRegUnits Live(*TRI);
+  zeroizeLiveUnitsAt(Live, MBB, InsertPt);
+  if (!Live.available(X86::EFLAGS))
+    return Fail("X86 flags clearing would overwrite live condition flags");
+  for (MCRegister Reg : {X86::RAX, X86::R11, X86::R10, X86::R9, X86::R8,
+                         X86::RCX, X86::RDX, X86::RSI, X86::RDI})
+    if (!MF.getRegInfo().isReserved(Reg) && Live.available(Reg)) {
+      ScratchRegs.set(Reg);
+      return true;
+    }
+  return Fail("X86 flags clearing needs a free caller-saved register");
+}
+
+void X86FrameLowering::emitZeroizeFlags(MachineBasicBlock &MBB,
+                                        MachineBasicBlock::iterator InsertPt,
+                                        const BitVector &ScratchRegs,
+                                        BitVector &ClearedRegs) const {
+  assert(ScratchRegs.count() == 1 && "expected one planned zero source");
+  MCRegister Zero = ScratchRegs.find_first();
+  DebugLoc DL = InsertPt->getDebugLoc();
+  auto Exchange = [&] {
+    BuildMI(MBB, InsertPt, DL, TII.get(X86::XCHG64rr), X86::RAX)
+        .addReg(Zero, RegState::Define)
+        .addReg(X86::RAX)
+        .addReg(Zero)
+        .setMIFlag(MachineInstr::FrameDestroy);
+  };
+  // Preserve a live RAX return in the zero scratch register, without touching
+  // the already-cleared stack. The second exchange leaves the scratch zero.
+  if (Zero != X86::RAX)
+    Exchange();
+  auto Test = BuildMI(MBB, InsertPt, DL, TII.get(X86::TEST32rr))
+                  .addReg(X86::EAX)
+                  .addReg(X86::EAX)
+                  .addReg(X86::RSP, RegState::Implicit)
+                  .setMIFlag(MachineInstr::FrameDestroy);
+  for (MCRegister Reg : ClearedRegs.set_bits())
+    if (Reg != X86::EFLAGS && Reg != X86::RSP &&
+        !TRI->regsOverlap(Reg, X86::RAX))
+      Test.addReg(Reg, RegState::Implicit);
+  // TEST clears OF. SAHF clears SF/ZF/AF/PF/CF from zero AH, preserving OF
+  // and all control bits. Model the preserved OF as an EFLAGS use. FrameDestroy
+  // makes these epilogue instructions scheduling boundaries on X86.
+  BuildMI(MBB, InsertPt, DL, TII.get(X86::SAHF))
+      .addReg(X86::EFLAGS, RegState::Implicit)
+      .setMIFlag(MachineInstr::FrameDestroy);
+  if (Zero != X86::RAX)
+    Exchange();
+  ClearedRegs.set(X86::EFLAGS);
+}
+
+static bool hasZeroizeFrameObjects(const MachineFrameInfo &MFI) {
+  for (const CalleeSavedInfo &CSI : MFI.getCalleeSavedInfo())
+    if (CSI.isSpilledToReg() || !X86::GR64RegClass.contains(CSI.getReg()))
+      return false;
+  for (int FI = MFI.getObjectIndexBegin(), E = MFI.getObjectIndexEnd(); FI != E;
+       ++FI)
+    if (!MFI.isDeadObjectIndex(FI) &&
+        MFI.getStackID(FI) != TargetStackID::Default)
+      return false;
+  return true;
+}
+
+static bool hasZeroizeStackProtocol(const MachineFunction &MF) {
+  const Function &F = MF.getFunction();
+  const X86MachineFunctionInfo &X86FI = *MF.getInfo<X86MachineFunctionInfo>();
+  return !MF.shouldSplitStack() && !F.isVarArg() &&
+         !F.hasFnAttribute(Attribute::SafeStack) &&
+         !X86FI.hasSwiftAsyncContext() && !X86FI.getTCReturnAddrDelta() &&
+         !X86FI.getRestoreBasePointer();
+}
+
+static bool hasZeroizeStackLayout(const MachineFunction &MF) {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const X86RegisterInfo *TRI =
+      MF.getSubtarget<X86Subtarget>().getRegisterInfo();
+  return !MFI.hasVarSizedObjects() && !MFI.hasCopyImplyingStackAdjustment() &&
+         !MFI.hasOpaqueSPAdjustment() && !TRI->hasStackRealignment(MF) &&
+         !TRI->hasBasePointer(MF);
+}
+
+static bool hasZeroizeStackInstructions(const MachineFunction &MF) {
+  for (const MachineBasicBlock &MBB : MF)
+    for (const MachineInstr &MI : MBB)
+      if (MI.getOpcode() == TargetOpcode::PATCHABLE_EVENT_CALL ||
+          MI.getOpcode() == TargetOpcode::PATCHABLE_TYPED_EVENT_CALL)
+        return false;
+  return true;
+}
+
+bool X86FrameLowering::supportsZeroizeStack(const MachineFunction &MF) const {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  return hasZeroizeStackLayout(MF) && hasReservedCallFrame(MF) &&
+         hasOrdinaryZeroizeExits(MF) && hasZeroizeStackProtocol(MF) &&
+         hasZeroizeFrameObjects(MFI) && hasZeroizeStackInstructions(MF);
+}
+
+static unsigned getZeroizeStoreOpcode(unsigned Size) {
+  switch (Size) {
+  case 1:
+    return X86::MOV8mi;
+  case 2:
+    return X86::MOV16mi;
+  case 4:
+    return X86::MOV32mi;
+  case 8:
+    return X86::MOV64mi32;
+  }
+  llvm_unreachable("unexpected stack clear store size");
+}
+
+static void emitZeroizeStore(MachineBasicBlock &MBB,
+                             MachineBasicBlock::iterator InsertPt,
+                             MCRegister Base, int64_t Offset,
+                             unsigned Size = 8) {
+  MachineFunction &MF = *MBB.getParent();
+  const X86InstrInfo &TII = *MF.getSubtarget<X86Subtarget>().getInstrInfo();
+  // Entry RSP is eight-byte aligned. Loop pointers start at entry RSP - Size
+  // and advance by eight; other stores use an offset from the allocated RSP.
+  uint64_t AlignmentOffset =
+      Base == X86::RSP
+          ? uint64_t(Offset) - MF.getFrameInfo().getStackSize()
+          : MF.getInfo<X86MachineFunctionInfo>()->getZeroizeStackSize();
+  addRegOffset(BuildMI(MBB, InsertPt, MBB.findDebugLoc(InsertPt),
+                       TII.get(getZeroizeStoreOpcode(Size))),
+               Base, false, Offset)
+      .addImm(0)
+      .addMemOperand(MF.getMachineMemOperand(
+          MachinePointerInfo(),
+          MachineMemOperand::MOStore | MachineMemOperand::MOVolatile, Size,
+          commonAlignment(Align(8), AlignmentOffset)));
+}
+
+static void emitZeroizeImmediateStores(MachineBasicBlock &MBB,
+                                       MachineBasicBlock::iterator InsertPt,
+                                       int64_t Offset, uint64_t Size) {
+  for (unsigned Width : {8, 4, 2, 1})
+    while (Size >= Width) {
+      emitZeroizeStore(MBB, InsertPt, X86::RSP, Offset, Width);
+      Offset += Width;
+      Size -= Width;
+    }
+}
+
+static void restoreBeforeZeroize(MachineBasicBlock &MBB,
+                                 MachineBasicBlock::iterator InsertPt) {
+  MachineFunction &MF = *MBB.getParent();
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();
+  const X86InstrInfo &TII = *ST.getInstrInfo();
+  DebugLoc DL = InsertPt->getDebugLoc();
+  bool HasCFI = MF.needsFrameMoves();
+  if (HasCFI && ST.getFrameLowering()->hasFP(MF))
+    CFIInstBuilder(MBB, InsertPt, MachineInstr::FrameDestroy)
+        .buildDefCFA(X86::RSP, MFI.getStackSize() + 8);
+  auto Restore = [&](MCRegister Reg, int64_t Offset) {
+    addRegOffset(BuildMI(MBB, InsertPt, DL, TII.get(X86::MOV64rm), Reg),
+                 X86::RSP, false, Offset)
+        .setMIFlag(MachineInstr::FrameDestroy)
+        .addMemOperand(MF.getMachineMemOperand(
+            MachinePointerInfo(), MachineMemOperand::MOLoad, 8, Align(8)));
+    if (HasCFI)
+      CFIInstBuilder(MBB, InsertPt, MachineInstr::FrameDestroy)
+          .buildRestore(Reg);
+  };
+  for (const CalleeSavedInfo &CSI : MFI.getCalleeSavedInfo())
+    Restore(CSI.getReg(),
+            MFI.getStackSize() + 8 + MFI.getObjectOffset(CSI.getFrameIdx()));
+  // The frame pointer is saved separately from the callee-saved list.
+  if (ST.getFrameLowering()->hasFP(MF))
+    Restore(X86::RBP, MFI.getStackSize() - 8);
+}
+
+static MachineBasicBlock *emitZeroizeLoop(MachineBasicBlock &MBB,
+                                          MachineBasicBlock::iterator InsertPt,
+                                          MCRegister Ptr, MCRegister Count) {
+  MachineFunction &MF = *MBB.getParent();
+  const X86InstrInfo &TII = *MF.getSubtarget<X86Subtarget>().getInstrInfo();
+  DebugLoc DL = InsertPt->getDebugLoc();
+  auto *Body = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
+  auto *Tail = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
+  MF.insert(std::next(MBB.getIterator()), Body);
+  MF.insert(std::next(Body->getIterator()), Tail);
+  Tail->splice(Tail->end(), &MBB, InsertPt, MBB.end());
+  Tail->transferSuccessorsAndUpdatePHIs(&MBB);
+  MBB.addSuccessor(Body);
+  Body->addSuccessor(Body);
+  Body->addSuccessor(Tail);
+  emitZeroizeStore(*Body, Body->end(), Ptr, 0);
+  BuildMI(*Body, Body->end(), DL, TII.get(X86::ADD64ri8), Ptr)
+      .addReg(Ptr)
+      .addImm(8);
+  BuildMI(*Body, Body->end(), DL, TII.get(X86::SUB64ri8), Count)
+      .addReg(Count)
+      .addImm(8);
+  BuildMI(*Body, Body->end(), DL, TII.get(X86::JCC_1))
+      .addMBB(Body)
+      .addImm(X86::COND_NE);
+  return Tail;
+}
+
+static Error validateZeroizeFrameSize(const MachineFunction &MF) {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const X86MachineFunctionInfo &X86FI = *MF.getInfo<X86MachineFunctionInfo>();
+  uint64_t Size = X86FI.getZeroizeStackSize();
+  uint64_t Allocated = MFI.getStackSize();
+  if (Size > INT32_MAX || Allocated > Size)
+    return createStringError(
+        "X86 stack clearing requires a bounded static frame");
+  if (Size - Allocated > 128 || (Size != Allocated && !X86FI.getUsesRedZone()))
+    return createStringError(
+        "X86 stack clearing cannot establish frame ownership");
+  return Error::success();
+}
+
+static Expected<StackZeroizeExtent>
+getX86ZeroizeExtent(const MachineFunction &MF) {
+  if (Error Err = validateZeroizeFrameSize(MF))
+    return std::move(Err);
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  uint64_t Size = MF.getInfo<X86MachineFunctionInfo>()->getZeroizeStackSize();
+  SmallVector<StackZeroizeRange, 8> Required;
+  for (int FI = MFI.getObjectIndexBegin(), E = MFI.getObjectIndexEnd(); FI != E;
+       ++FI) {
+    if (MFI.isDeadObjectIndex(FI))
+      continue;
+    // In this ABI the fixed return-address slot and incoming arguments are
+    // caller-owned. All other finalized objects, including saves, are required.
+    if (MFI.isFixedObjectIndex(FI) && MFI.getObjectOffset(FI) >= -8)
+      continue;
+    Required.push_back({MFI.getStackID(FI), MFI.getObjectOffset(FI) + 8,
+                        uint64_t(MFI.getObjectSize(FI)),
+                        MFI.getObjectAlign(FI)});
+  }
+  StackZeroizeRange Owned{TargetStackID::Default, -int64_t(Size), Size,
+                          commonAlignment(Align(8), Size)};
+  return computeStackZeroizeExtent(Owned, Required);
+}
+
+static Expected<SmallVector<MCRegister, 2>>
+getZeroizeLoopScratch(const MachineBasicBlock &MBB,
+                      MachineBasicBlock::const_iterator InsertPt) {
+  const MachineFunction &MF = *MBB.getParent();
+  LiveRegUnits Live(*MF.getSubtarget().getRegisterInfo());
+  zeroizeLiveUnitsAt(Live, MBB, InsertPt);
+  if (!Live.available(X86::EFLAGS))
+    return createStringError(
+        "X86 stack clearing needs dead condition flags for its loop");
+  SmallVector<MCRegister, 2> Work;
+  for (MCRegister Reg : {X86::R11, X86::R10, X86::R9, X86::R8, X86::RCX,
+                         X86::RDX, X86::RSI, X86::RDI, X86::RAX})
+    if (!MF.getRegInfo().isReserved(Reg) && Live.available(Reg)) {
+      Work.push_back(Reg);
+      if (Work.size() == 2)
+        return Work;
+    }
+  return createStringError(
+      "X86 stack clearing needs two free caller-saved registers");
+}
+
+static MachineBasicBlock *
+emitZeroizeStores(MachineBasicBlock &MBB, MachineBasicBlock::iterator InsertPt,
+                  uint64_t Size, ArrayRef<MCRegister> Work,
+                  BitVector &ScratchRegs) {
+  MachineFunction &MF = *MBB.getParent();
+  const X86InstrInfo &TII = *MF.getSubtarget<X86Subtarget>().getInstrInfo();
+  int64_t Start = int64_t(MF.getFrameInfo().getStackSize()) - int64_t(Size);
+  if (Size <= 64) {
+    emitZeroizeImmediateStores(MBB, InsertPt, Start, Size);
+    return &MBB;
+  }
+  DebugLoc DL = InsertPt->getDebugLoc();
+  addRegOffset(BuildMI(MBB, InsertPt, DL, TII.get(X86::LEA64r), Work[0]),
+               X86::RSP, false, Start);
+  uint64_t LoopSize = alignDown(Size, 8);
+  BuildMI(MBB, InsertPt, DL, TII.get(X86::MOV64ri32), Work[1]).addImm(LoopSize);
+  for (MCRegister Reg : Work)
+    ScratchRegs.set(Reg);
+  MachineBasicBlock *Tail = emitZeroizeLoop(MBB, InsertPt, Work[0], Work[1]);
+  emitZeroizeImmediateStores(*Tail, InsertPt, Start + LoopSize,
+                             Size - LoopSize);
+  return Tail;
+}
+
+static void releaseZeroizedFrame(MachineBasicBlock &MBB,
+                                 MachineBasicBlock::iterator InsertPt) {
+  MachineFunction &MF = *MBB.getParent();
+  uint64_t Allocated = MF.getFrameInfo().getStackSize();
+  if (!Allocated)
+    return;
+  const X86InstrInfo &TII = *MF.getSubtarget<X86Subtarget>().getInstrInfo();
+  addRegOffset(BuildMI(MBB, InsertPt, InsertPt->getDebugLoc(),
+                       TII.get(X86::LEA64r), X86::RSP),
+               X86::RSP, false, Allocated)
+      .setMIFlag(MachineInstr::FrameDestroy);
+  if (MF.needsFrameMoves())
+    CFIInstBuilder(MBB, InsertPt, MachineInstr::FrameDestroy)
+        .buildDefCFA(X86::RSP, 8);
+}
+
+void X86FrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
+                                        MachineBasicBlock::iterator InsertPt,
+                                        BitVector &ScratchRegs) const {
+  MachineFunction &MF = *MBB.getParent();
+  auto Fail = [&](StringRef Message) {
+    MF.getFunction().getContext().diagnose(
+        DiagnosticInfoUnsupported{MF.getFunction(), Message});
+  };
+  if (InsertPt == MBB.end() || !isZeroizeReturn(*InsertPt)) {
+    Fail("X86 stack clearing requires an ordinary return");
+    return;
+  }
+  auto Extent = getX86ZeroizeExtent(MF);
+  if (!Extent) {
+    Fail(toString(Extent.takeError()));
+    return;
+  }
+  uint64_t Size = Extent->Ranges.empty() ? 0 : Extent->Ranges.front().Size;
+  SmallVector<MCRegister, 2> Work;
+  if (Size > 64) {
+    auto LoopScratch = getZeroizeLoopScratch(MBB, InsertPt);
+    if (!LoopScratch) {
+      Fail(toString(LoopScratch.takeError()));
+      return;
+    }
+    Work = std::move(*LoopScratch);
+  }
+  restoreBeforeZeroize(MBB, InsertPt);
+  MachineBasicBlock *Tail =
+      emitZeroizeStores(MBB, InsertPt, Size, Work, ScratchRegs);
+  if (Tail == &MBB) {
+    releaseZeroizedFrame(MBB, InsertPt);
+    return;
+  }
+  releaseZeroizedFrame(*Tail, InsertPt);
+  MachineBasicBlock *Body = Tail->getSinglePredecessor();
+  assert(Body && "expected a single zeroization loop predecessor");
+  fullyRecomputeLiveIns({Tail, Body});
 }
 
 void X86FrameLowering::emitStackProbe(
@@ -1836,6 +2251,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
   uint64_t MaxAlign = calculateMaxStackAlign(MF); // Desired stack alignment.
   uint64_t StackSize = MFI.getStackSize(); // Number of bytes to allocate.
+  if (Fn.hasZeroizeStack() && supportsZeroizeStack(MF))
+    X86FI->setZeroizeStackSize(StackSize);
   bool IsFunclet = MBB.isEHFuncletEntry();
   EHPersonality Personality = EHPersonality::Unknown;
   if (Fn.hasPersonalityFn())
@@ -2734,6 +3151,8 @@ static bool isTailCallOpcode(unsigned Opc) {
 
 void X86FrameLowering::emitEpilogue(MachineFunction &MF,
                                     MachineBasicBlock &MBB) const {
+  if (MF.getFunction().hasZeroizeStack() && supportsZeroizeStack(MF))
+    return;
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
   MachineBasicBlock::iterator Terminator = MBB.getFirstTerminator();
@@ -3510,6 +3929,9 @@ void X86FrameLowering::emitCatchRetReturnValue(MachineBasicBlock &MBB,
 bool X86FrameLowering::restoreCalleeSavedRegisters(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
     MutableArrayRef<CalleeSavedInfo> CSI, const TargetRegisterInfo *TRI) const {
+  if (MBB.getParent()->getFunction().hasZeroizeStack() &&
+      supportsZeroizeStack(*MBB.getParent()))
+    return true;
   if (CSI.empty())
     return false;
 
@@ -4348,6 +4770,8 @@ bool X86FrameLowering::canUseAsEpilogue(const MachineBasicBlock &MBB) const {
 }
 
 bool X86FrameLowering::enableShrinkWrapping(const MachineFunction &MF) const {
+  if (MF.getFunction().hasZeroizeStack())
+    return false;
   // If we may need to emit frameless compact unwind information, give
   // up as this is currently broken: PR25614.
   bool CompactUnwind =
@@ -4608,6 +5032,12 @@ X86FrameLowering::getWinEHParentFrameOffset(const MachineFunction &MF) const {
 
 void X86FrameLowering::processFunctionBeforeFrameFinalized(
     MachineFunction &MF, RegScavenger *RS) const {
+  if (MF.getFunction().hasZeroizeStack() &&
+      !MF.getFunction().hasFnAttribute(Attribute::Naked) &&
+      !supportsZeroizeStack(MF))
+    MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+        MF.getFunction(), "X86 stack clearing does not support this frame, "
+                          "calling convention, or exit"});
   // Mark the function as not having WinCFI. We will set it back to true in
   // emitPrologue if it gets called and emits CFI.
   MF.setHasWinCFI(false);

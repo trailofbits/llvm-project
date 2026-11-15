@@ -2161,6 +2161,14 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   // address or swapping byval arguments. We treat some musttail calls as
   // sibling calls to avoid unnecessary argument copies.
   bool IsMustTail = CLI.CB && CLI.CB->isMustTailCall();
+  if (MF.getFunction().hasZeroizeStack() ||
+      MF.getFunction().hasFnAttribute("zeroize-flags")) {
+    if (IsMustTail)
+      errorUnsupported(DAG, dl,
+                       "X86 stack or flags clearing does not support musttail");
+    isTailCall = false;
+    IsMustTail = false;
+  }
   bool IsSibcall = false;
   if (isTailCall) {
     IsSibcall = isEligibleForSiblingCallOpt(CLI, CCInfo, ArgLocs);

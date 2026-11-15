@@ -8,10 +8,6 @@
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu %s -o - 2>/dev/null | FileCheck %s
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu -pei-print-clearing-sequence %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=EXITS
 
-; Every "zeroize-stack" function below also reports that no target clears the
-; frame yet. Those reports are warnings, so llc succeeds; they are what
-; zeroize-stack-unsupported.ll is about and are not matched here.
-
 declare i32 @callee(i32)
 
 ; The call is marked `tail` and is in tail position, so it would be turned into
@@ -76,8 +72,8 @@ plain:
 ; computed for a return. The two mechanisms do not overlap for a protected
 ; function, because it no longer has the exit the tail-call case was about.
 ; EXITS-LABEL: clearing sequence for function 'regs_protected':
-; EXITS-NEXT:  %bb.1 return: clear-stack=unsupported clear-registers=emitted clear-flags=not-requested
-; EXITS-NEXT:  %bb.2 return: clear-stack=unsupported clear-registers=emitted clear-flags=not-requested
+; EXITS-NEXT:  %bb.1 return: clear-stack=emitted clear-registers=emitted clear-flags=not-requested
+; EXITS-NEXT:  %bb.2 return: clear-stack=emitted clear-registers=emitted clear-flags=not-requested
 define i32 @regs_protected(i1 %c, i32 %a, i32 %b) "zero-call-used-regs"="used-gpr" "zeroize-stack"="used" {
 entry:
   br i1 %c, label %tail, label %plain

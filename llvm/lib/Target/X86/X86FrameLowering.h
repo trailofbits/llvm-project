@@ -293,6 +293,19 @@ private:
                             MachineBasicBlock::iterator MBBI,
                             RegScavenger *RS) const override;
 
+  bool supportsZeroizeStack(const MachineFunction &MF) const override;
+  void emitZeroizeStack(MachineBasicBlock &MBB,
+                        MachineBasicBlock::iterator InsertPt,
+                        BitVector &ScratchRegs) const override;
+  bool supportsZeroizeFlags(const MachineFunction &MF) const override;
+  bool prepareZeroizeFlags(MachineBasicBlock &MBB,
+                           MachineBasicBlock::iterator InsertPt,
+                           BitVector &ScratchRegs) const override;
+  void emitZeroizeFlags(MachineBasicBlock &MBB,
+                        MachineBasicBlock::iterator InsertPt,
+                        const BitVector &ScratchRegs,
+                        BitVector &ClearedRegs) const override;
+
   void adjustFrameForMsvcCxxEh(MachineFunction &MF) const;
 
   /// Aligns the stack pointer by ANDing it with -MaxAlign.

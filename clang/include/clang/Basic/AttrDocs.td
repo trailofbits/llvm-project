@@ -8836,18 +8836,20 @@ The register request overrides both ``-fzero-call-used-regs`` and an explicit
 ``zero_call_used_regs`` attribute on the same function, including ``"skip"``.
 An explicitly annotated ``main`` also retains all three requests.
 
-**Current implementation limits.** ARM32 supports stack and condition-state
-clearing for supported static frames and ordinary return protocols. Other
-targets and unsupported ARM32 configurations are diagnosed; see the LLVM IR
+**Current implementation limits.** ARM32 and X86-64 LP64 ELF support stack and
+condition-state clearing for supported static frames and ordinary return
+protocols. X86 condition-state clearing requires SAHF support. Other targets
+and unsupported configurations are diagnosed; see the LLVM IR
 ``zeroize-stack`` and ``zeroize-flags`` documentation for the target limits.
 Register clearing uses the target implementation of ``zero_call_used_regs("all")``.
 Return-value registers and registers preserved by the calling convention are
 excluded. Floating-point control/status registers are not cleared by the flags
 request.
 
-Unsupported stack requests produce a backend warning, which ``-Werror`` can
-promote to an error. Unsupported register or flags requests produce a backend
-error. Compilation is therefore not guaranteed to succeed on an
+Unsupported stack capabilities produce a backend warning, which ``-Werror`` can
+promote to an error; targets can also reject unsupported frame layouts or exit
+protocols with an error. Unsupported register or flags requests produce a
+backend error. Compilation is therefore not guaranteed to succeed on an
 unsupported target. The attribute cannot be combined with ``naked`` because a
 naked function has no compiler-generated epilogue in which to clear anything.
 

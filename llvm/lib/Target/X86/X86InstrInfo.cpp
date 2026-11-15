@@ -6178,10 +6178,11 @@ static bool ExpandMOVImmSExti8(MachineInstrBuilder &MIB,
     assert(MIB->getOpcode() == X86::MOV64ImmSExti8 ||
            MIB->getOpcode() == X86::MOV32ImmSExti8);
 
-    // Can't use push/pop lowering if the function might write to the red zone.
+    // Keep transient push/pop storage out of the red zone and protected frames.
     X86MachineFunctionInfo *X86FI =
         MBB.getParent()->getInfo<X86MachineFunctionInfo>();
-    if (X86FI->getUsesRedZone()) {
+    if (X86FI->getUsesRedZone() ||
+        MBB.getParent()->getFunction().hasZeroizeStack()) {
       MIB->setDesc(TII.get(MIB->getOpcode() == X86::MOV32ImmSExti8
                                ? X86::MOV32ri
                                : X86::MOV64ri));
@@ -10765,6 +10766,11 @@ X86InstrInfo::getOutliningCandidateInfo(
 bool X86InstrInfo::isFunctionSafeToOutlineFrom(
     MachineFunction &MF, bool OutlineFromLinkOnceODRs) const {
   const Function &F = MF.getFunction();
+
+  // An outlined call could write a return address into an already-cleared
+  // frame after the epilogue released it.
+  if (F.hasZeroizeStack())
+    return false;
 
   // Does the function use a red zone? If it does, then we can't risk messing
   // with the stack.
