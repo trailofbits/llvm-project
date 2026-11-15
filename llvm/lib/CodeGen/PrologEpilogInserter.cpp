@@ -1663,10 +1663,7 @@ void PEIImpl::emitClearingStep(ClearingStep Step, const ExitClearingPlan &Plan,
             MO.getReg().isPhysical() && !MO.isUndef())
           ClearedRegs.set(MO.getReg());
     TFI.emitZeroizeFlags(MBB, InsertPt, FlagsScratchRegs, ClearedRegs);
-    for (MCRegister Reg : ClearedRegs.set_bits())
-      if (!ExitMI.readsRegister(Reg, &TRI))
-        ExitMI.addOperand(MF, MachineOperand::CreateReg(Reg, /*isDef=*/false,
-                                                        /*isImp=*/true));
+    retainClearingState(ClearedRegs, InsertPt, ExitMI);
     break;
   }
   }
