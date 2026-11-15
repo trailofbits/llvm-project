@@ -17,6 +17,7 @@
 #include "X86InstrInfo.h"
 #include "X86RegisterInfo.h"
 #include "X86Subtarget.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
@@ -27,6 +28,8 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrAnalysis.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
@@ -57,6 +60,7 @@ protected:
   const X86Subtarget *STI = nullptr;
   const X86RegisterInfo *TRI = nullptr;
   const X86InstrInfo *TII = nullptr;
+  std::unique_ptr<MCInstrAnalysis> MIA;
   std::string Diagnostics;
   unsigned Errors = 0;
 
@@ -88,6 +92,8 @@ protected:
     STI = &MF->getSubtarget<X86Subtarget>();
     TRI = STI->getRegisterInfo();
     TII = STI->getInstrInfo();
+    MIA.reset(T->createMCInstrAnalysis(TII));
+    ASSERT_NE(MIA, nullptr);
     Context.setDiagnosticHandlerCallBack(
         [](const DiagnosticInfo *DI, void *Opaque) {
           auto &Self = *static_cast<X86RegisterClearingTest *>(Opaque);
@@ -152,13 +158,36 @@ protected:
         MBB, [&](const MachineInstr &MI) { return MI.getOpcode() == Opcode; });
   }
 
-  /// Whether an emitted instruction writes \p Reg or a register overlapping
-  /// it. The x87 fill has no register operands and is checked by count.
-  bool cleared(const MachineBasicBlock &MBB, MCRegister Reg) {
-    for (const MachineInstr &MI : MBB) {
+  bool clearsSuperRegister(const MachineInstr &MI, MCRegister Reg) {
+    const MCInstrDesc &Desc = MI.getDesc();
+    unsigned NumDefs = Desc.getNumDefs();
+    if (NumDefs == 0)
+      return false;
+    MCInst Inst;
+    Inst.setOpcode(MI.getOpcode());
+    for (unsigned I = 0; I != NumDefs; ++I)
+      Inst.addOperand(MCOperand::createReg(MI.getOperand(I).getReg()));
+    APInt Mask(NumDefs + Desc.implicit_defs().size(), 0);
+    MIA->clearsSuperRegisters(*TRI, Inst, Mask);
+    for (unsigned I = 0; I != NumDefs; ++I)
+      if (Mask[I] && TRI->isSuperRegister(MI.getOperand(I).getReg(), Reg))
+        return true;
+    return false;
+  }
+
+  /// Whether the emitted clears write all of \p Reg, including architectural
+  /// zero extension. The x87 fill has no register operands and is checked by
+  /// count. An overlapping partial write does not discharge a wider request.
+  bool cleared(MachineBasicBlock &MBB, MCRegister Reg) {
+    for (MachineInstr &MI : MBB) {
       if (MI.isTerminator() || MI.getOpcode() == X86::MMX_EMMS)
         continue;
-      if (MI.modifiesRegister(Reg, TRI))
+      // V_SET0 expands to legacy SSE or VEX according to the subtarget. Only
+      // the latter clears the upper lanes; inspect the actual encoding.
+      if (MI.getOpcode() == X86::V_SET0 ||
+          MI.getOpcode() == X86::AVX512_128_SET0)
+        TII->expandPostRAPseudo(MI);
+      if (MI.definesRegister(Reg, TRI) || clearsSuperRegister(MI, Reg))
         return true;
     }
     return false;
@@ -178,6 +207,57 @@ protected:
     return STI->hasX87() && !STI->useSoftFloat() && STI->hasMMX();
   }
 };
+
+TEST_P(X86RegisterClearingTest, PartialWritesDoNotClearWholeRegisters) {
+  auto &MBB = addExit();
+  BuildMI(MBB, MBB.getFirstTerminator(), DebugLoc(), TII->get(X86::MOV8ri),
+          X86::AL)
+      .addImm(0);
+  EXPECT_TRUE(cleared(MBB, X86::AL));
+  EXPECT_FALSE(cleared(MBB, X86::AH));
+  EXPECT_FALSE(cleared(MBB, X86::AX));
+  EXPECT_FALSE(cleared(MBB, X86::EAX));
+  if (STI->is64Bit())
+    EXPECT_FALSE(cleared(MBB, X86::RAX));
+
+  if (!STI->hasSSE1())
+    return;
+  BuildMI(MBB, MBB.getFirstTerminator(), DebugLoc(), TII->get(X86::XORPSrr),
+          X86::XMM0)
+      .addReg(X86::XMM0, RegState::Undef)
+      .addReg(X86::XMM0, RegState::Undef);
+  EXPECT_TRUE(cleared(MBB, X86::XMM0));
+  EXPECT_FALSE(cleared(MBB, X86::YMM0));
+  EXPECT_FALSE(cleared(MBB, X86::ZMM0));
+}
+
+TEST_P(X86RegisterClearingTest,
+       ArchitecturalZeroExtensionCoversSuperRegisters) {
+  auto &MBB = addExit();
+  BuildMI(MBB, MBB.getFirstTerminator(), DebugLoc(), TII->get(X86::XOR32rr),
+          X86::EAX)
+      .addReg(X86::EAX, RegState::Undef)
+      .addReg(X86::EAX, RegState::Undef);
+  EXPECT_TRUE(cleared(MBB, X86::EAX));
+  if (STI->is64Bit())
+    EXPECT_TRUE(cleared(MBB, X86::RAX));
+
+  if (!STI->hasSSE1())
+    return;
+  BuildMI(MBB, MBB.getFirstTerminator(), DebugLoc(), TII->get(X86::V_SET0),
+          X86::XMM0);
+  EXPECT_TRUE(cleared(MBB, X86::XMM0));
+  EXPECT_EQ(cleared(MBB, X86::YMM0), STI->hasAVX());
+  EXPECT_EQ(cleared(MBB, X86::ZMM0), STI->hasAVX());
+
+  if (!STI->hasAVX512() || !STI->is64Bit())
+    return;
+  BuildMI(MBB, MBB.getFirstTerminator(), DebugLoc(),
+          TII->get(X86::AVX512_128_SET0), X86::XMM16);
+  EXPECT_TRUE(cleared(MBB, X86::XMM16));
+  EXPECT_TRUE(cleared(MBB, X86::YMM16));
+  EXPECT_TRUE(cleared(MBB, X86::ZMM16));
+}
 
 TEST_P(X86RegisterClearingTest, EveryRequestedRegisterClearedOrReported) {
   auto &MBB = addExit();
@@ -207,6 +287,44 @@ TEST_P(X86RegisterClearingTest, EveryRequestedRegisterClearedOrReported) {
   } else {
     EXPECT_EQ(Errors, 0u) << Diagnostics;
   }
+}
+
+TEST_P(X86RegisterClearingTest, RequestedVectorWidthsFollowFunctionFeatures) {
+  BitVector Set = requestedSet();
+  EXPECT_EQ(Set.test(X86::XMM0), STI->hasSSE1());
+  EXPECT_EQ(Set.test(X86::YMM0), STI->hasAVX());
+  EXPECT_EQ(Set.test(X86::ZMM0), STI->hasAVX512());
+  bool HasHighVectors = STI->is64Bit() && STI->hasAVX512();
+  for (MCRegister Reg : {X86::XMM16, X86::YMM16, X86::ZMM16})
+    EXPECT_EQ(Set.test(Reg), HasHighVectors) << TRI->getName(Reg);
+
+  // Reserving unavailable upper lanes must not reserve the enabled low lanes.
+  const MachineRegisterInfo &MRI = MF->getRegInfo();
+  for (MCRegUnit Unit : TRI->regunits(X86::XMM0))
+    EXPECT_EQ(MRI.isReservedRegUnit(Unit), !STI->hasSSE1());
+  if (STI->hasAVX())
+    for (MCRegUnit Unit : TRI->regunits(X86::YMM0))
+      EXPECT_FALSE(MRI.isReservedRegUnit(Unit));
+}
+
+TEST_P(X86RegisterClearingTest, ExplicitWideRequestsAreClearedOrReported) {
+  auto &MBB = addExit();
+  clear(MBB, regs({X86::YMM0, X86::ZMM0}));
+  for (MCRegister Reg : {X86::YMM0, X86::ZMM0}) {
+    EXPECT_EQ(cleared(MBB, Reg), STI->hasAVX()) << TRI->getName(Reg);
+    EXPECT_EQ(reported(Reg), !STI->hasAVX()) << TRI->getName(Reg);
+  }
+  EXPECT_EQ(Errors, unsigned(!STI->hasAVX())) << Diagnostics;
+}
+
+TEST_P(X86RegisterClearingTest, UnavailableVectorNumbersAreReported) {
+  auto &MBB = addExit();
+  MCRegister Reg = STI->is64Bit() ? X86::XMM16 : X86::XMM8;
+  clear(MBB, regs({Reg}));
+  bool Available = STI->is64Bit() && STI->hasAVX512();
+  EXPECT_EQ(cleared(MBB, Reg), Available);
+  EXPECT_EQ(reported(Reg), !Available);
+  EXPECT_EQ(Errors, unsigned(!Available)) << Diagnostics;
 }
 
 TEST_P(X86RegisterClearingTest, X87DepthUnknownIsAnError) {
@@ -303,8 +421,15 @@ TEST_P(X86RegisterClearingTest, OverlappingRequestsAreClearedOnce) {
 
   EXPECT_EQ(count(MBB, X86::XOR32rr), 1u);
   EXPECT_EQ(count(MBB, X86::V_SET0), unsigned(STI->hasSSE1()));
-  EXPECT_EQ(count(MBB, X86::AVX512_128_SET0), unsigned(STI->hasAVX512()));
-  EXPECT_EQ(Errors, 0u) << Diagnostics;
+  bool HasHighVectors = STI->hasAVX512() && STI->is64Bit();
+  EXPECT_EQ(count(MBB, X86::AVX512_128_SET0), unsigned(HasHighVectors));
+  bool NeedsDiagnostic = false;
+  for (MCRegister Reg : Set.set_bits()) {
+    bool WasCleared = cleared(MBB, Reg);
+    NeedsDiagnostic |= !WasCleared;
+    EXPECT_TRUE(WasCleared || reported(Reg)) << TRI->getName(Reg);
+  }
+  EXPECT_EQ(Errors, unsigned(NeedsDiagnostic)) << Diagnostics;
 }
 
 TEST_P(X86RegisterClearingTest, X87ReturnValueIsPreserved) {
@@ -379,6 +504,8 @@ INSTANTIATE_TEST_SUITE_P(
         ClearingSubtarget{"x86_64-unknown-linux-gnu", "-x87,+mmx",
                           "'MM0, MM1, MM2, MM3, MM4, MM5, MM6, MM7'"},
         ClearingSubtarget{"x86_64-unknown-linux-gnu", "+amx-tile,+avx512f",
+                          nullptr},
+        ClearingSubtarget{"x86_64-unknown-linux-gnu", "+amx-tile,-avx",
                           nullptr},
         ClearingSubtarget{"x86_64-unknown-linux-gnu", "+soft-float", nullptr},
         ClearingSubtarget{"x86_64-pc-windows-msvc", "+avx512f", nullptr},

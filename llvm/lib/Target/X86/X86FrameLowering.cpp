@@ -770,6 +770,25 @@ static void emitZeroCallUsedX87(MachineBasicBlock &MBB,
   }
 }
 
+static MCRegister getZeroCallUsedVectorLane(const X86Subtarget &ST,
+                                            const X86RegisterInfo &TRI,
+                                            MCRegister Reg) {
+  if (!ST.hasSSE1())
+    return 0;
+  MCRegister Lane = X86::VR128XRegClass.contains(Reg)
+                        ? Reg
+                        : TRI.getSubReg(Reg, X86::sub_xmm);
+  // A legacy SSE clear leaves all bits above XMM unchanged.
+  if (Reg != Lane && !ST.hasAVX())
+    return 0;
+  unsigned Encoding = TRI.getEncodingValue(Lane);
+  bool HasEncoding = Encoding < 8;
+  // XMM16-31 have only EVEX encodings.
+  if (ST.is64Bit())
+    HasEncoding = Encoding < 16 || ST.hasAVX512();
+  return HasEncoding ? Lane : MCRegister();
+}
+
 // ST0-7 are reserved and FP7 is not allocatable; the x87 stack is requested
 // through FP0-6. Tiles and mask pairs are fixed registers. Unavailable register
 // files are reserved by X86RegisterInfo::getReservedRegs.
@@ -808,12 +827,7 @@ void X86FrameLowering::emitZeroCallUsedRegs(BitVector RegsToZero,
     } else if (X86::VR128XRegClass.contains(Reg) ||
                X86::VR256XRegClass.contains(Reg) ||
                X86::VR512RegClass.contains(Reg)) {
-      MCRegister Lane = X86::VR128XRegClass.contains(Reg)
-                            ? Reg
-                            : TRI->getSubReg(Reg, X86::sub_xmm);
-      // XMM16-31 have only EVEX encodings.
-      if (STI.hasSSE1() &&
-          (TRI->getEncodingValue(Lane) < 16 || STI.hasAVX512()))
+      if (MCRegister Lane = getZeroCallUsedVectorLane(STI, *TRI, Reg))
         LanesToZero.set(Lane);
       else
         NoInstruction.push_back(Reg);
