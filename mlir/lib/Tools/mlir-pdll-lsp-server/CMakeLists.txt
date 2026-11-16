@@ -7,9 +7,6 @@ llvm_add_library(MLIRPdllLspServerLib
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Tools/mlir-pdll-lsp-server
 
-  # MLIRPDLLParser needs LLVMTableGen, which is excluded from libLLVM.so.
-  DISABLE_LLVM_LINK_LLVM_DYLIB
-
   LINK_COMPONENTS
   SupportLSP
 
