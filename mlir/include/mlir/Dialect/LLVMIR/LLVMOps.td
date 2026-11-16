@@ -2100,7 +2100,6 @@ def LLVM_LLVMFuncOp : LLVM_Op<"func", [
     OptionalAttr<UnitAttr>:$minsize,
     OptionalAttr<UnitAttr>:$save_reg_params,
     OptionalAttr<StrAttr>:$zero_call_used_regs,
-    UnitAttr:$zeroize_flags,
     OptionalAttr<StrAttr>:$zeroize_stack,
     OptionalAttr<DictionaryAttr>:$default_func_attrs,
     OptionalAttr<LLVM_VecTypeHintAttr>:$vec_type_hint,
