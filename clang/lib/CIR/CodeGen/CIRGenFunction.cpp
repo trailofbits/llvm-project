@@ -511,8 +511,6 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
   if (fd && fd->hasAttr<ZeroizeOnReturnAttr>()) {
     fn->setAttr(cir::CIRDialect::getZeroCallUsedRegsAttrName(),
                 mlir::StringAttr::get(fn.getContext(), "all"));
-    fn->setAttr(cir::CIRDialect::getZeroizeFlagsAttrName(),
-                mlir::UnitAttr::get(fn.getContext()));
     fn->setAttr(cir::CIRDialect::getZeroizeStackAttrName(),
                 mlir::StringAttr::get(fn.getContext(), "used"));
   }
