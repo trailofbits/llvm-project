@@ -12,20 +12,22 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fzero-call-used-regs=skip -emit-llvm %s -o %t.ll
 // RUN: FileCheck --input-file=%t.ll %s -check-prefix=LLVM
 
-// Both codegen paths retain the register and stack requests regardless of
-// command-line overrides. Classic codegen additionally requests flags clearing;
-// that request is not yet supported by ClangIR.
+// The same prefix is used for every mode on purpose: a protected function
+// emits the same three requests whatever the command line says. The third RUN
+// of each group is classic codegen, which pins ClangIR to parity with it.
 
 extern "C" {
   [[clang::zeroize_on_return]]
   void protected_fn() {}
   // CIR: cir.func{{.*}}@protected_fn()
   // CIR-SAME: zero_call_used_regs = "all"
+  // CIR-SAME: zeroize_flags
   // CIR-SAME: zeroize_stack = "used"
   // LLVM: define{{.*}}@protected_fn() #[[PROT_ATTR:.*]] {
 
   void plain_fn() {}
   // CIR: cir.func{{.*}}@plain_fn()
+  // CIR-NOT: zeroize_flags
   // CIR-NOT: zeroize_stack
   // LLVM: define{{.*}}@plain_fn() #[[PLAIN_ATTR:.*]] {
 
@@ -33,23 +35,27 @@ extern "C" {
     protected_fn();
     // The request is a property of the function, not of calls to it.
     // CIR: cir.call{{.*}}@protected_fn()
+    // CIR-NOT: zeroize_flags
     // CIR-NOT: zeroize_stack
     // LLVM: call void{{.*}}@protected_fn(){{$}}
   }
 
   // A use before the definition creates the function from a declaration that
-  // lacks the attribute. The definition still carries both requests.
+  // lacks the attribute. The definition still carries all three requests.
   void late_fn();
   void early_caller() { late_fn(); }
   [[clang::zeroize_on_return]] void late_fn() {}
   // CIR: cir.func{{.*}}@late_fn()
   // CIR-SAME: zero_call_used_regs = "all"
+  // CIR-SAME: zeroize_flags
   // CIR-SAME: zeroize_stack = "used"
   // LLVM: define{{.*}}@late_fn() #[[PROT_ATTR]] {
 }
 
 // LLVM: attributes #[[PROT_ATTR]]
 // LLVM-SAME: "zero-call-used-regs"="all"
+// LLVM-SAME: "zeroize-flags"
 // LLVM-SAME: "zeroize-stack"="used"
 // LLVM: attributes #[[PLAIN_ATTR]]
+// LLVM-NOT: "zeroize-flags"
 // LLVM-NOT: "zeroize-stack"
