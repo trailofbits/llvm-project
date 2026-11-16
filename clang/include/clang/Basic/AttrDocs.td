@@ -8828,13 +8828,15 @@ def ZeroizeOnReturnDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{
 The ``zeroize_on_return`` attribute takes no arguments and applies to functions
-only. Clang lowers it to three LLVM IR function attributes:
+only. Classic Clang lowers it to three LLVM IR function attributes:
 ``"zero-call-used-regs"="all"`` requests call-used register clearing,
 ``"zeroize-stack"="used"`` requests clearing of the function's used stack memory,
 and ``"zeroize-flags"`` requests condition-state clearing after the other clears.
 The register request overrides both ``-fzero-call-used-regs`` and an explicit
 ``zero_call_used_regs`` attribute on the same function, including ``"skip"``.
 An explicitly annotated ``main`` also retains all three requests.
+ClangIR currently emits only the register and stack requests; it does not request
+condition-state clearing.
 
 **Current implementation limits.** ARM32, AArch64 ELF, and X86-64 LP64 ELF support
 stack and condition-state clearing for supported frames and ordinary return
