@@ -2825,7 +2825,6 @@ static constexpr std::array kExplicitLLVMFuncOpAttributes{
     StringLiteral("vscale_range"),
     StringLiteral("willreturn"),
     StringLiteral("zero-call-used-regs"),
-    StringLiteral("zeroize-flags"),
     StringLiteral("zeroize-stack"),
     StringLiteral("denormal_fpenv"),
 };
@@ -2942,9 +2941,6 @@ void ModuleImport::processFunctionAttributes(llvm::Function *func,
       attr.isStringAttribute())
     funcOp.setZeroCallUsedRegsAttr(
         StringAttr::get(context, attr.getValueAsString()));
-
-  if (func->hasFnAttribute("zeroize-flags"))
-    funcOp.setZeroizeFlags(true);
 
   if (llvm::Attribute attr = func->getFnAttribute("zeroize-stack");
       attr.isStringAttribute())
