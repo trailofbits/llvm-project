@@ -304,10 +304,12 @@ public:
   }
 
   bool runOnMachineFunction(MachineFunction &MF) override {
-    if (MF.getFunction().hasFnAttribute("zeroize-flags") &&
+    const Function &F = MF.getFunction();
+    if ((F.hasFnAttribute("zeroize-flags") ||
+         F.hasFnAttribute("zero-call-used-regs")) &&
         MF.getTarget().getTargetTriple().isOSBinFormatELF() &&
         isMachineVerificationEnabled(MF.getTarget()) &&
-        !verifyAArch64ZeroizedFlags(MF))
+        !verifyAArch64Zeroization(MF))
       return false;
 
     if (auto *PSIW = getAnalysisIfAvailable<ProfileSummaryInfoWrapperPass>())

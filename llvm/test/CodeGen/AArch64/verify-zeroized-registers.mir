@@ -1,0 +1,138 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -stop-after=unpack-mi-bundles %t/real.ll -o %t/final.mir
+# RUN: FileCheck %s --check-prefix=PLAN < %t/final.mir
+# RUN: not llc -mtriple=aarch64-linux-gnu -mattr=+sve -verify-machineinstrs -start-after=unpack-mi-bundles %t/final.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=DOMAIN
+# RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles -filetype=obj %t/final.mir -o %t/replay.o
+# RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs=0 -filetype=obj %t/real.ll -o %t/normal.o
+# RUN: cmp %t/normal.o %t/replay.o
+# RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -mattr=-neon %t/real.ll -o /dev/null
+# RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -mattr=-fp-armv8 %t/int.ll -o /dev/null
+# RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-before=prolog-epilog -stop-after=unpack-mi-bundles %t/two.mir -o %t/exits.mir
+# RUN: FileCheck %s --check-prefix=TWO < %t/exits.mir
+# RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles -filetype=obj %t/exits.mir -o /dev/null
+# RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles -filetype=obj %t/other-ret.mir -o /dev/null
+# RUN: %python %t/cases.py %t
+# RUN: %if expensive_checks %{ llc -mtriple=aarch64-linux-gnu -filetype=obj %t/real.ll -o %t/default.o %}
+# RUN: %if expensive_checks %{ not llc -mtriple=aarch64-linux-gnu -start-after=unpack-mi-bundles %t/missing.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=X1 %}
+# RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles -filetype=obj %t/word.mir -o /dev/null
+# RUN: not llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles %t/missing.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=X1
+# RUN: not llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles %t/halfword.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=X1
+# RUN: not llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles %t/d-alias.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=Q1
+# RUN: not llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles %t/lane.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=Q1
+# RUN: not llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles %t/later.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=X1
+# RUN: not llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles %t/join.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=JOIN
+# RUN: not llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles %t/changed-protocol.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=PROTOCOL
+# RUN: not llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles %t/obligation.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=ABSENT
+# RUN: not llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles %t/no-retention.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=X1
+# RUN: not llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles %t/second-exit.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=SECOND
+# RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs=0 -start-after=unpack-mi-bundles -filetype=obj %t/missing.mir -o /dev/null
+
+# X0 carries the integer result, and Q0 carries the vector result. The callee-
+# saved X19-X29 and D8-D15 are excluded, along with LR. Real frozen requirements
+# survive return pseudo expansion and MIR serialization.
+# PLAN-LABEL: name: scalar
+# PLAN: !"aarch64.zero-call-used-regs", !"FFFF00FF0007FFFE"
+# PLAN: RET undef $lr, !0, implicit{{( killed)?}} $w0
+# PLAN-LABEL: name: vector
+# PLAN: !"aarch64.zero-call-used-regs", !"FFFF00FE0007FFFF"
+# PLAN: RET undef $lr, !0, implicit{{( killed)?}} $q0
+# TWO-LABEL: name: two
+# TWO-DAG: !"aarch64.zero-call-used-regs", !"FFFF00FF0007FFFE"
+# TWO-DAG: !"aarch64.zero-call-used-regs", !"FFFF00FE0007FFFF"
+# TWO: RET undef $lr, !{{[0-9]+}}, implicit{{( killed)?}} $w0
+# TWO: RET undef $lr, !{{[0-9]+}}, implicit{{( killed)?}} $q0
+# X1: AArch64 zeroization verifier: X1 is not proven zero at return in bb.0
+# SECOND: AArch64 zeroization verifier: X0 is not proven zero at return in bb.2
+# Q1: AArch64 zeroization verifier: Q1 is not proven zero at return in bb.0
+# JOIN: AArch64 zeroization verifier: X1 is not proven zero at return in bb.2
+# DOMAIN: AArch64 zeroization verifier: register obligation on unsupported final function protocol in bb.0
+# PROTOCOL: AArch64 zeroization verifier: register obligation on unsupported final return protocol in bb.0
+# ABSENT: AArch64 zeroization verifier: missing or invalid per-exit register obligation in bb.0
+
+#--- real.ll
+define i32 @scalar(i32 %x) "zero-call-used-regs"="all" { ret i32 %x }
+define <2 x i64> @vector(<2 x i64> %x) "zero-call-used-regs"="all" {
+  ret <2 x i64> %x
+}
+
+#--- int.ll
+define i64 @no_fp(i64 %x) "zero-call-used-regs"="all" { ret i64 %x }
+
+#--- two.mir
+--- |
+  define void @two() "zero-call-used-regs"="all" { ret void }
+...
+---
+name: two
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $w0
+    CBZW $w0, %bb.2
+  bb.1:
+    $w0 = MOVZWi 17, 0
+    RET_ReallyLR implicit $w0
+  bb.2:
+    $q0 = MOVIv2d_ns 255
+    RET_ReallyLR implicit $q0
+...
+
+#--- other-ret.mir
+--- |
+  define void @other_return() "zero-call-used-regs"="all" { ret void }
+...
+---
+name: other_return
+body: |
+  bb.0:
+    RET undef $x9
+...
+
+#--- cases.py
+import pathlib
+import sys
+
+output = pathlib.Path(sys.argv[1])
+
+
+def final_mir(filename):
+    return (output / filename).read_text().replace("tracksRegLiveness: true",
+                                                   "tracksRegLiveness: false")
+
+
+source = final_mir("final.mir")
+
+
+def case(name, before, after):
+    assert before in source
+    (output / (name + ".mir")).write_text(source.replace(before, after, 1))
+
+
+# Keep the PEI contract and retention operands in every value test. Model
+# ordinary W writes as clearing the entire X register, and a single SIMD lane
+# write as leaving the other half unconstrained.
+case("word", "$x1 = MOVZXi 0, 0", "$w1 = MOVZWi 0, 0")
+case("missing", "    $x1 = MOVZXi 0, 0\n", "")
+case("halfword", "$x1 = MOVZXi 0, 0", "$x1 = MOVKXi undef $x1, 0, 0")
+case("d-alias", "    RET undef", "    $d1 = FMOVXDr $x0\n    RET undef")
+case("lane", "$q1 = MOVIv2d_ns 0", "$q1 = INSvi64gpr undef $q1, 0, $xzr")
+case("later", "    RET undef", "    $w1 = MOVZWi 1, 0\n    RET undef")
+case("join", "    RET undef", """    CBZW $w0, %bb.2
+  bb.1:
+    $w1 = MOVZWi 1, 0
+    B %bb.2
+  bb.2:
+    RET undef""")
+case("changed-protocol", "RET undef $lr, !0,", "RET undef $x9, !0,")
+case("obligation", "RET undef $lr, !0,", "RET undef $lr,")
+
+
+# Dropping a clear *and* its derived liveness operand still leaves the
+# independent requirement from PEI. X0 is required only on the Q0-return exit.
+omitted = (output / "missing.mir").read_text()
+assert ", implicit killed $x1," in omitted
+(output / "no-retention.mir").write_text(omitted.replace(", implicit killed $x1,", ",", 1))
+two = final_mir("exits.mir")
+assert two.count("    $x0 = MOVZXi 0, 0\n") == 1
+(output / "second-exit.mir").write_text(two.replace("    $x0 = MOVZXi 0, 0\n", ""))

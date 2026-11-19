@@ -2679,6 +2679,17 @@ fn -> other_fn -> other_fn ; fn is norecurse
     hardening may subsequently reuse a cleared register for the return address
     (X86 LVI) or an authentication check (AArch64 tail calls).
 
+    With machine verification enabled, fixed-width AArch64 ELF checks an
+    explicit `"all"` request at ordinary returns through LR. The check uses
+    the required register set computed separately for each return before
+    clearing instructions are inserted. It verifies full 64-bit GPR and,
+    where FP is enabled, full 128-bit SIMD/FP values after late machine
+    optimization. It also covers scalar FP targets without Advanced SIMD.
+    This check covers the ordinary unsigned ELF return protocols supported
+    by AArch64 flags clearing. Scalable vector or predicate state, streaming
+    mode, tail transfers, and instrumented or authenticated returns are
+    outside this verification scope.
+
     On X86, vector selection follows the function's enabled target features:
     SSE enables the 128-bit `XMM` width, AVX adds the 256-bit `YMM` width, and
     AVX-512 adds the 512-bit `ZMM` width. Vector registers numbered 8 through 15

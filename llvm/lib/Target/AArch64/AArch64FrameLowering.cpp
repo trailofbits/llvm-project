@@ -220,6 +220,7 @@
 #include "AArch64RegisterInfo.h"
 #include "AArch64SMEAttributes.h"
 #include "AArch64Subtarget.h"
+#include "AArch64Zeroization.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
 #include "MCTargetDesc/AArch64MCTargetDesc.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -237,6 +238,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineVerifier.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
@@ -982,6 +984,16 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
   FullRegsToZero |= PredicatesToZero;
   if (!validateZeroCallUsedRegsWidening(RegsToZero, FullRegsToZero, MBB, MBBI))
     return;
+
+  const MachineFunction &MF = *MBB.getParent();
+  if (isMachineVerificationEnabled(MF.getTarget()) &&
+      shouldVerifyAArch64ZeroizedRegisters(MF)) {
+    for (MachineInstr &MI : make_range(MBBI, MBB.end()))
+      if (MI.getOpcode() == AArch64::RET_ReallyLR ||
+          (MI.getOpcode() == AArch64::RET &&
+           MI.getOperand(0).getReg() == AArch64::LR))
+        recordAArch64ZeroizationObligation(MI, FullRegsToZero);
+  }
 
   // Zero out GPRs.
   for (MCRegister Reg : GPRsToZero.set_bits())

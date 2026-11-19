@@ -10,10 +10,20 @@
 #define LLVM_LIB_TARGET_AARCH64_AARCH64ZEROIZATION_H
 
 namespace llvm {
+class BitVector;
 class MachineFunction;
+class MachineInstr;
 
-/// Diagnose an ordinary machine return without a reaching NZCV clear.
-bool verifyAArch64ZeroizedFlags(const MachineFunction &MF);
+/// Whether the fixed-width ordinary ELF register contract can be checked.
+bool shouldVerifyAArch64ZeroizedRegisters(const MachineFunction &MF);
+
+/// Freeze the per-exit target requirements before emitting or retaining clears.
+void recordAArch64ZeroizationObligation(MachineInstr &Exit,
+                                        const BitVector &FullRegs);
+
+/// Diagnose a required register or NZCV value not proven zero at a final
+/// return.
+bool verifyAArch64Zeroization(const MachineFunction &MF);
 } // namespace llvm
 
 #endif
