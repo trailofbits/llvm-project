@@ -255,9 +255,17 @@ define dso_local i32 @all(i32 noundef %a, i32 noundef %b, i32 noundef %c) local_
 ; DEFAULT-NEXT:    movi v30.2d, #0000000000000000
 ; DEFAULT-NEXT:    movi v31.2d, #0000000000000000
 ; DEFAULT-NEXT:    mov x10, #0 // =0x0
+; DEFAULT-NEXT:    mov v8.d[1], xzr
+; DEFAULT-NEXT:    mov v9.d[1], xzr
 ; DEFAULT-NEXT:    mov x11, #0 // =0x0
+; DEFAULT-NEXT:    mov v10.d[1], xzr
+; DEFAULT-NEXT:    mov v11.d[1], xzr
 ; DEFAULT-NEXT:    mov x12, #0 // =0x0
+; DEFAULT-NEXT:    mov v12.d[1], xzr
+; DEFAULT-NEXT:    mov v13.d[1], xzr
 ; DEFAULT-NEXT:    mov x13, #0 // =0x0
+; DEFAULT-NEXT:    mov v14.d[1], xzr
+; DEFAULT-NEXT:    mov v15.d[1], xzr
 ; DEFAULT-NEXT:    mov x14, #0 // =0x0
 ; DEFAULT-NEXT:    mov x15, #0 // =0x0
 ; DEFAULT-NEXT:    mov x16, #0 // =0x0
@@ -660,6 +668,14 @@ define dso_local double @all_float(double noundef %a, float noundef %b) local_un
 ; DEFAULT-NEXT:    movi v29.2d, #0000000000000000
 ; DEFAULT-NEXT:    movi v30.2d, #0000000000000000
 ; DEFAULT-NEXT:    movi v31.2d, #0000000000000000
+; DEFAULT-NEXT:    mov v8.d[1], xzr
+; DEFAULT-NEXT:    mov v9.d[1], xzr
+; DEFAULT-NEXT:    mov v10.d[1], xzr
+; DEFAULT-NEXT:    mov v11.d[1], xzr
+; DEFAULT-NEXT:    mov v12.d[1], xzr
+; DEFAULT-NEXT:    mov v13.d[1], xzr
+; DEFAULT-NEXT:    mov v14.d[1], xzr
+; DEFAULT-NEXT:    mov v15.d[1], xzr
 ; DEFAULT-NEXT:    ret
 ;
 ; SVE-OR-SME-LABEL: all_float:
