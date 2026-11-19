@@ -314,6 +314,15 @@ ARMFrameLowering::ARMFrameLowering(const ARMSubtarget &sti)
     : TargetFrameLowering(StackGrowsDown, sti.getStackAlignment(), 0, Align(4)),
       STI(sti) {}
 
+int ARMFrameLowering::getInitialCFAOffset(const MachineFunction &MF) const {
+  return 0;
+}
+
+Register
+ARMFrameLowering::getInitialCFARegister(const MachineFunction &MF) const {
+  return ARM::SP;
+}
+
 bool ARMFrameLowering::keepFramePointer(const MachineFunction &MF) const {
   // iOS always has a FP for backtracking, force other targets to keep their FP
   // when doing FastISel. The emitted code is currently superior, and in cases

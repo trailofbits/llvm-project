@@ -43,6 +43,9 @@ public:
                               MutableArrayRef<CalleeSavedInfo> CSI,
                               const TargetRegisterInfo *TRI) const override;
 
+  int getInitialCFAOffset(const MachineFunction &MF) const override;
+  Register getInitialCFARegister(const MachineFunction &MF) const override;
+
   bool keepFramePointer(const MachineFunction &MF) const;
 
   bool enableCalleeSaveSkip(const MachineFunction &MF) const override;
