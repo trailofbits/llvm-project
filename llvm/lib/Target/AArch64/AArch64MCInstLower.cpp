@@ -377,6 +377,9 @@ void AArch64MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   OutMI.setOpcode(MI->getOpcode());
 
   for (const MachineOperand &MO : MI->operands()) {
+    // An ordinary return can carry its verification contract as MIR metadata.
+    if (MI->getOpcode() == AArch64::RET && MO.isMetadata())
+      continue;
     MCOperand MCOp;
     if (lowerOperand(MO, MCOp))
       OutMI.addOperand(MCOp);
