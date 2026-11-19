@@ -45,6 +45,9 @@ public:
   /// emitProlog/emitEpilog - These methods insert prolog and epilog code into
   /// the function.
   void emitPrologue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
+  void emitShadowCallStackPop(MachineBasicBlock &MBB,
+                              MachineBasicBlock::iterator InsertPt,
+                              const DebugLoc &DL) const;
   void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
 
   /// Harden the entire function with pac-ret.

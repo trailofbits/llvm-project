@@ -14,6 +14,7 @@
 #include "AArch64Subtarget.h"
 #include "Utils/AArch64BaseInfo.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/CodeGen/CFIInstBuilder.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
@@ -22,6 +23,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/StackZeroization.h"
 #include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Target/TargetMachine.h"
@@ -59,6 +61,45 @@ static bool mayInstrumentZeroizeExits(const Function &F) {
          F.hasFnAttribute("xray-instruction-threshold");
 }
 
+static bool hasAndroidShadowCallStack(const MachineFunction &MF) {
+  const Function &F = MF.getFunction();
+  const Triple &TT = MF.getTarget().getTargetTriple();
+  const auto &STI = MF.getSubtarget<AArch64Subtarget>();
+  return TT.isAndroid() && !TT.isAndroidVersionLT(29) &&
+         F.getCallingConv() == CallingConv::C && F.hasZeroizeStack() &&
+         F.hasFnAttribute(Attribute::ShadowCallStack) && !STI.hasSVE() &&
+         STI.isXRegisterReserved(18);
+}
+
+static bool canClearShadowResume(const MachineInstr &MI) {
+  const auto &MF = *MI.getMF();
+  const auto &F = MF.getFunction();
+  const auto &AFI = *MF.getInfo<AArch64FunctionInfo>();
+  if (!hasAndroidShadowCallStack(MF) || !AFI.needsDwarfUnwindInfo(MF) ||
+      !AFI.needsShadowCallStackPrologueEpilogue(MF) || !F.hasPersonalityFn() ||
+      classifyEHPersonality(F.getPersonalityFn()) != EHPersonality::GNU_CXX)
+    return false;
+
+  if (MI.getOpcode() != AArch64::BL || !MI.getOperand(0).isGlobal() ||
+      MI.getOperand(0).getOffset() || !MI.getParent()->succ_empty() ||
+      !MI.readsRegister(AArch64::X0, /*TRI=*/nullptr))
+    return false;
+  if (!llvm::any_of(MI.operands(), [](const MachineOperand &MO) {
+        return MO.isRegMask() && !MO.clobbersPhysReg(AArch64::X18);
+      }))
+    return false;
+  const auto *Resume = dyn_cast<Function>(MI.getOperand(0).getGlobal());
+  if (!Resume || !Resume->isDeclaration() || !Resume->hasExternalLinkage() ||
+      Resume->getName() != "_Unwind_Resume" ||
+      Resume->getCallingConv() != CallingConv::C || Resume->isVarArg() ||
+      !Resume->getReturnType()->isVoidTy() || Resume->arg_size() != 1 ||
+      !Resume->getArg(0)->getType()->isPointerTy())
+    return false;
+  return llvm::all_of(
+      make_range(std::next(MI.getIterator()), MI.getParent()->instr_end()),
+      [](const MachineInstr &I) { return I.isMetaInstruction(); });
+}
+
 static bool hasSupportedZeroizeABI(const MachineFunction &MF) {
   const Function &F = MF.getFunction();
   const auto &AFI = *MF.getInfo<AArch64FunctionInfo>();
@@ -68,7 +109,8 @@ static bool hasSupportedZeroizeABI(const MachineFunction &MF) {
          hasOrdinaryZeroizeCallingConvention(F) &&
          !AFI.shouldSignReturnAddress(MF) && !hasSMEZeroizeProtocol(AFI) &&
          !AFI.hasSwiftAsyncContext() &&
-         !F.hasFnAttribute(Attribute::ShadowCallStack) &&
+         (!F.hasFnAttribute(Attribute::ShadowCallStack) ||
+          hasAndroidShadowCallStack(MF)) &&
          !mayInstrumentZeroizeExits(F);
 }
 
@@ -88,8 +130,10 @@ static bool isZeroizeUnwindResume(const MachineInstr &MI) {
 }
 
 static bool isUnsupportedZeroizeExit(const MachineInstr &MI) {
-  if (MI.isEHScopeReturn() || isZeroizeUnwindResume(MI))
+  if (MI.isEHScopeReturn())
     return true;
+  if (isZeroizeUnwindResume(MI))
+    return !canClearShadowResume(MI);
   return MI.isReturn() && (MI.getOpcode() != AArch64::RET_ReallyLR ||
                            !MI.getParent()->succ_empty());
 }
@@ -240,6 +284,8 @@ class AArch64StackClearEmitter {
   StackOffset Size;
   MCRegister Ptr;
   MCRegister End;
+  bool ShadowCallStack;
+  bool UnwindResume;
 
   bool fail(StringRef Message) const {
     const Function &F = MF.getFunction();
@@ -345,6 +391,22 @@ class AArch64StackClearEmitter {
     return true;
   }
 
+  void restoreShadowReturnAddress() {
+    CFIInstBuilder CFI(MBB, InsertPt, MachineInstr::FrameDestroy);
+    if (UnwindResume) {
+      // BL overwrites LR. Leave the real frame and its shadow entry in place
+      // until the unwinder steps over them. The ordinary save is erased below.
+      static const char Rule[] = {dwarf::DW_CFA_expression, 30, 2,
+                                  static_cast<char>(dwarf::DW_OP_breg18),
+                                  0x78}; // [X18 - 8]
+      CFI.buildEscape(StringRef(Rule, sizeof(Rule)));
+      return;
+    }
+    TFI.emitShadowCallStackPop(MBB, InsertPt, DL);
+    CFI.buildRestore(AArch64::X18);
+    CFI.buildRestore(AArch64::LR);
+  }
+
   void restore() {
     unsigned CFI =
         MF.addFrameInst(createDefCFA(TRI, AArch64::SP, AArch64::SP, Size));
@@ -352,6 +414,10 @@ class AArch64StackClearEmitter {
         .addCFIIndex(CFI)
         .setMIFlag(MachineInstr::FrameDestroy);
     for (const CalleeSavedInfo &CSI : MFI.getCalleeSavedInfo()) {
+      if (CSI.getReg() == AArch64::LR && ShadowCallStack) {
+        restoreShadowReturnAddress();
+        continue;
+      }
       int FI = CSI.getFrameIdx();
       StackOffset Offset = Size + TFI.getFrameIndexReferenceFromSP(MF, FI);
       emitFrameOffset(MBB, InsertPt, DL, Ptr, AArch64::SP, Offset, &TII);
@@ -411,10 +477,12 @@ class AArch64StackClearEmitter {
   }
 
   void finish(MachineBasicBlock &Tail, bool Loop) {
-    emitFrameOffset(Tail, InsertPt, DL, AArch64::SP, Ptr, {}, &TII,
-                    MachineInstr::FrameDestroy);
-    CFIInstBuilder(Tail, InsertPt, MachineInstr::FrameDestroy)
-        .buildDefCFA(AArch64::SP, 0);
+    if (!UnwindResume) {
+      emitFrameOffset(Tail, InsertPt, DL, AArch64::SP, Ptr, {}, &TII,
+                      MachineInstr::FrameDestroy);
+      CFIInstBuilder(Tail, InsertPt, MachineInstr::FrameDestroy)
+          .buildDefCFA(AArch64::SP, 0);
+    }
     if (Loop) {
       MachineBasicBlock *Body = Tail.getSinglePredecessor();
       assert(Body && "Expected a single clearing-loop predecessor");
@@ -432,7 +500,10 @@ public:
         TRI(*MF.getSubtarget<AArch64Subtarget>().getRegisterInfo()),
         DL(InsertPt->getDebugLoc()),
         Size(StackOffset::getFixed(MFI.getStackSize()) +
-             TFI.getSVEStackSize(MF)) {}
+             TFI.getSVEStackSize(MF)),
+        ShadowCallStack(MF.getInfo<AArch64FunctionInfo>()
+                            ->needsShadowCallStackPrologueEpilogue(MF)),
+        UnwindResume(isZeroizeUnwindResume(*InsertPt)) {}
 
   void emit(BitVector &ScratchRegs) {
     if (!Size || !validate())
@@ -449,7 +520,8 @@ public:
     } else {
       for (unsigned Offset = 0; Offset < Size.getFixed(); Offset += 16)
         store(MBB, InsertPt, Offset);
-      emitFrameOffset(MBB, InsertPt, DL, Ptr, Ptr, Size, &TII);
+      if (!UnwindResume)
+        emitFrameOffset(MBB, InsertPt, DL, Ptr, Ptr, Size, &TII);
     }
     finish(*Tail, Loop);
   }
