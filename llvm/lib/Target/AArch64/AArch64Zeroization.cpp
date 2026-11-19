@@ -7,11 +7,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "AArch64Zeroization.h"
 #include "AArch64FrameLowering.h"
 #include "AArch64InstrInfo.h"
 #include "AArch64MachineFunctionInfo.h"
 #include "AArch64Subtarget.h"
 #include "Utils/AArch64BaseInfo.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/CodeGen/CFIInstBuilder.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/LiveRegUnits.h"
@@ -149,6 +151,71 @@ void AArch64FrameLowering::emitZeroizeFlags(
     if (Reg != AArch64::NZCV && Reg != AArch64::SP)
       MSR.addReg(Reg, RegState::Implicit);
   ClearedRegs.set(AArch64::NZCV);
+}
+
+// Track the architectural value, not PEI's implicit liveness operands. A system
+// register write is identified by its encoded register number and source GPR.
+static bool leavesNZCVZero(const MachineInstr &MI, bool WasZero,
+                           const TargetRegisterInfo &TRI) {
+  if (MI.getOpcode() == AArch64::MSR)
+    return MI.getOperand(0).isImm() &&
+           MI.getOperand(0).getImm() == AArch64SysReg::NZCV &&
+           MI.getOperand(1).isReg() &&
+           MI.getOperand(1).getReg() == AArch64::XZR;
+  if (MI.isMetaInstruction())
+    return WasZero;
+  if (MI.isInlineAsm() || MI.isCall() || MI.isPseudo() ||
+      MI.hasUnmodeledSideEffects() ||
+      MI.getDesc().hasImplicitDefOfPhysReg(AArch64::NZCV, &TRI) ||
+      MI.modifiesRegister(AArch64::NZCV, &TRI))
+    return false;
+  return WasZero;
+}
+
+bool llvm::verifyAArch64ZeroizedFlags(const MachineFunction &MF) {
+  const auto &TRI = *MF.getSubtarget().getRegisterInfo();
+  // A block can be entered in two abstract states. Requiring zero on *every*
+  // reachable visit handles shared exits and loops without trusting live-ins.
+  BitVector Seen[2] = {BitVector(MF.getNumBlockIDs()),
+                       BitVector(MF.getNumBlockIDs())};
+  SmallVector<std::pair<const MachineBasicBlock *, bool>> Work;
+  auto Enqueue = [&](const MachineBasicBlock *MBB, bool IsZero) {
+    if (!Seen[IsZero].test(MBB->getNumber())) {
+      Seen[IsZero].set(MBB->getNumber());
+      Work.emplace_back(MBB, IsZero);
+    }
+  };
+  for (const MachineBasicBlock &MBB : MF)
+    if (MBB.isEntryBlock() || MBB.isEHPad() || MBB.hasAddressTaken() ||
+        MBB.isInlineAsmBrIndirectTarget())
+      Enqueue(&MBB, false);
+
+  while (!Work.empty()) {
+    auto [MBB, IsZero] = Work.pop_back_val();
+    for (const MachineInstr &MI : MBB->instrs()) {
+      if (MI.isReturn()) {
+        const bool Ordinary = MI.getOpcode() == AArch64::RET ||
+                              MI.getOpcode() == AArch64::RET_ReallyLR;
+        if (!Ordinary || !IsZero) {
+          const auto Reason = Ordinary ? "NZCV is not proven zero at return"
+                                       : "unsupported final return protocol";
+          const Function &F = MF.getFunction();
+          F.getContext().diagnose(DiagnosticInfoUnsupported{
+              F, Twine("AArch64 zeroization verifier: ") + Reason + " in bb." +
+                     Twine(MBB->getNumber())});
+          return false;
+        }
+      }
+      IsZero = leavesNZCVZero(MI, IsZero, TRI);
+      // A conditional transfer may skip later instructions in this block.
+      if (MI.isTerminator())
+        for (const MachineBasicBlock *Succ : MBB->successors())
+          Enqueue(Succ, IsZero);
+    }
+    for (const MachineBasicBlock *Succ : MBB->successors())
+      Enqueue(Succ, IsZero);
+  }
+  return true;
 }
 
 static bool hasOrdinaryZeroizeStorage(const MachineFunction &MF) {

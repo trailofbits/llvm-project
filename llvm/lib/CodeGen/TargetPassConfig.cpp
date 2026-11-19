@@ -25,6 +25,7 @@
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachinePassRegistry.h"
+#include "llvm/CodeGen/MachineVerifier.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/IR/IRPrintingPasses.h"
@@ -801,13 +802,16 @@ void TargetPassConfig::addPrintPass(const std::string &Banner) {
     PM->add(createMachineFunctionPrinterPass(dbgs(), Banner));
 }
 
-void TargetPassConfig::addVerifyPass(const std::string &Banner) {
-  bool Verify = VerifyMachineCode == cl::boolOrDefault::BOU_TRUE;
+bool llvm::isMachineVerificationEnabled(const TargetMachine &TM) {
 #ifdef EXPENSIVE_CHECKS
   if (VerifyMachineCode == cl::boolOrDefault::BOU_UNSET)
-    Verify = TM->isMachineVerifierClean();
+    return TM.isMachineVerifierClean();
 #endif
-  if (Verify)
+  return VerifyMachineCode == cl::boolOrDefault::BOU_TRUE;
+}
+
+void TargetPassConfig::addVerifyPass(const std::string &Banner) {
+  if (isMachineVerificationEnabled(*TM))
     PM->add(createMachineVerifierPass(Banner));
 }
 
