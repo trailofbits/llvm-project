@@ -1,0 +1,152 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=aarch64-linux-gnu -start-after=unpack-mi-bundles -verify-machineinstrs %t/good.mir -o - | FileCheck %s --check-prefix=GOOD
+# RUN: not llc -mtriple=aarch64-linux-gnu -start-after=unpack-mi-bundles -verify-machineinstrs %t/bad.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD
+# RUN: llc -mtriple=aarch64-linux-gnu -start-after=unpack-mi-bundles -verify-machineinstrs=0 -filetype=obj %t/bad.mir -o %t/unchecked.o
+# RUN: not llc -mtriple=aarch64-linux-gnu -start-after=unpack-mi-bundles -verify-machineinstrs -filetype=obj %t/bad.mir -o %t/checked.o 2>&1 | FileCheck %s --check-prefix=BAD
+#
+# The IR requests clearing. Start after the last transform so the machine-level
+# fixtures, including incorrect ones, reach the ordinary assembly/object entry.
+# GOOD-LABEL: shared_clear:
+# GOOD:       msr NZCV, xzr
+# GOOD:       add x0, x0, #1
+# GOOD:       ret
+# GOOD-LABEL: loop_clear:
+# GOOD:       ret
+# GOOD-LABEL: unprotected:
+# GOOD:       ret
+# BAD: error: {{.*}}in function missing {{.*}}NZCV is not proven zero at return in bb.0
+# BAD: error: {{.*}}in function overwritten {{.*}}NZCV is not proven zero at return in bb.0
+# BAD: error: {{.*}}in function wrong_source {{.*}}NZCV is not proven zero at return in bb.0
+# BAD: error: {{.*}}in function overwritten_without_marker {{.*}}NZCV is not proven zero at return in bb.0
+# BAD: error: {{.*}}in function after_call {{.*}}NZCV is not proven zero at return in bb.0
+# BAD: error: {{.*}}in function bypass {{.*}}NZCV is not proven zero at return in bb.2
+# BAD: error: {{.*}}in function clobbering_backedge {{.*}}NZCV is not proven zero at return in bb.3
+# BAD: error: {{.*}}in function address_taken_missing_clear {{.*}}NZCV is not proven zero at return in bb.1
+
+#--- good.mir
+--- |
+  define void @shared_clear() "zeroize-flags" { ret void }
+  define void @loop_clear() "zeroize-flags" { ret void }
+  define void @unprotected() { ret void }
+...
+---
+name: shared_clear
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    MSR 55824, $xzr, implicit-def $nzcv
+    CBZX $x0, %bb.2
+  bb.1:
+    $x0 = ADDXri $x0, 1, 0
+    RET undef $lr, implicit $nzcv
+  bb.2:
+    RET undef $lr, implicit $nzcv
+...
+---
+name: loop_clear
+body: |
+  bb.0:
+    successors: %bb.1
+    MSR 55824, $xzr, implicit-def $nzcv
+  bb.1:
+    successors: %bb.1, %bb.2
+    CBZX $x0, %bb.1
+  bb.2:
+    RET undef $lr
+...
+---
+name: unprotected
+body: |
+  bb.0:
+    RET undef $lr
+...
+
+#--- bad.mir
+--- |
+  define void @missing() "zeroize-flags" { ret void }
+  define void @overwritten() "zeroize-flags" { ret void }
+  define void @wrong_source() "zeroize-flags" { ret void }
+  declare void @external()
+  define void @overwritten_without_marker() "zeroize-flags" { ret void }
+  define void @after_call() "zeroize-flags" { ret void }
+  define void @bypass() "zeroize-flags" { ret void }
+  define void @clobbering_backedge() "zeroize-flags" { ret void }
+  define void @address_taken_missing_clear() "zeroize-flags" { ret void }
+...
+---
+name: missing
+body: |
+  bb.0:
+    RET undef $lr, implicit $nzcv
+...
+---
+name: overwritten
+body: |
+  bb.0:
+    MSR 55824, $xzr, implicit-def $nzcv
+    $xzr = SUBSXri $x0, 0, 0, implicit-def $nzcv
+    RET undef $lr, implicit $nzcv
+...
+---
+name: wrong_source
+body: |
+  bb.0:
+    MSR 55824, $x0, implicit-def $nzcv
+    RET undef $lr, implicit $nzcv
+...
+---
+name: overwritten_without_marker
+body: |
+  bb.0:
+    MSR 55824, $xzr, implicit-def $nzcv
+    MSR 55824, $x0
+    RET undef $lr, implicit $nzcv
+...
+---
+name: after_call
+body: |
+  bb.0:
+    MSR 55824, $xzr, implicit-def $nzcv
+    BL @external, csr_aarch64_aapcs, implicit-def $lr, implicit $sp
+    RET undef $lr, implicit $nzcv
+...
+---
+name: bypass
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    CBZX $x0, %bb.2
+  bb.1:
+    successors: %bb.2
+    MSR 55824, $xzr, implicit-def $nzcv
+    B %bb.2
+  bb.2:
+    RET undef $lr, implicit $nzcv
+...
+---
+# With X0 = 1, the first visit takes the backedge and the second reaches RET.
+name: clobbering_backedge
+body: |
+  bb.0:
+    successors: %bb.1
+    MSR 55824, $xzr, implicit-def $nzcv
+    B %bb.1
+  bb.1:
+    successors: %bb.2, %bb.3
+    CBZX $x0, %bb.3
+  bb.2:
+    successors: %bb.1
+    $x0 = SUBSXri $x0, 1, 0, implicit-def $nzcv
+    B %bb.1
+  bb.3:
+    RET undef $lr, implicit $nzcv
+...
+---
+name: address_taken_missing_clear
+body: |
+  bb.0:
+    MSR 55824, $xzr, implicit-def $nzcv
+    RET undef $lr, implicit $nzcv
+  bb.1 (machine-block-address-taken):
+    RET undef $lr, implicit $nzcv
+...

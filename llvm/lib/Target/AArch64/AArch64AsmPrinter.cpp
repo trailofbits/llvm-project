@@ -17,6 +17,7 @@
 #include "AArch64RegisterInfo.h"
 #include "AArch64Subtarget.h"
 #include "AArch64TargetObjectFile.h"
+#include "AArch64Zeroization.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
 #include "MCTargetDesc/AArch64InstPrinter.h"
 #include "MCTargetDesc/AArch64MCAsmInfo.h"
@@ -42,6 +43,7 @@
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineModuleInfoImpls.h"
 #include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/CodeGen/MachineVerifier.h"
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/DataLayout.h"
@@ -302,6 +304,12 @@ public:
   }
 
   bool runOnMachineFunction(MachineFunction &MF) override {
+    if (MF.getFunction().hasFnAttribute("zeroize-flags") &&
+        MF.getTarget().getTargetTriple().isOSBinFormatELF() &&
+        isMachineVerificationEnabled(MF.getTarget()) &&
+        !verifyAArch64ZeroizedFlags(MF))
+      return false;
+
     if (auto *PSIW = getAnalysisIfAvailable<ProfileSummaryInfoWrapperPass>())
       PSI = &PSIW->getPSI();
     if (auto *SDPIW =

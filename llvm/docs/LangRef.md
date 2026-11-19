@@ -2737,8 +2737,11 @@ fn -> other_fn -> other_fn ; fn is norecurse
     mandatory tail calls are diagnosed. The flags sequence does not write stack
     memory after stack clearing.
 
-    AArch64 clears NZCV with `MSR NZCV, XZR` after other clearing. It preserves
-    FPCR, FPSR, and execution-control state. Ordinary ELF C, fast, vector PCS,
+    AArch64 clears NZCV with `MSR NZCV, XZR` after other clearing. When machine
+    verification is enabled, the AArch64 ELF backend checks immediately before
+    emission that an NZCV clear reaches each supported machine return on every
+    incoming path. The flags-clearing sequence preserves FPCR, FPSR and
+    execution-control state. Ordinary ELF C, fast, vector PCS,
     and SVE vector PCS returns are supported. Signed returns, SME streaming
     or ZA/ZT0 protocols, shadow call stacks, exceptional exits, Windows,
     and other calling conventions are diagnosed. XRay entry/exit instrumentation
