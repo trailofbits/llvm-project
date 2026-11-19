@@ -219,6 +219,12 @@ public:
     return false;
   }
 
+  /// Add independently clearable subregisters of partially preserved registers
+  /// to the allocatable candidates for the full or used register modes. PEI
+  /// applies the usual use, preserved-register and exit-liveness filters.
+  virtual void addZeroCallUsedRegsSubRegs(const MachineFunction &MF,
+                                          BitVector &Candidates) const {}
+
   /// Whether emitZeroCallUsedRegs can clear Reg as a scratch register. A true
   /// answer guarantees that the entire register is cleared, without widening
   /// the write into another register (apart from condition flags). PEI checks

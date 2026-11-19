@@ -1794,7 +1794,9 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
   const bool OnlyArg = static_cast<unsigned>(ZeroRegsKind) & ONLY_ARG;
 
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
-  const BitVector AllocatableSet(TRI.getAllocatableSet(MF));
+  BitVector SelectableRegs = TRI.getAllocatableSet(MF);
+  if (!OnlyGPR && !OnlyArg)
+    TFI.addZeroCallUsedRegsSubRegs(MF, SelectableRegs);
 
   // Mark all used registers. Implicit operands count too: an inline asm's
   // clobbers and physical-register outputs, a call's argument and result
@@ -1820,7 +1822,7 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
           // Include allocatable components even for nonallocatable tuples,
           // e.g. R0 and R1 for ARM's R0_R1 operand.
           for (MCPhysReg SubReg : TRI.subregs_inclusive(Reg))
-            if (AllocatableSet[SubReg])
+            if (SelectableRegs[SubReg])
               UsedRegs.set(SubReg);
         }
       }
@@ -1829,11 +1831,11 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
   BitVector LiveIns(TRI.getNumRegs());
   for (const MachineBasicBlock::RegisterMaskPair &LI : MF.front().liveins())
     for (MCPhysReg Reg : TRI.subregs_inclusive(LI.PhysReg))
-      if (AllocatableSet[Reg])
+      if (SelectableRegs[Reg])
         LiveIns.set(Reg);
 
   CandidateRegsToZero.resize(TRI.getNumRegs());
-  for (MCRegister Reg : AllocatableSet.set_bits()) {
+  for (MCRegister Reg : SelectableRegs.set_bits()) {
     // Skip over fixed registers.
     if (TRI.isFixedRegister(MF, Reg))
       continue;

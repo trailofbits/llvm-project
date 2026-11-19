@@ -433,6 +433,11 @@ class AArch64StackClearEmitter {
               MachinePointerInfo::getFixedStack(MF, FI),
               MachineMemOperand::MOLoad, LoadSize, MFI.getObjectAlign(FI)));
       MCRegister Reg = CSI.getReg();
+      // The unwinder consumes the restored caller context through the CFI
+      // rule, even when a clearing loop separates the load from the call.
+      if (UnwindResume)
+        InsertPt->addOperand(MF, MachineOperand::CreateReg(Reg, /*isDef=*/false,
+                                                           /*isImp=*/true));
       if (!MFI.hasScalableStackID(FI) || TRI.regNeedsCFI(Reg, Reg))
         CFIInstBuilder(MBB, InsertPt, MachineInstr::FrameDestroy)
             .buildRestore(Reg);

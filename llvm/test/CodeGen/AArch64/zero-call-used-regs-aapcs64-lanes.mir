@@ -1,0 +1,113 @@
+# RUN: llc -mtriple=aarch64-linux-gnu -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mtriple=aarch64-linux-gnu -mattr=+sve -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=NO-LANES
+# RUN: llc -mtriple=aarch64-linux-gnu -mattr=+sme -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=NO-LANES
+
+--- |
+  define <2 x i64> @full_result() "zero-call-used-regs"="all" { ret <2 x i64> zeroinitializer }
+  define void @different_exits() "zero-call-used-regs"="used" { ret void }
+  define aarch64_vector_pcs void @vector_pcs() "zero-call-used-regs"="all" { ret void }
+  define void @added_csr() "zero-call-used-regs"="all" { ret void }
+  declare void @_Unwind_Resume(ptr)
+  define void @only_low_used() "zero-call-used-regs"="used" { ret void }
+  define void @resume_spilled(ptr %e) uwtable "zero-call-used-regs"="used" { ret void }
+...
+---
+name: full_result
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $q0 = MOVIv2d_ns 255
+    RET undef $lr, implicit $q0
+# CHECK-LABEL: name: full_result
+# CHECK: $q0 = MOVIv2d_ns 255
+# CHECK-NOT: $q0 =
+# CHECK: $q8 = INSvi64gpr undef $q8, 1, $xzr, implicit $d8
+# CHECK-NEXT: $q9 = INSvi64gpr undef $q9, 1, $xzr, implicit $d9
+# CHECK-NEXT: $q10 = INSvi64gpr undef $q10, 1, $xzr, implicit $d10
+# CHECK-NEXT: $q11 = INSvi64gpr undef $q11, 1, $xzr, implicit $d11
+# CHECK-NEXT: $q12 = INSvi64gpr undef $q12, 1, $xzr, implicit $d12
+# CHECK-NEXT: $q13 = INSvi64gpr undef $q13, 1, $xzr, implicit $d13
+# CHECK-NEXT: $q14 = INSvi64gpr undef $q14, 1, $xzr, implicit $d14
+# CHECK-NEXT: $q15 = INSvi64gpr undef $q15, 1, $xzr, implicit $d15
+# CHECK-NEXT: RET undef $lr, implicit $q0
+# NO-LANES-LABEL: name: full_result
+# NO-LANES-NOT: INSvi64gpr
+# NO-LANES: RET
+...
+---
+name: different_exits
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $w0
+    $q8 = MOVIv2d_ns 255
+    CBZW $w0, %bb.2
+    B %bb.1
+  bb.1:
+    liveins: $q8
+    RET undef $lr, implicit $d8
+  bb.2:
+    liveins: $q8
+    RET undef $lr, implicit $q8
+# CHECK-LABEL: name: different_exits
+# CHECK: bb.1:
+# CHECK: $q8 = INSvi64gpr undef $q8, 1, $xzr, implicit $d8
+# CHECK-NOT: INSvi64gpr
+# CHECK: RET undef $lr, implicit $d8
+# CHECK: bb.2:
+# CHECK-NOT: INSvi64gpr
+# CHECK: RET undef $lr, implicit $q8
+...
+---
+name: vector_pcs
+tracksRegLiveness: true
+body: |
+  bb.0:
+    RET undef $lr
+# CHECK-LABEL: name: vector_pcs
+# CHECK-NOT: INSvi64gpr
+# CHECK: RET
+...
+---
+name: added_csr
+tracksRegLiveness: true
+calleeSavedRegisters: [ '$d8', '$d10', '$q9', '$q11' ]
+body: |
+  bb.0:
+    RET undef $lr
+# CHECK-LABEL: name: added_csr
+# CHECK: $q8 = INSvi64gpr
+# CHECK-NOT: $q9 =
+# CHECK: RET
+...
+---
+name: only_low_used
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $d8
+    $d0 = COPY $d8
+    RET undef $lr, implicit $d0
+# CHECK-LABEL: name: only_low_used
+# CHECK-NOT: INSvi64gpr
+# CHECK: RET
+...
+
+---
+name: resume_spilled
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0
+    $q8 = MOVIv2d_ns 255
+    B %bb.1
+  bb.1:
+    liveins: $x0
+    BL @_Unwind_Resume, csr_aarch64_aapcs, implicit-def $lr, implicit $sp, implicit $x0
+# The unwinder recovers the caller's D8 from the frame. The register itself
+# need not have a live value on this register-only exit.
+# CHECK-LABEL: name: resume_spilled
+# CHECK: bb.1:
+# CHECK: $q8 = INSvi64gpr undef $q8, 1, $xzr, implicit undef $d8
+# CHECK: BL @_Unwind_Resume,
+...

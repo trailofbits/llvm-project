@@ -231,6 +231,9 @@ private:
                         const BitVector &ScratchRegs,
                         BitVector &ClearedRegs) const override;
 
+  void addZeroCallUsedRegsSubRegs(const MachineFunction &MF,
+                                  BitVector &Candidates) const override;
+
   bool isZeroCallUsedRegsScratchReg(const MachineFunction &MF,
                                     MCRegister Reg) const override;
 
