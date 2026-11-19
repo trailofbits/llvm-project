@@ -2726,12 +2726,14 @@ fn -> other_fn -> other_fn ; fn is norecurse
     returns are supported, including integer return values in RAX and RDX.
     With `"zeroize-stack"` and `"zero-call-used-regs"="all"`, cleanup-only GNU C++
     DWARF landing pads may also resume through a direct `_Unwind_Resume` call using
-    the C calling convention. This case requires a fixed, SP-relative allocation
-    of at most 64 bytes without a frame pointer or saved registers. The exception
-    pointer stays in RDI and the allocated frame remains described to the unwinder.
-    Coverage applies to ordinary returns and explicit resume calls. An exception
-    that propagates directly out of a call can bypass both. Register allocation
-    at a different optimization level can make the same function ineligible.
+    the C calling convention. This case requires a fixed, fully allocated
+    SP-relative frame without a dedicated frame pointer. Saved GPRs must have recoverable
+    eight-byte stack slots. The cleanup moves the exception pointer to RDI,
+    restores caller values to the saved GPRs and updates their unwind rules
+    before overwriting their slots. Larger frames use the usual clearing loop.
+    The frame stays allocated at the resume call. An exception that propagates
+    directly out of a call can bypass both an ordinary return and the explicit
+    resume.
     Other exception protocols, XRay instrumentation, return thunks and LVI return
     hardening are unsupported. Ordinary tail-call optimization is disabled and
     mandatory tail calls are diagnosed. The flags sequence does not write stack

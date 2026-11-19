@@ -1,7 +1,5 @@
 ; RUN: not llc -O0 -mtriple=x86_64-unknown-linux-gnu -mattr=+sahf -verify-machineinstrs %s -o /dev/null 2>&1 | FileCheck %s
-; CHECK: error: {{.*}}in function saved_gpr {{.*}}X86 stack clearing does not support
 ; CHECK: error: {{.*}}in function frame_pointer {{.*}}X86 stack clearing does not support
-; CHECK: error: {{.*}}in function large_frame {{.*}}X86 cleanup clearing requires an allocated frame of at most 64 bytes
 ; CHECK: error: {{.*}}in function has_handler {{.*}}X86 stack clearing does not support
 ; CHECK: error: {{.*}}in function unknown_personality {{.*}}X86 stack clearing does not support
 ; CHECK: error: {{.*}}in function stack_only {{.*}}X86 stack clearing does not support
@@ -12,33 +10,8 @@ declare void @may_throw()
 declare void @clean()
 declare i32 @custom_personality(...)
 
-define i32 @saved_gpr(i32 %result) "zero-call-used-regs"="all" "zeroize-stack"="used" "zeroize-flags" personality ptr @__gxx_personality_v0 {
-  call void asm sideeffect "", "~{rbx}"()
-  %slot = alloca i32, align 4
-  store volatile i32 42, ptr %slot
-  invoke void @may_throw() to label %normal unwind label %cleanup
-normal:
-  ret i32 %result
-cleanup:
-  %exception = landingpad {ptr, i32} cleanup
-  call void @clean()
-  resume {ptr, i32} %exception
-}
-
 define i32 @frame_pointer(i32 %result) "zero-call-used-regs"="all" "zeroize-stack"="used" "zeroize-flags" "frame-pointer"="all" personality ptr @__gxx_personality_v0 {
   %slot = alloca i32, align 4
-  store volatile i32 42, ptr %slot
-  invoke void @may_throw() to label %normal unwind label %cleanup
-normal:
-  ret i32 %result
-cleanup:
-  %exception = landingpad {ptr, i32} cleanup
-  call void @clean()
-  resume {ptr, i32} %exception
-}
-
-define i32 @large_frame(i32 %result) "zero-call-used-regs"="all" "zeroize-stack"="used" "zeroize-flags" personality ptr @__gxx_personality_v0 {
-  %slot = alloca [96 x i8], align 4
   store volatile i32 42, ptr %slot
   invoke void @may_throw() to label %normal unwind label %cleanup
 normal:

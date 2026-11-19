@@ -1,6 +1,7 @@
 ; RUN: llc -O0 -mtriple=x86_64-unknown-linux-gnu -mattr=+sahf -verify-machineinstrs %s -o %t
 ; RUN: FileCheck %s < %t
 ; RUN: FileCheck --check-prefix=CFI %s < %t
+; RUN: llc -O2 -mtriple=x86_64-unknown-linux-gnu -mattr=+sahf -verify-machineinstrs %s -o - | FileCheck --check-prefix=SAVED %s
 ;
 ; A real landing pad reloads the exception object into RDI before resuming.
 ; The incoming RIP stays above the cleared 24-byte allocation, and the
@@ -31,6 +32,31 @@
 ; CFI: .cfi_def_cfa_offset 32
 ; CFI-NOT: .cfi_
 ; CFI: callq _Unwind_Resume
+
+; At -O2 RBX holds the ordinary result or the exception before clearing. The
+; unwinder must see the original caller RBX once the push slot has been wiped.
+; SAVED-LABEL: explicit_cleanup:
+; SAVED: .cfi_offset %rbx, -16
+; SAVED: callq may_throw
+; SAVED: movq 16(%rsp), %rbx
+; SAVED-NEXT: .cfi_restore %rbx
+; SAVED-NEXT: movq $0, (%rsp)
+; SAVED-NEXT: movq $0, 8(%rsp)
+; SAVED-NEXT: movq $0, 16(%rsp)
+; SAVED: .cfi_def_cfa %rsp, 8
+; SAVED: retq
+; SAVED: .cfi_def_cfa_offset 32
+; SAVED-NEXT: .cfi_offset %rbx, -16
+; SAVED: movq %rbx, %rdi
+; SAVED-NEXT: movq 16(%rsp), %rbx
+; SAVED-NEXT: .cfi_restore %rbx
+; SAVED-NEXT: movq $0, (%rsp)
+; SAVED-NEXT: movq $0, 8(%rsp)
+; SAVED-NEXT: movq $0, 16(%rsp)
+; SAVED-NOT: .cfi_
+; SAVED-NOT: %rdi
+; SAVED-NOT: %rsp
+; SAVED: callq _Unwind_Resume
 
 declare i32 @__gxx_personality_v0(...)
 declare void @may_throw()

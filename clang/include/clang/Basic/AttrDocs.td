@@ -8844,9 +8844,9 @@ protocols. AArch64 also covers scalable SVE spill storage. X86 condition-state
 clearing requires SAHF support. On X86-64 LP64 ELF, classic Clang also supports
 a cleanup-only GNU C++ DWARF landing pad that explicitly calls
 ``_Unwind_Resume`` with the C calling convention. Its fixed, SP-relative frame
-must be at most 64 bytes and have no frame pointer or saved registers. At that
-call, the compiler clears the owned frame and keeps it allocated for the
-unwinder. An exception that propagates directly out of a call can bypass this
+must be fully allocated and have no dedicated frame pointer. The compiler restores
+saved general-purpose registers and updates their unwind rules before clearing
+the owned frame. The frame stays allocated at the resume call. An exception that propagates directly out of a call can bypass this
 sequence. See the LLVM IR
 ``zeroize-stack`` and ``zeroize-flags`` documentation for the target limits.
 Register clearing uses the target implementation of ``zero_call_used_regs("all")``.
