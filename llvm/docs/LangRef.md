@@ -2735,6 +2735,11 @@ fn -> other_fn -> other_fn ; fn is norecurse
     flags OF, SF, ZF, AF, PF, and CF. Control flags and floating-point
     control/status registers are preserved. Ordinary C and fast-convention
     returns are supported, including integer return values in RAX and RDX.
+    GNU C++ DWARF handlers using the C calling convention may return normally
+    through the same clearing epilogue. Stack and flags requests remain
+    independent for these returns. This does not protect an exception that
+    propagates directly out of a call, including `__cxa_end_catch`, or a branch
+    that terminates instead of returning.
     With `"zeroize-stack"` and `"zero-call-used-regs"="all"`, cleanup-only GNU C++
     DWARF landing pads may also resume through a direct `_Unwind_Resume` call using
     the C calling convention. This case requires a fixed, fully allocated

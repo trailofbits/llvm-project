@@ -934,25 +934,60 @@ static bool hasZeroizeBlockExits(const MachineBasicBlock &MBB) {
   return true;
 }
 
-static bool hasZeroizeCleanupExits(const MachineFunction &MF) {
-  bool HasResume = false;
+static bool isZeroizeTerminateCall(const MachineInstr &MI) {
+  if (MI.getOpcode() != X86::CALL64pcrel32)
+    return false;
+  const MachineOperand &Callee = MI.getOperand(0);
+  const auto *Fn =
+      Callee.isGlobal() ? dyn_cast<Function>(Callee.getGlobal()) : nullptr;
+  return Fn && Fn->getName() == "__clang_call_terminate" &&
+         !Callee.getOffset() && Fn->getCallingConv() == CallingConv::C &&
+         Fn->doesNotReturn() && Fn->doesNotThrow();
+}
+
+enum class ZeroizeEHExits { Unsupported, OrdinaryReturns, ExplicitResume };
+
+static bool isZeroizeUnwindTransfer(const MachineInstr &MI) {
+  if (!MI.isCall())
+    return false;
+  const MachineOperand &Callee = MI.getOperand(0);
+  StringRef Name;
+  if (Callee.isGlobal())
+    Name = Callee.getGlobal()->getName();
+  else if (Callee.isSymbol())
+    Name = Callee.getSymbolName();
+  return Name == "_Unwind_Resume" || Name == "__cxa_end_cleanup";
+}
+
+static ZeroizeEHExits getZeroizeEHExits(const MachineFunction &MF) {
+  ZeroizeEHExits Exits = ZeroizeEHExits::OrdinaryReturns;
   for (const MachineBasicBlock &MBB : MF) {
-    if (!MBB.succ_empty())
-      continue;
     auto End = llvm::reverse(MBB);
     auto Exit = llvm::find_if(End, [](const MachineInstr &MI) {
       return MI.isTerminator() || MI.isCall() || MI.isInlineAsm() ||
              MI.getDesc().isTrap();
     });
+    if (llvm::any_of(MBB, [&](const MachineInstr &MI) {
+          return isZeroizeUnwindTransfer(MI) &&
+                 (Exit == End.end() || &MI != &*Exit ||
+                  !isZeroizeUnwindResume(MI));
+        }))
+      return ZeroizeEHExits::Unsupported;
+    if (!MBB.succ_empty())
+      continue;
     if (Exit == End.end())
-      return false;
+      return ZeroizeEHExits::Unsupported;
     if (isZeroizeReturn(*Exit))
       continue;
+    // A noexcept catch may terminate if ending the catch throws. There is no
+    // return to protect on that branch; unknown transfers remain unsupported.
+    if (isZeroizeTerminateCall(*Exit))
+      continue;
     if (!isZeroizeUnwindResume(*Exit))
-      return false;
-    HasResume = true;
+      return ZeroizeEHExits::Unsupported;
+    Exits = ZeroizeEHExits::ExplicitResume;
   }
-  return HasResume;
+  return Exits;
 }
 
 static bool hasSupportedZeroizeExits(const MachineFunction &MF) {
@@ -964,13 +999,23 @@ static bool hasSupportedZeroizeExits(const MachineFunction &MF) {
     return llvm::none_of(
         MF, [](const MachineBasicBlock &MBB) { return MBB.isEHPad(); });
 
-  // Preserve the allocated frame and its SP-relative CFA at the resume call.
   const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();
   if (F.getCallingConv() != CallingConv::C ||
       MF.getTarget().getMCAsmInfo().getExceptionHandlingType() !=
           ExceptionHandling::DwarfCFI ||
-      classifyEHPersonality(F.getPersonalityFn()) != EHPersonality::GNU_CXX ||
-      ST.getFrameLowering()->hasFP(MF) || !F.hasZeroizeStack() ||
+      classifyEHPersonality(F.getPersonalityFn()) != EHPersonality::GNU_CXX)
+    return false;
+
+  // A caught exception can reach an ordinary return in this frame. Only an
+  // explicit resume needs the extra retained-frame protocol below.
+  ZeroizeEHExits Exits = getZeroizeEHExits(MF);
+  if (Exits == ZeroizeEHExits::Unsupported)
+    return false;
+  if (Exits == ZeroizeEHExits::OrdinaryReturns)
+    return true;
+
+  // Preserve the allocated frame and its SP-relative CFA at the resume call.
+  if (ST.getFrameLowering()->hasFP(MF) || !F.hasZeroizeStack() ||
       !F.hasFnAttribute("zeroize-flags") ||
       !F.hasFnAttribute("zero-call-used-regs") ||
       F.getFnAttribute("zero-call-used-regs").getValueAsString() != "all")
@@ -985,7 +1030,7 @@ static bool hasSupportedZeroizeExits(const MachineFunction &MF) {
       return false;
     HasCleanup = true;
   }
-  return HasCleanup && hasZeroizeCleanupExits(MF);
+  return HasCleanup;
 }
 
 static void zeroizeLiveUnitsAt(LiveRegUnits &Live, const MachineBasicBlock &MBB,
