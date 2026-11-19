@@ -2753,8 +2753,9 @@ fn -> other_fn -> other_fn ; fn is norecurse
     With `"zeroize-stack"` and `"zero-call-used-regs"="all"`, cleanup-only GNU C++
     DWARF landing pads may also resume through a direct `_Unwind_Resume` call using
     the C calling convention. This case requires a fixed, fully allocated
-    SP-relative frame without a dedicated frame pointer. Saved GPRs must have recoverable
-    eight-byte stack slots. The cleanup moves the exception pointer to RDI,
+    frame with recoverable eight-byte stack slots for saved GPRs. A dedicated
+    frame pointer is restored after switching the final CFA to RSP. The cleanup
+    moves the exception pointer to RDI,
     restores caller values to the saved GPRs and updates their unwind rules
     before overwriting their slots. Larger frames use the usual clearing loop.
     The frame stays allocated at the resume call. An exception that propagates
