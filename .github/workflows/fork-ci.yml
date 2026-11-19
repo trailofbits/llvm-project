@@ -14,6 +14,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  zeroization-verifier:
+    name: AArch64 zeroization verifier (expensive checks)
+    if: >-
+      github.repository == 'trailofbits/llvm-project' &&
+      (github.event_name != 'pull_request' || github.event.action != 'closed')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout LLVM
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            cmake
+            llvm
+            libc
+            third-party
+
+      - name: Configure and build the verifier
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang lld cmake ninja-build
+          cmake -S llvm -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=/usr/bin/clang \
+            -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+            -DLLVM_TARGETS_TO_BUILD=AArch64 \
+            -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DLLVM_ENABLE_EXPENSIVE_CHECKS=ON \
+            -DLLVM_ENABLE_LLD=ON \
+            -DLLVM_LINK_LLVM_DYLIB=ON \
+            -DLLVM_PARALLEL_LINK_JOBS=1
+          cmake --build build --parallel "$(nproc)" --target llvm-test-depends
+
+      - name: Check final register and flag values
+        run: |
+          set -euo pipefail
+          build/bin/llvm-lit -sv \
+            llvm/test/CodeGen/AArch64/zero-call-used-regs.ll \
+            llvm/test/CodeGen/AArch64/zeroize-flags.ll \
+            llvm/test/CodeGen/AArch64/verify-zeroize-flags.mir \
+            llvm/test/CodeGen/AArch64/verify-zeroized-registers.mir
+
   llvm-clang:
     name: LLVM and Clang (Linux, all targets)
     if: >-

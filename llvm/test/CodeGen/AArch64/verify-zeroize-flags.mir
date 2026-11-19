@@ -3,6 +3,7 @@
 # RUN: not llc -mtriple=aarch64-linux-gnu -start-after=unpack-mi-bundles -verify-machineinstrs %t/bad.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD
 # RUN: llc -mtriple=aarch64-linux-gnu -start-after=unpack-mi-bundles -verify-machineinstrs=0 -filetype=obj %t/bad.mir -o %t/unchecked.o
 # RUN: not llc -mtriple=aarch64-linux-gnu -start-after=unpack-mi-bundles -verify-machineinstrs -filetype=obj %t/bad.mir -o %t/checked.o 2>&1 | FileCheck %s --check-prefix=BAD
+# RUN: %if expensive_checks %{ not llc -mtriple=aarch64-linux-gnu -start-after=unpack-mi-bundles -filetype=obj %t/bad.mir -o %t/default.o 2>&1 | FileCheck %s --check-prefix=BAD %}
 #
 # The IR requests clearing. Start after the last transform so the machine-level
 # fixtures, including incorrect ones, reach the ordinary assembly/object entry.
