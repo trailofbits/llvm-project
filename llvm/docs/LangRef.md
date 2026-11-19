@@ -2724,10 +2724,17 @@ fn -> other_fn -> other_fn ; fn is norecurse
     flags OF, SF, ZF, AF, PF, and CF. Control flags and floating-point
     control/status registers are preserved. Ordinary C and fast-convention
     returns are supported, including integer return values in RAX and RDX.
-    Exception handling, XRay instrumentation, return thunks, LVI return
-    hardening, and other exit protocols are unsupported. Ordinary tail-call
-    optimization is disabled;
-    mandatory tail calls are diagnosed. The sequence does not write stack
+    With `"zeroize-stack"` and `"zero-call-used-regs"="all"`, cleanup-only GNU C++
+    DWARF landing pads may also resume through a direct `_Unwind_Resume` call using
+    the C calling convention. This case requires a fixed, SP-relative allocation
+    of at most 64 bytes without a frame pointer or saved registers. The exception
+    pointer stays in RDI and the allocated frame remains described to the unwinder.
+    Coverage applies to ordinary returns and explicit resume calls. An exception
+    that propagates directly out of a call can bypass both. Register allocation
+    at a different optimization level can make the same function ineligible.
+    Other exception protocols, XRay instrumentation, return thunks and LVI return
+    hardening are unsupported. Ordinary tail-call optimization is disabled and
+    mandatory tail calls are diagnosed. The flags sequence does not write stack
     memory after stack clearing.
 
     AArch64 clears NZCV with `MSR NZCV, XZR` after other clearing. It preserves
@@ -2788,13 +2795,17 @@ fn -> other_fn -> other_fn ; fn is norecurse
     frame pointer. Both modes clear the whole owned frame, including red-zone
     storage, padding, saved-register slots, and reserved outgoing arguments;
     the incoming return address and caller-owned arguments are excluded.
-    Saved registers are restored before their slots are erased, and storage is
-    released afterward. Dynamic or realigned frames, SafeStack, split stacks,
-    variadic functions, XRay instrumentation or events, flag intrinsics
-    requiring transient stack storage,
-    exceptional exits, return thunks, and LVI return hardening are unsupported.
-    Clearing loops require two dead caller-saved
-    registers and dead condition flags. Ordinary tail calls are disabled,
+    On an ordinary return, saved registers are restored before their slots are
+    erased and the frame is then released. The combined request also supports
+    the narrow GNU C++ DWARF cleanup configuration described under
+    `"zeroize-flags"`. At the resume call the owned frame is erased but stays
+    allocated, preserving the call site's CFA and the unwinder's access to the
+    caller's incoming return address. An exception that bypasses the explicit
+    resume call also bypasses its clearing sequence. Dynamic or realigned frames,
+    SafeStack, split stacks, variadic functions, XRay instrumentation or events,
+    flag intrinsics requiring transient stack storage, other exceptional exits,
+    return thunks, and LVI return hardening are unsupported. Clearing loops
+    require two dead caller-saved registers and dead condition flags. Ordinary tail calls are disabled,
     and mandatory tail calls are diagnosed. This stack clear alone does not
     request final condition-flag clearing.
 

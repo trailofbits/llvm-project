@@ -34,6 +34,7 @@
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCObjectFileInfo.h"
@@ -895,8 +896,7 @@ static bool hasZeroizeABI(const MachineFunction &MF) {
 
 static bool hasZeroizeReturnProtocol(const MachineFunction &MF) {
   const Function &F = MF.getFunction();
-  return !F.hasPersonalityFn() &&
-         !F.hasFnAttribute(Attribute::FnRetThunkExtern) &&
+  return !F.hasFnAttribute(Attribute::FnRetThunkExtern) &&
          !F.hasFnAttribute(Attribute::ShadowCallStack) &&
          !MF.getSubtarget<X86Subtarget>().useLVIControlFlowIntegrity();
 }
@@ -912,9 +912,21 @@ static bool mayInstrumentZeroizeExits(const Function &F) {
   return F.hasFnAttribute("xray-instruction-threshold");
 }
 
-static bool hasZeroizeBlockExits(const MachineBasicBlock &MBB) {
-  if (MBB.isEHPad())
+static bool isZeroizeUnwindResume(const MachineInstr &MI) {
+  if (MI.getOpcode() != X86::CALL64pcrel32 || !MI.getParent()->succ_empty() ||
+      !MI.getMF()->getFunction().hasPersonalityFn())
     return false;
+  const MachineOperand &Callee = MI.getOperand(0);
+  const auto *Fn =
+      Callee.isGlobal() ? dyn_cast<Function>(Callee.getGlobal()) : nullptr;
+  return Fn && Fn->isDeclaration() && Fn->getName() == "_Unwind_Resume" &&
+         !Callee.getOffset() && Fn->getCallingConv() == CallingConv::C &&
+         Fn->getReturnType()->isVoidTy() && !Fn->isVarArg() &&
+         Fn->arg_size() == 1 && Fn->getArg(0)->getType()->isPointerTy() &&
+         MI.readsRegister(X86::RDI, /*TRI=*/nullptr);
+}
+
+static bool hasZeroizeBlockExits(const MachineBasicBlock &MBB) {
   for (const MachineInstr &MI : MBB)
     if (MI.isEHScopeReturn() ||
         (MI.isReturn() && (!isZeroizeReturn(MI) || !MBB.succ_empty())))
@@ -922,9 +934,60 @@ static bool hasZeroizeBlockExits(const MachineBasicBlock &MBB) {
   return true;
 }
 
-static bool hasOrdinaryZeroizeExits(const MachineFunction &MF) {
-  return !mayInstrumentZeroizeExits(MF.getFunction()) && hasZeroizeABI(MF) &&
-         hasZeroizeReturnProtocol(MF) && llvm::all_of(MF, hasZeroizeBlockExits);
+static bool hasZeroizeCleanupExits(const MachineFunction &MF) {
+  bool HasResume = false;
+  for (const MachineBasicBlock &MBB : MF) {
+    if (!MBB.succ_empty())
+      continue;
+    auto End = llvm::reverse(MBB);
+    auto Exit = llvm::find_if(End, [](const MachineInstr &MI) {
+      return MI.isTerminator() || MI.isCall() || MI.isInlineAsm() ||
+             MI.getDesc().isTrap();
+    });
+    if (Exit == End.end())
+      return false;
+    if (isZeroizeReturn(*Exit))
+      continue;
+    if (!isZeroizeUnwindResume(*Exit))
+      return false;
+    HasResume = true;
+  }
+  return HasResume;
+}
+
+static bool hasSupportedZeroizeExits(const MachineFunction &MF) {
+  const Function &F = MF.getFunction();
+  if (!hasZeroizeABI(MF) || !hasZeroizeReturnProtocol(MF) ||
+      mayInstrumentZeroizeExits(F) || !llvm::all_of(MF, hasZeroizeBlockExits))
+    return false;
+  if (!F.hasPersonalityFn())
+    return llvm::none_of(
+        MF, [](const MachineBasicBlock &MBB) { return MBB.isEHPad(); });
+
+  // At a DWARF resume call, preserve the allocated frame and its CFA. A
+  // frame pointer or saved register would need an additional recovery rule.
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();
+  if (F.getCallingConv() != CallingConv::C ||
+      MF.getTarget().getMCAsmInfo().getExceptionHandlingType() !=
+          ExceptionHandling::DwarfCFI ||
+      classifyEHPersonality(F.getPersonalityFn()) != EHPersonality::GNU_CXX ||
+      ST.getFrameLowering()->hasFP(MF) || !MFI.getCalleeSavedInfo().empty() ||
+      !F.hasZeroizeStack() || !F.hasFnAttribute("zeroize-flags") ||
+      !F.hasFnAttribute("zero-call-used-regs") ||
+      F.getFnAttribute("zero-call-used-regs").getValueAsString() != "all")
+    return false;
+
+  bool HasCleanup = false;
+  for (const BasicBlock &BB : F) {
+    if (!BB.isEHPad())
+      continue;
+    const LandingPadInst *LP = BB.getLandingPadInst();
+    if (!LP || !LP->isCleanup() || LP->getNumClauses())
+      return false;
+    HasCleanup = true;
+  }
+  return HasCleanup && hasZeroizeCleanupExits(MF);
 }
 
 static void zeroizeLiveUnitsAt(LiveRegUnits &Live, const MachineBasicBlock &MBB,
@@ -936,7 +999,7 @@ static void zeroizeLiveUnitsAt(LiveRegUnits &Live, const MachineBasicBlock &MBB,
 }
 
 bool X86FrameLowering::supportsZeroizeFlags(const MachineFunction &MF) const {
-  return STI.canUseLAHFSAHF() && hasOrdinaryZeroizeExits(MF);
+  return STI.canUseLAHFSAHF() && hasSupportedZeroizeExits(MF);
 }
 
 bool X86FrameLowering::prepareZeroizeFlags(MachineBasicBlock &MBB,
@@ -948,7 +1011,8 @@ bool X86FrameLowering::prepareZeroizeFlags(MachineBasicBlock &MBB,
         DiagnosticInfoUnsupported{MF.getFunction(), Message});
     return false;
   };
-  if (InsertPt == MBB.end() || !isZeroizeReturn(*InsertPt))
+  if (InsertPt == MBB.end() ||
+      (!isZeroizeReturn(*InsertPt) && !isZeroizeUnwindResume(*InsertPt)))
     return Fail("X86 flags clearing requires an ordinary return");
   if (MF.getRegInfo().isReserved(X86::RAX))
     return Fail("X86 flags clearing needs an unreserved RAX register");
@@ -1045,7 +1109,7 @@ static bool hasZeroizeStackInstructions(const MachineFunction &MF) {
 bool X86FrameLowering::supportsZeroizeStack(const MachineFunction &MF) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   return hasZeroizeStackLayout(MF) && hasReservedCallFrame(MF) &&
-         hasOrdinaryZeroizeExits(MF) && hasZeroizeStackProtocol(MF) &&
+         hasSupportedZeroizeExits(MF) && hasZeroizeStackProtocol(MF) &&
          hasZeroizeFrameObjects(MFI) && hasZeroizeStackInstructions(MF);
 }
 
@@ -1260,7 +1324,8 @@ void X86FrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
     MF.getFunction().getContext().diagnose(
         DiagnosticInfoUnsupported{MF.getFunction(), Message});
   };
-  if (InsertPt == MBB.end() || !isZeroizeReturn(*InsertPt)) {
+  if (InsertPt == MBB.end() ||
+      (!isZeroizeReturn(*InsertPt) && !isZeroizeUnwindResume(*InsertPt))) {
     Fail("X86 stack clearing requires an ordinary return");
     return;
   }
@@ -1270,6 +1335,18 @@ void X86FrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
     return;
   }
   uint64_t Size = Extent->Ranges.empty() ? 0 : Extent->Ranges.front().Size;
+  if (isZeroizeUnwindResume(*InsertPt)) {
+    // CALL pushes its own return address just below RSP. Keep the owned
+    // frame allocated and the incoming return address outside it; the
+    // unwinder still uses this call site's SP-relative CFA and saved RIP.
+    if (Size > 64 || Size != MF.getFrameInfo().getStackSize()) {
+      Fail("X86 cleanup clearing requires an allocated frame of at most 64 "
+           "bytes");
+      return;
+    }
+    emitZeroizeImmediateStores(MBB, InsertPt, 0, Size);
+    return;
+  }
   SmallVector<MCRegister, 2> Work;
   if (Size > 64) {
     auto LoopScratch = getZeroizeLoopScratch(MBB, InsertPt);
