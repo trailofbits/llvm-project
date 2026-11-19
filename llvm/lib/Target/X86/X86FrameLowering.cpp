@@ -964,16 +964,14 @@ static bool hasSupportedZeroizeExits(const MachineFunction &MF) {
     return llvm::none_of(
         MF, [](const MachineBasicBlock &MBB) { return MBB.isEHPad(); });
 
-  // At a DWARF resume call, preserve the allocated frame and its CFA. A
-  // frame pointer or saved register would need an additional recovery rule.
-  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  // Preserve the allocated frame and its SP-relative CFA at the resume call.
   const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();
   if (F.getCallingConv() != CallingConv::C ||
       MF.getTarget().getMCAsmInfo().getExceptionHandlingType() !=
           ExceptionHandling::DwarfCFI ||
       classifyEHPersonality(F.getPersonalityFn()) != EHPersonality::GNU_CXX ||
-      ST.getFrameLowering()->hasFP(MF) || !MFI.getCalleeSavedInfo().empty() ||
-      !F.hasZeroizeStack() || !F.hasFnAttribute("zeroize-flags") ||
+      ST.getFrameLowering()->hasFP(MF) || !F.hasZeroizeStack() ||
+      !F.hasFnAttribute("zeroize-flags") ||
       !F.hasFnAttribute("zero-call-used-regs") ||
       F.getFnAttribute("zero-call-used-regs").getValueAsString() != "all")
     return false;
@@ -1189,6 +1187,28 @@ static void restoreBeforeZeroize(MachineBasicBlock &MBB,
     Restore(X86::RBP, MFI.getStackSize() - 8);
 }
 
+// At an explicit resume, the unwinder must recover a restored GPR from the
+// register itself after its spill slot has been erased.
+static bool canRestoreCleanupSaves(const MachineInstr &Resume, int64_t Size) {
+  const MachineFunction &MF = *Resume.getMF();
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  if (!MF.needsFrameMoves())
+    return false;
+  SmallVector<int64_t, 6> Offsets;
+  for (const CalleeSavedInfo &CSI : MFI.getCalleeSavedInfo()) {
+    int FI = CSI.getFrameIdx();
+    int64_t Offset = Size + 8 + MFI.getObjectOffset(FI);
+    if (!CSI.isRestored() ||
+        Resume.modifiesRegister(CSI.getReg(),
+                                MF.getSubtarget().getRegisterInfo()) ||
+        MFI.getObjectSize(FI) != 8 || Offset < 0 || Offset + 8 > Size ||
+        Offset % 8 || llvm::is_contained(Offsets, Offset))
+      return false;
+    Offsets.push_back(Offset);
+  }
+  return true;
+}
+
 static MachineBasicBlock *emitZeroizeLoop(MachineBasicBlock &MBB,
                                           MachineBasicBlock::iterator InsertPt,
                                           MCRegister Ptr, MCRegister Count) {
@@ -1335,16 +1355,10 @@ void X86FrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
     return;
   }
   uint64_t Size = Extent->Ranges.empty() ? 0 : Extent->Ranges.front().Size;
-  if (isZeroizeUnwindResume(*InsertPt)) {
-    // CALL pushes its own return address just below RSP. Keep the owned
-    // frame allocated and the incoming return address outside it; the
-    // unwinder still uses this call site's SP-relative CFA and saved RIP.
-    if (Size > 64 || Size != MF.getFrameInfo().getStackSize()) {
-      Fail("X86 cleanup clearing requires an allocated frame of at most 64 "
-           "bytes");
-      return;
-    }
-    emitZeroizeImmediateStores(MBB, InsertPt, 0, Size);
+  bool IsResume = isZeroizeUnwindResume(*InsertPt);
+  if (IsResume && (Size != MF.getFrameInfo().getStackSize() ||
+                   !canRestoreCleanupSaves(*InsertPt, Size))) {
+    Fail("X86 cleanup clearing cannot recover the caller from this frame");
     return;
   }
   SmallVector<MCRegister, 2> Work;
@@ -1357,16 +1371,24 @@ void X86FrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
     Work = std::move(*LoopScratch);
   }
   restoreBeforeZeroize(MBB, InsertPt);
+  if (IsResume) {
+    // The unwinder's DW_CFA_restore rules now recover these incoming values
+    // from the physical registers, including through a split clearing loop.
+    for (const CalleeSavedInfo &CSI : MF.getFrameInfo().getCalleeSavedInfo())
+      MachineInstrBuilder(MF, &*InsertPt)
+          .addReg(CSI.getReg(), RegState::Implicit);
+  }
   MachineBasicBlock *Tail =
       emitZeroizeStores(MBB, InsertPt, Size, Work, ScratchRegs);
-  if (Tail == &MBB) {
-    releaseZeroizedFrame(MBB, InsertPt);
-    return;
+  // A nested resume CALL pushes its own RIP below the allocated frame. Keep
+  // the caller's CFA and incoming RIP valid throughout unwinding.
+  if (!IsResume)
+    releaseZeroizedFrame(*Tail, InsertPt);
+  if (Tail != &MBB) {
+    MachineBasicBlock *Body = Tail->getSinglePredecessor();
+    assert(Body && "expected a single zeroization loop predecessor");
+    fullyRecomputeLiveIns({Tail, Body});
   }
-  releaseZeroizedFrame(*Tail, InsertPt);
-  MachineBasicBlock *Body = Tail->getSinglePredecessor();
-  assert(Body && "expected a single zeroization loop predecessor");
-  fullyRecomputeLiveIns({Tail, Body});
 }
 
 void X86FrameLowering::emitStackProbe(
