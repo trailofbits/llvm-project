@@ -8841,7 +8841,11 @@ condition-state clearing.
 **Current implementation limits.** ARM32, AArch64 ELF, and X86-64 LP64 ELF support
 stack and condition-state clearing for supported frames and ordinary return
 protocols. AArch64 also covers scalable SVE spill storage. X86 condition-state
-clearing requires SAHF support. On X86-64 LP64 ELF, classic Clang also supports
+clearing requires SAHF support. Ordinary returns after internal catch handlers
+are covered under those same frame limits. On X86-64 this requires GNU C++ DWARF
+handling and the C calling convention. A call that propagates an exception out
+of the function, including ``__cxa_end_catch``, can bypass the ordinary return.
+On X86-64 LP64 ELF, classic Clang also supports
 a cleanup-only GNU C++ DWARF landing pad that explicitly calls
 ``_Unwind_Resume`` with the C calling convention. Its fixed, SP-relative frame
 must be fully allocated and have no dedicated frame pointer. The compiler restores
