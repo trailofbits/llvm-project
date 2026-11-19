@@ -1,4 +1,7 @@
 # RUN: split-file %s %t
+# RUN: not llc -mtriple=aarch64-linux-gnu -mattr=+pauth -start-after=unpack-mi-bundles -verify-machineinstrs %t/signed.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=SIGNED
+# SIGNED: in function lost_auth {{.*}}missing matching authenticated return
+# SIGNED: in function wrong_key {{.*}}missing matching authenticated return
 # RUN: llc -mtriple=aarch64-linux-gnu -start-after=unpack-mi-bundles -verify-machineinstrs %t/good.mir -o - | FileCheck %s --check-prefix=GOOD
 # RUN: not llc -mtriple=aarch64-linux-gnu -start-after=unpack-mi-bundles -verify-machineinstrs %t/bad.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD
 # RUN: llc -mtriple=aarch64-linux-gnu -start-after=unpack-mi-bundles -verify-machineinstrs=0 -filetype=obj %t/bad.mir -o %t/unchecked.o
@@ -150,4 +153,25 @@ body: |
     RET undef $lr, implicit $nzcv
   bb.1 (machine-block-address-taken):
     RET undef $lr, implicit $nzcv
+...
+
+#--- signed.mir
+--- |
+  define void @lost_auth() #0 { ret void }
+  define void @wrong_key() #0 { ret void }
+  attributes #0 = { "sign-return-address"="all" "zeroize-stack"="used" "zeroize-flags" }
+...
+---
+name: lost_auth
+body: |
+  bb.0:
+    MSR 55824, $xzr, implicit-def $nzcv
+    RET undef $lr, implicit $nzcv
+...
+---
+name: wrong_key
+body: |
+  bb.0:
+    MSR 55824, $xzr, implicit-def $nzcv
+    RETAB implicit $lr, implicit $sp, implicit-def $lr, implicit $nzcv
 ...

@@ -2688,8 +2688,9 @@ fn -> other_fn -> other_fn ; fn is norecurse
     (X86 LVI) or an authentication check (AArch64 tail calls).
 
     With machine verification enabled, fixed-width AArch64 ELF checks an
-    explicit `"all"` request at ordinary unsigned returns through LR and at
-    the outgoing Android shadow-call-stack `_Unwind_Resume` call described
+    explicit `"all"` request at ordinary returns through LR, at the signed
+    stack-clearing returns described below, and at the outgoing Android
+    shadow-call-stack `_Unwind_Resume` call described
     below. The backend records each exit's selected registers and original
     interface before inserting register clears. Immediately before emission it
     checks that the required bits are zero on every incoming path. This covers
@@ -2698,7 +2699,7 @@ fn -> other_fn -> other_fn ; fn is norecurse
     Scalar FP targets without Advanced SIMD are included. At the resume call
     the check precedes the call's register clobbers and excludes the X0
     exception argument. Scalable state, streaming mode, tail transfers, and
-    instrumented or authenticated returns are outside this verification scope.
+    instrumented returns are outside this verification scope.
 
     On X86, vector selection follows the function's enabled target features:
     SSE enables the 128-bit `XMM` width, AVX adds the 256-bit `YMM` width, and
@@ -2779,7 +2780,12 @@ fn -> other_fn -> other_fn ; fn is norecurse
     emission that an NZCV clear reaches each supported machine return and the
     supported outgoing Android resume call on every incoming path. The flags-clearing sequence preserves FPCR, FPSR and
     execution-control state. Ordinary ELF C, fast, vector PCS,
-    and SVE vector PCS returns are supported. Signed returns, SME streaming
+    and SVE vector PCS returns are supported. For functions that also request
+    stack clearing, the fixed-width C calling convention supports ordinary
+    `RETAA` and `RETAB` returns on ELF targets with hardware pointer
+    authentication and without SVE, SME, or a shadow call stack. These returns
+    authenticate LR using the restored entry SP after clearing. Signing that
+    uses an additional PC discriminator, other signing protocols, SME streaming
     or ZA/ZT0 protocols, Windows,
     and other calling conventions are diagnosed. XRay entry/exit instrumentation
     is unsupported because it can run after clearing; an explicit `xray-never`
@@ -2869,9 +2875,9 @@ fn -> other_fn -> other_fn ; fn is norecurse
     variadic functions, split SVE layouts, XRay custom/typed events, and the exit
     protocols excluded by AArch64 flags clearing are unsupported. XRay events
     use storage outside the tracked frame. Dynamic layouts need additional
-    extent tracking; PAC and SME require separate proofs for late instructions
-    and vector-length changes. Unsupported layouts and insufficient scratch
-    registers are diagnosed rather than partially cleared.
+    extent tracking. Other PAC and SME protocols require separate proofs for
+    late instructions and vector-length changes. Unsupported layouts and
+    insufficient scratch registers are diagnosed rather than partially cleared.
 
     On AArch64 Android API 29 and later, fixed-frame C-convention functions
     compiled with ShadowCallStack, reserved X18 and without SVE also support

@@ -1,5 +1,7 @@
 ; RUN: not llc -mtriple=aarch64-unknown-linux-gnu -mattr=+sve,+sme,+pauth %s -o /dev/null 2>&1 | \
 ; RUN: FileCheck %s
+; RUN: llvm-extract -S --func=signed_with_pc %s -o %t.ll
+; RUN: not llc -mtriple=aarch64-unknown-linux-gnu -mattr=+pauth %t.ll -o /dev/null 2>&1 | FileCheck %s --check-prefix=PC
 
 ; CHECK: error: {{.*}}in function dynamic {{.*}}AArch64 stack clearing does not support
 define void @dynamic(i64 %n) "zeroize-stack"="used" {
@@ -23,6 +25,12 @@ define void @safe_stack() safestack "zeroize-stack"="used" {
 ; CHECK: error: {{.*}}in function signed_return {{.*}}AArch64 stack clearing does not support
 ; CHECK: error: {{.*}}in function signed_return {{.*}}"zeroize-flags" is not supported
 define void @signed_return() "sign-return-address"="all" "zeroize-stack"="used" "zeroize-flags" {
+  ret void
+}
+
+; An additional PC discriminator may require a scratch register after clearing.
+; PC: error: {{.*}}in function signed_with_pc {{.*}}"zeroize-flags" is not supported
+define void @signed_with_pc() "branch-protection-pauth-lr" "sign-return-address"="all" "zeroize-stack"="used" "zeroize-flags" {
   ret void
 }
 

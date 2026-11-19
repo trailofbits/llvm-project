@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AArch64InstrInfo.h"
+#include "AArch64MachineFunctionInfo.h"
 #include "AArch64Subtarget.h"
 #include "AArch64Zeroization.h"
 #include "Utils/AArch64BaseInfo.h"
@@ -285,6 +286,16 @@ bool verifyExit(const MachineInstr &MI, KnownZero Known, const Checks &Check,
                 bool Resume) {
   bool Ordinary =
       MI.getOpcode() == AArch64::RET_ReallyLR || MI.getOpcode() == AArch64::RET;
+  const MachineFunction &MF = *MI.getMF();
+  const auto &AFI = *MF.getInfo<AArch64FunctionInfo>();
+  if (!Resume && MF.getFunction().hasZeroizeStack() &&
+      AFI.shouldSignReturnAddress(MF)) {
+    unsigned Expected =
+        AFI.shouldSignWithBKey() ? AArch64::RETAB : AArch64::RETAA;
+    if (MI.getOpcode() != Expected)
+      return report(MI, "missing matching authenticated return");
+    Ordinary = true;
+  }
   if (Check.Flags && !Ordinary && !Resume)
     return report(MI, "unsupported final return protocol");
   StringRef Site = Resume ? "outgoing _Unwind_Resume" : "return";

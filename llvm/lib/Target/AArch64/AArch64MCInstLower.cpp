@@ -378,10 +378,12 @@ void AArch64MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   OutMI.setOpcode(MI->getOpcode());
 
   for (const MachineOperand &MO : MI->operands()) {
-    // Register verification records are MIR-only at both kinds of exit.
-    if (MO.isMetadata() && (MI->getOpcode() == AArch64::RET ||
-                            (MI->getOpcode() == AArch64::BL &&
-                             isAArch64ZeroizationObligation(MO))))
+    // Verification records stay in MIR, including when authentication folds
+    // the original RET into RETAA or RETAB.
+    if (MO.isMetadata() &&
+        (MI->getOpcode() == AArch64::RET ||
+         ((MI->isReturn() || MI->getOpcode() == AArch64::BL) &&
+          isAArch64ZeroizationObligation(MO))))
       continue;
     MCOperand MCOp;
     if (lowerOperand(MO, MCOp))

@@ -122,12 +122,19 @@ bool llvm::isAArch64ZeroizeShadowResume(const MachineInstr &MI) {
 static bool hasSupportedZeroizeABI(const MachineFunction &MF) {
   const Function &F = MF.getFunction();
   const auto &AFI = *MF.getInfo<AArch64FunctionInfo>();
-  // PAC and SME can insert work after PEI or change the vector length used by
-  // the frame. Their exit protocols need separate ordering and extent proofs.
+  if (AFI.shouldSignReturnAddress(MF)) {
+    // RETAA/RETAB authenticate LR with the restored entry SP. Neither uses a
+    // scratch register. Other PAC protocols can insert work after clearing.
+    const auto &STI = MF.getSubtarget<AArch64Subtarget>();
+    if (!F.hasZeroizeStack() || F.getCallingConv() != CallingConv::C ||
+        !STI.hasPAuth() || STI.hasSVE() || STI.hasSME() ||
+        AFI.branchProtectionPAuthLR() || AFI.getArgumentStackToRestore() ||
+        F.hasFnAttribute(Attribute::ShadowCallStack))
+      return false;
+  }
   return MF.getTarget().getTargetTriple().isOSBinFormatELF() &&
          hasOrdinaryZeroizeCallingConvention(F) &&
-         !AFI.shouldSignReturnAddress(MF) && !hasSMEZeroizeProtocol(AFI) &&
-         !AFI.hasSwiftAsyncContext() &&
+         !hasSMEZeroizeProtocol(AFI) && !AFI.hasSwiftAsyncContext() &&
          (!F.hasFnAttribute(Attribute::ShadowCallStack) ||
           hasAndroidShadowCallStack(MF)) &&
          !mayInstrumentZeroizeExits(F);
@@ -563,5 +570,15 @@ public:
 void AArch64FrameLowering::emitZeroizeStack(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator InsertPt,
     BitVector &ScratchRegs) const {
+  MachineInstr &Exit = *InsertPt;
   AArch64StackClearEmitter(MBB, InsertPt, *this).emit(ScratchRegs);
+  const MachineFunction &MF = *MBB.getParent();
+  if (MF.getInfo<AArch64FunctionInfo>()->shouldSignReturnAddress(MF) &&
+      !shouldSignReturnAddressEverywhere(MF)) {
+    // Our teardown replaces the ordinary frame epilogue. A clearing loop can
+    // move the return into a new block. Authenticate in that block.
+    MF.getSubtarget<AArch64Subtarget>()
+        .getInstrInfo()
+        ->createPauthEpilogueInstr(*Exit.getParent(), Exit.getDebugLoc());
+  }
 }
