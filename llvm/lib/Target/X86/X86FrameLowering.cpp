@@ -17,6 +17,7 @@
 #include "X86InstrInfo.h"
 #include "X86MachineFunctionInfo.h"
 #include "X86Subtarget.h"
+#include "X86ZeroizeLVIReturn.h"
 #include "X86TargetMachine.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/CFIInstBuilder.h"
@@ -911,9 +912,23 @@ static bool hasZeroizeABI(const MachineFunction &MF) {
 
 static bool hasZeroizeReturnProtocol(const MachineFunction &MF) {
   const Function &F = MF.getFunction();
-  return !F.hasFnAttribute(Attribute::FnRetThunkExtern) &&
-         !F.hasFnAttribute(Attribute::ShadowCallStack) &&
-         !MF.getSubtarget<X86Subtarget>().useLVIControlFlowIntegrity();
+  if (F.hasFnAttribute(Attribute::FnRetThunkExtern) ||
+      F.hasFnAttribute(Attribute::ShadowCallStack))
+    return false;
+  if (!MF.getSubtarget<X86Subtarget>().useLVIControlFlowIntegrity())
+    return true;
+  if (!isX86ZeroizeLVIReturn(MF))
+    return false;
+  bool HasReturn = false;
+  for (const MachineBasicBlock &MBB : MF) {
+    if (!MBB.succ_empty())
+      continue;
+    auto Last = MBB.getLastNonDebugInstr();
+    if (Last == MBB.end() || !isZeroizeReturn(*Last))
+      return false;
+    HasReturn = true;
+  }
+  return HasReturn;
 }
 
 static bool mayInstrumentZeroizeExits(const Function &F) {

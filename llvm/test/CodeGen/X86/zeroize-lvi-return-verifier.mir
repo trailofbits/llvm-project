@@ -1,0 +1,15 @@
+# RUN: llc -mtriple=x86_64-linux-gnu -mattr=+sahf,+lvi-cfi -O2 -verify-machineinstrs -save-temp-labels -stop-after=unpack-mi-bundles %S/zeroize-lvi-return.ll -o %t.mir
+# RUN: llc -mtriple=x86_64-linux-gnu -mattr=+sahf,+lvi-cfi -start-after=unpack-mi-bundles -filetype=obj -verify-machineinstrs %t.mir -o %t.o
+# RUN: sed '/^    \$rcx = frame-destroy POP64r/{p;s/.*/    $cl = MOV8ri 3/;}' %t.mir > %t.partial.mir
+# RUN: not llc -mtriple=x86_64-linux-gnu -mattr=+sahf,+lvi-cfi -start-after=unpack-mi-bundles -filetype=obj -verify-machineinstrs=0 %t.partial.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: sed 's/JMP64r \$rcx/JMP64r \$rdx/' %t.mir > %t.target.mir
+# RUN: not llc -mtriple=x86_64-linux-gnu -mattr=+sahf,+lvi-cfi -start-after=unpack-mi-bundles -filetype=obj -verify-machineinstrs=0 %t.target.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: sed '/^    LFENCE/d' %t.mir > %t.fence.mir
+# RUN: not llc -mtriple=x86_64-linux-gnu -mattr=+sahf,+lvi-cfi -start-after=unpack-mi-bundles -filetype=obj -verify-machineinstrs=0 %t.fence.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: sed '/^    FAKE_USE/{h;s/.*/    $cl = MOV8ri 3/;p;g;}' %t.mir > %t.pre.mir
+# RUN: not llc -mtriple=x86_64-linux-gnu -mattr=+sahf,+lvi-cfi -start-after=unpack-mi-bundles -filetype=obj -verify-machineinstrs=0 %t.pre.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: sed -e 's/\$rcx = frame-destroy POP64r/\$cx = frame-destroy POP16r/' -e '/POP16r/s/\$rsp/$esp/g' %t.mir > %t.width.mir
+# RUN: not llc -mtriple=x86_64-linux-gnu -mattr=+sahf,+lvi-cfi -start-after=unpack-mi-bundles -filetype=obj -verify-machineinstrs=0 %t.width.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: sed 's/^    JMP64r \$rcx.*/    JMP64r $rcx, implicit $rcx/' %t.mir > %t.live.mir
+# RUN: not llc -mtriple=x86_64-linux-gnu -mattr=+sahf,+lvi-cfi -start-after=unpack-mi-bundles -filetype=obj -verify-machineinstrs=0 %t.live.mir -o /dev/null 2>&1 | FileCheck %s
+# CHECK: cannot verify the protected X86 LVI return transfer
