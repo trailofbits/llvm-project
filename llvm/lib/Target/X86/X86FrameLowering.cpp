@@ -1014,7 +1014,6 @@ static bool hasSupportedZeroizeExits(const MachineFunction &MF) {
     return llvm::none_of(
         MF, [](const MachineBasicBlock &MBB) { return MBB.isEHPad(); });
 
-  const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();
   if (F.getCallingConv() != CallingConv::C ||
       MF.getTarget().getMCAsmInfo().getExceptionHandlingType() !=
           ExceptionHandling::DwarfCFI ||
@@ -1030,8 +1029,7 @@ static bool hasSupportedZeroizeExits(const MachineFunction &MF) {
     return true;
 
   // Preserve the allocated frame and its SP-relative CFA at the resume call.
-  if (ST.getFrameLowering()->hasFP(MF) || !F.hasZeroizeStack() ||
-      !F.hasFnAttribute("zeroize-flags") ||
+  if (!F.hasZeroizeStack() || !F.hasFnAttribute("zeroize-flags") ||
       !F.hasFnAttribute("zero-call-used-regs") ||
       F.getFnAttribute("zero-call-used-regs").getValueAsString() != "all")
     return false;
@@ -1252,9 +1250,18 @@ static void restoreBeforeZeroize(MachineBasicBlock &MBB,
 static bool canRestoreCleanupSaves(const MachineInstr &Resume, int64_t Size) {
   const MachineFunction &MF = *Resume.getMF();
   const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();
   if (!MF.needsFrameMoves())
     return false;
   SmallVector<int64_t, 6> Offsets;
+  if (ST.getFrameLowering()->hasFP(MF)) {
+    // PEI pushes RBP first in the supported fixed layout and omits it from CSI.
+    int64_t Offset = Size - 8;
+    if (Offset < 0 || Offset % 8 ||
+        Resume.modifiesRegister(X86::RBP, ST.getRegisterInfo()))
+      return false;
+    Offsets.push_back(Offset);
+  }
   for (const CalleeSavedInfo &CSI : MFI.getCalleeSavedInfo()) {
     int FI = CSI.getFrameIdx();
     int64_t Offset = Size + 8 + MFI.getObjectOffset(FI);
@@ -1437,6 +1444,8 @@ void X86FrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
     for (const CalleeSavedInfo &CSI : MF.getFrameInfo().getCalleeSavedInfo())
       MachineInstrBuilder(MF, &*InsertPt)
           .addReg(CSI.getReg(), RegState::Implicit);
+    if (hasFP(MF))
+      MachineInstrBuilder(MF, &*InsertPt).addReg(X86::RBP, RegState::Implicit);
   }
   MachineBasicBlock *Tail =
       emitZeroizeStores(MBB, InsertPt, Size, Work, ScratchRegs);

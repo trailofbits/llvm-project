@@ -1,4 +1,6 @@
 ; RUN: llc -O2 -mtriple=x86_64-unknown-linux-gnu -mattr=+sahf -verify-machineinstrs %s -o - | FileCheck %s
+; RUN: llc -O2 -mtriple=x86_64-unknown-linux-gnu -mattr=+sahf -frame-pointer=all -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=FP
+; RUN: llc -O2 -mtriple=x86_64-unknown-linux-gnu -mattr=+sahf -frame-pointer=all -verify-machineinstrs -stop-after=prolog-epilog %s -o - | FileCheck %s --check-prefix=FP-MIR
 ;
 ; The vector lives across several calls and therefore has a register allocator
 ; spill. Its reload and the caller-owned results must precede the frame clear.
@@ -54,6 +56,44 @@
 ; CHECK: testl %eax, %eax
 ; CHECK-NEXT: sahf
 ; CHECK-NEXT: callq _Unwind_Resume
+
+; The vector spill also works with a dedicated RBP. The large clearing loop
+; preserves the restored RBP and RSP-based unwind rule through the resume.
+; FP-LABEL: spill_cleanup:
+; FP: .cfi_def_cfa_register %rbp
+; FP: movaps %xmm0, -48(%rbp)
+; FP: callq may_throw
+; FP: movaps -48(%rbp), %xmm0
+; FP: callq finish
+; FP: .cfi_def_cfa %rsp, 176
+; FP: movq 160(%rsp), %rbp
+; FP-NEXT: .cfi_restore %rbp
+; FP-NEXT: leaq (%rsp), %r11
+; FP-NEXT: movq $168, %r10
+; FP: movq $0, (%r11)
+; FP: retq
+; FP: .cfi_def_cfa %rbp, 16
+; FP: .cfi_offset %rbp, -16
+; FP: callq destroyed
+; FP: movq %rbx, %rdi
+; FP-NEXT: .cfi_def_cfa %rsp, 176
+; FP: movq 160(%rsp), %rbp
+; FP-NEXT: .cfi_restore %rbp
+; FP-NEXT: leaq (%rsp), %r11
+; FP-NEXT: movq $168, %r10
+; FP: [[FPLOOP:\.LBB[0-9_]+]]:
+; FP: movq $0, (%r11)
+; FP-NEXT: addq $8, %r11
+; FP-NEXT: subq $8, %r10
+; FP-NEXT: jne [[FPLOOP]]
+; FP-NOT: .cfi_
+; FP-NOT: %rbp
+; FP-NOT: %rsp
+; FP-NOT: %rdi
+; FP: sahf
+; FP-NEXT: callq _Unwind_Resume
+;
+; FP-MIR: CALL64pcrel32{{.*}}@_Unwind_Resume{{.*}}implicit $rbp
 
 declare i32 @__gxx_personality_v0(...)
 declare void @prepare_array(ptr, i32) nounwind
