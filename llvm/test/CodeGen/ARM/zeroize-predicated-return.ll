@@ -6,6 +6,10 @@
 ; RUN: llc -verify-machineinstrs -run-pass=if-converter %t.thumb.mir -o %t.thumb.pred.mir
 ; RUN: FileCheck %s --check-prefix=THUMB-PRED < %t.thumb.pred.mir
 ; RUN: llc -O0 -verify-machineinstrs -start-before=prolog-epilog %t.thumb.pred.mir -o - | FileCheck %s --check-prefix=THUMB
+; RUN: sed 's/"zero-call-used-regs"="used-gpr"/"zeroize-stack"="used"/' %s > %t.stack.ll
+; RUN: llc -O2 -mtriple=armv7-none-eabi -verify-machineinstrs -stop-before=prolog-epilog %t.stack.ll -o %t.stack.mir
+; RUN: llc -verify-machineinstrs -run-pass=if-converter %t.stack.mir -o %t.stack.pred.mir
+; RUN: llc -O0 -verify-machineinstrs -start-before=prolog-epilog %t.stack.pred.mir -o - | FileCheck %s --check-prefix=STACK
 
 ; ARM normally if-converts after PEI. Feed its actual post-RA output to PEI to
 ; exercise both the logical fallthrough and the explicit continuation branch.
@@ -26,6 +30,40 @@
 ; ARM: add sp, sp, #32
 ; ARM: mov r1, #0
 ; ARM: pop {{.*}}pc}
+
+; The stack-only prologue owns 32 local bytes plus two four-byte saves. The
+; early return must restore caller state, clear all ten words and release SP.
+; STACK-LABEL: public_cold:
+; STACK: push {r11, lr}
+; STACK: sub sp, sp, #32
+; STACK: mov r0, #17
+; STACK: bne [[WORK:\.LBB[0-9_]+]]
+; STACK: add r1, sp, #36
+; STACK-NEXT: ldr lr, [r1]
+; STACK-NEXT: add r1, sp, #32
+; STACK-NEXT: ldr r11, [r1]
+; STACK-NEXT: mov r1, sp
+; STACK-NEXT: mov r2, #0
+; STACK-NEXT: str r2, [r1]
+; STACK-NEXT: str r2, [r1, #4]
+; STACK-NEXT: str r2, [r1, #8]
+; STACK-NEXT: str r2, [r1, #12]
+; STACK-NEXT: str r2, [r1, #16]
+; STACK-NEXT: str r2, [r1, #20]
+; STACK-NEXT: str r2, [r1, #24]
+; STACK-NEXT: str r2, [r1, #28]
+; STACK-NEXT: str r2, [r1, #32]
+; STACK-NEXT: str r2, [r1, #36]
+; STACK-NEXT: add r1, sp, #40
+; STACK-NEXT: mov sp, r1
+; STACK: bx lr
+; STACK: [[WORK]]:
+; STACK: str r1, [sp]
+; STACK: bl public_work
+; STACK: ldr r0, [sp]
+; STACK: add r1, sp, #40
+; STACK-NEXT: mov sp, r1
+; STACK: bx lr
 
 ; THUMB-PRED-LABEL: name: public_switch
 ; THUMB-PRED: tBX_RET 1 {{.*}}$cpsr
