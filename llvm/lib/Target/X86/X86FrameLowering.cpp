@@ -729,6 +729,8 @@ static bool collectZeroCallUsedGPRs(
   return true;
 }
 
+static bool shouldResetZeroizeX87Tags(const MachineInstr &Exit);
+
 static void emitZeroCallUsedX87(MachineBasicBlock &MBB,
                                 MachineBasicBlock::iterator MBBI,
                                 const DebugLoc &DL) {
@@ -764,13 +766,11 @@ static void emitZeroCallUsedX87(MachineBasicBlock &MBB,
     }
     unsigned NumFPRegs = 8 - NumLive;
 
-    // Filling the free slots zeroes the MMX registers that alias them; the
-    // live slots hold the values the exit returns. After an MMX instruction
-    // the tag word marks every slot valid and the first push would
-    // overflow, so empty the stack first. That is only possible when
-    // nothing is live on it, and it is only needed then: a function whose
-    // own x87 code ran after its MMX code has already emptied it.
-    if (NumLive == 0 && functionWritesMMX(MF))
+    // A joint clearing request must also handle occupied tags left by a
+    // callee. EMMS empties all eight slots, so an exit exporting an x87
+    // value must instead fill only its free slots.
+    if (NumLive == 0 &&
+        (shouldResetZeroizeX87Tags(*MBBI) || functionWritesMMX(MF)))
       BuildMI(MBB, MBBI, DL, TII.get(X86::MMX_EMMS));
 
     for (unsigned i = 0; i != NumFPRegs; ++i)
@@ -939,6 +939,17 @@ static bool isZeroizeUnwindResume(const MachineInstr &MI) {
          Fn->getReturnType()->isVoidTy() && !Fn->isVarArg() &&
          Fn->arg_size() == 1 && Fn->getArg(0)->getType()->isPointerTy() &&
          MI.readsRegister(X86::RDI, /*TRI=*/nullptr);
+}
+
+static bool shouldResetZeroizeX87Tags(const MachineInstr &Exit) {
+  const MachineFunction &MF = *Exit.getMF();
+  const Function &F = MF.getFunction();
+  return F.getZeroizeStackMode() == "used" &&
+         F.hasFnAttribute("zeroize-flags") &&
+         F.getFnAttribute("zero-call-used-regs").getValueAsString() == "all" &&
+         F.getCallingConv() == CallingConv::C && hasZeroizeABI(MF) &&
+         MF.getSubtarget<X86Subtarget>().hasMMX() &&
+         (isZeroizeReturn(Exit) || isZeroizeUnwindResume(Exit));
 }
 
 static bool hasZeroizeBlockExits(const MachineBasicBlock &MBB) {
