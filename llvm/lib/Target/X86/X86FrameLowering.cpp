@@ -885,6 +885,21 @@ static bool isZeroizeReturn(const MachineInstr &MI) {
          (MI.getOpcode() == X86::RET && MI.getOperand(0).getImm() == 0);
 }
 
+bool X86FrameLowering::isOrdinaryZeroizeReturn(const MachineInstr &MI) const {
+  switch (MI.getOpcode()) {
+  case X86::RET:
+  case X86::RET16:
+  case X86::RET32:
+  case X86::RET64:
+  case X86::RETI16:
+  case X86::RETI32:
+  case X86::RETI64:
+    return true;
+  default:
+    return false;
+  }
+}
+
 static bool hasZeroizeABI(const MachineFunction &MF) {
   const Function &F = MF.getFunction();
   const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();

@@ -178,6 +178,13 @@ computeZeroizeLiveUnits(LiveRegUnits &Live, const MachineBasicBlock &MBB,
   }
 }
 
+bool AArch64FrameLowering::isOrdinaryZeroizeReturn(
+    const MachineInstr &MI) const {
+  return MI.getOpcode() == AArch64::RET_ReallyLR ||
+         (MI.getOpcode() == AArch64::RET &&
+          MI.getOperand(0).getReg() == AArch64::LR);
+}
+
 bool AArch64FrameLowering::supportsZeroizeFlags(
     const MachineFunction &MF) const {
   return hasSupportedZeroizeExits(MF);
