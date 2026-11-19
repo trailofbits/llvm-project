@@ -21,6 +21,7 @@ declare void @cleanup() nounwind
 define void @guarded() shadowcallstack uwtable "zeroize-stack"="used" "zeroize-flags" "zero-call-used-regs"="all" personality ptr @__gxx_personality_v0 {
 entry:
   %local = alloca [96 x i8], align 16
+  call void asm sideeffect "", "~{v8}"()
   invoke void @callee(ptr %local) to label %done unwind label %unwind
 
 done:
@@ -37,7 +38,9 @@ unwind:
 ; ASM: str x30, [x18], #8
 ; ASM: bl callee
 ; ASM: ldr x30, [x18, #-8]!
+; ASM: ldr d8,
 ; ASM: stp xzr, xzr,
+; ASM: mov v8.d[1], xzr
 ; ASM: ret
 ;
 ; The resume call keeps its physical frame. Zero the frame and leave the
@@ -48,6 +51,7 @@ unwind:
 ; ASM: stp xzr, xzr,
 ; ASM-NOT: mov sp,
 ; ASM-NOT: add sp,
+; ASM: mov v8.d[1], xzr
 ; ASM: msr NZCV, xzr
 ; ASM-NEXT: bl _Unwind_Resume
 

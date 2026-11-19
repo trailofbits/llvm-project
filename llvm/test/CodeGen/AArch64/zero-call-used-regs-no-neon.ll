@@ -48,9 +48,17 @@ define i32 @all(i32 %a) #0 {
 ; NONEON-NEXT:    fmov d30, xzr
 ; NONEON-NEXT:    fmov d31, xzr
 ; NONEON-NEXT:    mov x11, #0 // =0x0
+; NONEON-NEXT:    fmov v8.d[1], xzr
+; NONEON-NEXT:    fmov v9.d[1], xzr
 ; NONEON-NEXT:    mov x12, #0 // =0x0
+; NONEON-NEXT:    fmov v10.d[1], xzr
+; NONEON-NEXT:    fmov v11.d[1], xzr
 ; NONEON-NEXT:    mov x13, #0 // =0x0
+; NONEON-NEXT:    fmov v12.d[1], xzr
+; NONEON-NEXT:    fmov v13.d[1], xzr
 ; NONEON-NEXT:    mov x14, #0 // =0x0
+; NONEON-NEXT:    fmov v14.d[1], xzr
+; NONEON-NEXT:    fmov v15.d[1], xzr
 ; NONEON-NEXT:    mov x15, #0 // =0x0
 ; NONEON-NEXT:    mov x16, #0 // =0x0
 ; NONEON-NEXT:    mov x17, #0 // =0x0
