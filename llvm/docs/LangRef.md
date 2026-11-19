@@ -2817,6 +2817,10 @@ fn -> other_fn -> other_fn ; fn is norecurse
     released only after erasure. Temporary registers used for clearing are
     cleared even when `"zero-call-used-regs"` is absent or selects `"skip"`.
 
+    When a register spill would otherwise cause an ARM32 static frame to be
+    realigned, the allocator uses a spill instruction that supports the ABI
+    stack alignment. Objects with stricter alignment requirements still require
+    realignment.
     The ARM32 implementation diagnoses unsupported dynamic or realigned frames,
     SafeStack, XRay instrumentation, variadic functions, nonstandard calling
     conventions and protected entry/return protocols, and unwind-resume exits
