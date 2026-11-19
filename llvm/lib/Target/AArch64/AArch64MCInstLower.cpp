@@ -13,6 +13,7 @@
 
 #include "AArch64MCInstLower.h"
 #include "AArch64MachineFunctionInfo.h"
+#include "AArch64Zeroization.h"
 #include "MCTargetDesc/AArch64MCAsmInfo.h"
 #include "Utils/AArch64BaseInfo.h"
 #include "llvm/CodeGen/AsmPrinter.h"
@@ -377,8 +378,10 @@ void AArch64MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   OutMI.setOpcode(MI->getOpcode());
 
   for (const MachineOperand &MO : MI->operands()) {
-    // An ordinary return can carry its verification contract as MIR metadata.
-    if (MI->getOpcode() == AArch64::RET && MO.isMetadata())
+    // Register verification records are MIR-only at both kinds of exit.
+    if (MO.isMetadata() && (MI->getOpcode() == AArch64::RET ||
+                            (MI->getOpcode() == AArch64::BL &&
+                             isAArch64ZeroizationObligation(MO))))
       continue;
     MCOperand MCOp;
     if (lowerOperand(MO, MCOp))

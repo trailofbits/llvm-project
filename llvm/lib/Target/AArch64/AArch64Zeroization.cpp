@@ -61,6 +61,14 @@ static bool mayInstrumentZeroizeExits(const Function &F) {
          F.hasFnAttribute("xray-instruction-threshold");
 }
 
+bool llvm::hasAArch64ZeroizeUpperLaneABI(const MachineFunction &MF) {
+  const auto &STI = MF.getSubtarget<AArch64Subtarget>();
+  return STI.isTargetELF() &&
+         MF.getFunction().getCallingConv() == CallingConv::C &&
+         STI.hasFPARMv8() && !STI.hasSVE() && !STI.hasSME() &&
+         !STI.isStreaming() && !STI.isStreamingCompatible();
+}
+
 static bool hasAndroidShadowCallStack(const MachineFunction &MF) {
   const Function &F = MF.getFunction();
   const Triple &TT = MF.getTarget().getTargetTriple();
@@ -71,7 +79,9 @@ static bool hasAndroidShadowCallStack(const MachineFunction &MF) {
          STI.isXRegisterReserved(18);
 }
 
-static bool canClearShadowResume(const MachineInstr &MI) {
+bool llvm::isAArch64ZeroizeShadowResume(const MachineInstr &MI) {
+  if (MI.getOpcode() != AArch64::BL)
+    return false;
   const auto &MF = *MI.getMF();
   const auto &F = MF.getFunction();
   const auto &AFI = *MF.getInfo<AArch64FunctionInfo>();
@@ -80,13 +90,22 @@ static bool canClearShadowResume(const MachineInstr &MI) {
       classifyEHPersonality(F.getPersonalityFn()) != EHPersonality::GNU_CXX)
     return false;
 
-  if (MI.getOpcode() != AArch64::BL || !MI.getOperand(0).isGlobal() ||
-      MI.getOperand(0).getOffset() || !MI.getParent()->succ_empty() ||
-      !MI.readsRegister(AArch64::X0, /*TRI=*/nullptr))
+  if (!MI.getOperand(0).isGlobal() || MI.getOperand(0).getOffset() ||
+      !MI.getParent()->succ_empty())
     return false;
-  if (!llvm::any_of(MI.operands(), [](const MachineOperand &MO) {
-        return MO.isRegMask() && !MO.clobbersPhysReg(AArch64::X18);
-      }))
+  bool HasArgument = false;
+  bool HasMask = false;
+  for (const MachineOperand &MO : MI.operands()) {
+    if (MO.isRegMask()) {
+      if (MO.clobbersPhysReg(AArch64::X18))
+        return false;
+      HasMask = true;
+    } else if (MO.isReg() && MO.isUse() && MO.readsReg() &&
+               MO.getReg() == AArch64::X0) {
+      HasArgument = true;
+    }
+  }
+  if (!HasArgument || !HasMask)
     return false;
   const auto *Resume = dyn_cast<Function>(MI.getOperand(0).getGlobal());
   if (!Resume || !Resume->isDeclaration() || !Resume->hasExternalLinkage() ||
@@ -114,7 +133,7 @@ static bool hasSupportedZeroizeABI(const MachineFunction &MF) {
          !mayInstrumentZeroizeExits(F);
 }
 
-static bool isZeroizeUnwindResume(const MachineInstr &MI) {
+bool llvm::isAArch64ZeroizeUnwindResume(const MachineInstr &MI) {
   if (!MI.isCall())
     return false;
   for (const MachineOperand &MO : MI.operands()) {
@@ -132,8 +151,8 @@ static bool isZeroizeUnwindResume(const MachineInstr &MI) {
 static bool isUnsupportedZeroizeExit(const MachineInstr &MI) {
   if (MI.isEHScopeReturn())
     return true;
-  if (isZeroizeUnwindResume(MI))
-    return !canClearShadowResume(MI);
+  if (isAArch64ZeroizeUnwindResume(MI))
+    return !isAArch64ZeroizeShadowResume(MI);
   return MI.isReturn() && (MI.getOpcode() != AArch64::RET_ReallyLR ||
                            !MI.getParent()->succ_empty());
 }
@@ -508,7 +527,7 @@ public:
              TFI.getSVEStackSize(MF)),
         ShadowCallStack(MF.getInfo<AArch64FunctionInfo>()
                             ->needsShadowCallStackPrologueEpilogue(MF)),
-        UnwindResume(isZeroizeUnwindResume(*InsertPt)) {}
+        UnwindResume(isAArch64ZeroizeUnwindResume(*InsertPt)) {}
 
   void emit(BitVector &ScratchRegs) {
     if (!Size || !validate())

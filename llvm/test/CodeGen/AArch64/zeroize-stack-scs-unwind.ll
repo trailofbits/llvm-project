@@ -10,6 +10,9 @@
 ; RUN: sed '/BL @_Unwind_Resume/s/, implicit \$x0//' %t.mir > %t-arg.mir
 ; RUN: not llc -mattr=+reserve-x18 -start-before=prolog-epilog %t-arg.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=REJECT
 
+; RUN: sed '/BL @_Unwind_Resume/s/, implicit \$x0/, implicit undef $x0/' %t.mir > %t-undef.mir
+; RUN: not llc -mattr=+reserve-x18 -start-before=prolog-epilog %t-undef.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=REJECT
+
 ; RUN: sed 's/^declare void @_Unwind_Resume(ptr)/define void @_Unwind_Resume(ptr %e) { unreachable }/' %s > %t-local.ll
 ; RUN: not llc -mtriple=aarch64-linux-android29 -mattr=+reserve-x18 %t-local.ll -o /dev/null 2>&1 | FileCheck %s --check-prefix=REJECT
 

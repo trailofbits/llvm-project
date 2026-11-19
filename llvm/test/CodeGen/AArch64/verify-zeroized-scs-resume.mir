@@ -1,0 +1,76 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=aarch64-linux-android29 -mattr=+reserve-x18 -verify-machineinstrs -filetype=obj %S/zeroize-stack-scs-unwind.ll -o %t/on.o
+# RUN: llc -mtriple=aarch64-linux-android29 -mattr=+reserve-x18 -verify-machineinstrs=0 -filetype=obj %S/zeroize-stack-scs-unwind.ll -o %t/off.o
+# RUN: cmp %t/on.o %t/off.o
+# RUN: llc -mtriple=aarch64-linux-android29 -mattr=+reserve-x18 -verify-machineinstrs -save-temp-labels -stop-after=unpack-mi-bundles %S/zeroize-stack-scs-unwind.ll -o %t/final.mir
+# RUN: FileCheck %s --check-prefix=PLAN < %t/final.mir
+# RUN: llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles -filetype=obj %t/final.mir -o /dev/null
+# RUN: %python %t/cases.py %t
+# RUN: llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles -filetype=obj %t/restored-d8.mir -o /dev/null
+# RUN: not llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles %t/upper.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=UPPER
+# RUN: not llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles %t/later.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=UPPER
+# RUN: not llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles %t/gpr.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=GPR
+# RUN: not llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles %t/flags.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=NZCV
+# RUN: %if expensive_checks %{ not llc -mattr=+reserve-x18 -start-after=unpack-mi-bundles %t/upper.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=UPPER %}
+# RUN: not llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles %t/missing.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=ABSENT
+# RUN: not llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles %t/changed-site.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=ABSENT
+# RUN: not llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles %t/gpr-mask.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=MASK
+# RUN: not llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles %t/wrong-target.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=TARGET
+# RUN: not llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles %t/bad-unmarked.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=PROTOCOL
+# RUN: not llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles %t/undef.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=PROTOCOL
+# RUN: not llc -mattr=+reserve-x18 -verify-machineinstrs -start-after=unpack-mi-bundles %t/masks.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=PROTOCOL
+# RUN: llc -mattr=+reserve-x18 -verify-machineinstrs=0 -start-after=unpack-mi-bundles -filetype=obj %t/upper.mir -o /dev/null
+
+# The outgoing BL needs the exception argument X0. The void return does not.
+# PLAN-DAG: !"aarch64.zero-call-used-regs", !"FFFF00FF0003FFFF", !"FF", !"{{[0-9A-F]+}}", !"0", !"return"
+# PLAN-DAG: !"aarch64.zero-call-used-regs", !"FFFF00FF0003FFFE", !"FF", !"{{[0-9A-F]+}}", !"0", !"resume"
+# PLAN: BL @_Unwind_Resume, csr_aarch64_aapcs_scs, !{{[0-9]+}}, implicit-def dead $lr, implicit $sp, implicit killed $x0
+# UPPER: AArch64 zeroization verifier: V9[127:64] is not proven zero at outgoing _Unwind_Resume
+# GPR: AArch64 zeroization verifier: X2 is not proven zero at outgoing _Unwind_Resume
+# NZCV: AArch64 zeroization verifier: NZCV is not proven zero at outgoing _Unwind_Resume
+# ABSENT: AArch64 zeroization verifier: missing or invalid per-exit register obligation
+# MASK: AArch64 zeroization verifier: register obligation disagrees with eligible units and exit interface
+# PROTOCOL: AArch64 zeroization verifier: unsupported final unwind protocol
+# TARGET: AArch64 zeroization verifier: register obligation on a non-return instruction
+
+#--- cases.py
+import pathlib
+import re
+import sys
+
+out = pathlib.Path(sys.argv[1])
+source = (out / "final.mir").read_text().replace("tracksRegLiveness: true",
+                                                 "tracksRegLiveness: false")
+first, after_ret = source.split("    RET undef", 1)
+prefix = first + "    RET undef"
+
+
+def mutate(name, pattern, replacement):
+    changed, count = re.subn(pattern, replacement, after_ret, flags=re.MULTILINE)
+    assert count == 1, (name, count)
+    (out / (name + ".mir")).write_text(prefix + changed)
+
+
+# Real LDR D8 has already made its upper half zero, unlike V9.
+mutate("restored-d8", r"^    \$q8 = INSvi64gpr .*\n", "")
+mutate("upper", r"^    \$q9 = INSvi64gpr .*\n", "")
+mutate("later", r"^    BL @_Unwind_Resume", "    $q9 = MOVIv2d_ns 255\n    BL @_Unwind_Resume")
+mutate("gpr", r"^    \$x2 = MOVZXi 0, 0\n", "")
+mutate("flags", r"^    MSR 55824, \$xzr,.*\n", "")
+mutate("missing", r"(BL @_Unwind_Resume, csr_aarch64_aapcs_scs), !\d+,", r"\1,")
+mutate("undef", r"(BL @_Unwind_Resume[^\n]*), implicit killed \$x0,", r"\1, implicit undef $x0,")
+mutate("masks", r"(BL @_Unwind_Resume, csr_aarch64_aapcs_scs),", r"\1, csr_aarch64_aapcs,")
+mutate("wrong-target", r"BL @_Unwind_Resume,", "BL @cleanup,")
+
+unmarked = (out / "missing.mir").read_text()
+changed, count = re.subn(r"(BL @_Unwind_Resume[^\n]*), implicit killed \$x0,", r"\1,", unmarked)
+assert count == 1
+(out / "bad-unmarked.mir").write_text(changed)
+
+for name, before, after in [
+    ("changed-site", '!"resume"', '!"return"'),
+    ("gpr-mask", '!"FFFF00FF0003FFFE"', '!"FFFF00FF0003FFFA"'),
+]:
+    original = (out / "gpr.mir").read_text() if name == "gpr-mask" else source
+    assert original.count(before) == 1
+    (out / (name + ".mir")).write_text(original.replace(before, after))

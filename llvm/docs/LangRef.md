@@ -2680,15 +2680,17 @@ fn -> other_fn -> other_fn ; fn is norecurse
     (X86 LVI) or an authentication check (AArch64 tail calls).
 
     With machine verification enabled, fixed-width AArch64 ELF checks an
-    explicit `"all"` request at ordinary returns through LR. The check uses
-    the required register set computed separately for each return before
-    clearing instructions are inserted. It verifies full 64-bit GPR and,
-    where FP is enabled, full 128-bit SIMD/FP values after late machine
-    optimization. It also covers scalar FP targets without Advanced SIMD.
-    This check covers the ordinary unsigned ELF return protocols supported
-    by AArch64 flags clearing. Scalable vector or predicate state, streaming
-    mode, tail transfers, and instrumented or authenticated returns are
-    outside this verification scope.
+    explicit `"all"` request at ordinary unsigned returns through LR and at
+    the outgoing Android shadow-call-stack `_Unwind_Resume` call described
+    below. The backend records each exit's selected registers and original
+    interface before inserting register clears. Immediately before emission it
+    checks that the required bits are zero on every incoming path. This covers
+    64-bit GPRs, full 128-bit SIMD/FP registers where FP is enabled, and the
+    eligible upper 64 bits of V8–V15 under the base C calling convention.
+    Scalar FP targets without Advanced SIMD are included. At the resume call
+    the check precedes the call's register clobbers and excludes the X0
+    exception argument. Scalable state, streaming mode, tail transfers, and
+    instrumented or authenticated returns are outside this verification scope.
 
     On X86, vector selection follows the function's enabled target features:
     SSE enables the 128-bit `XMM` width, AVX adds the 256-bit `YMM` width, and
@@ -2757,8 +2759,8 @@ fn -> other_fn -> other_fn ; fn is norecurse
 
     AArch64 clears NZCV with `MSR NZCV, XZR` after other clearing. When machine
     verification is enabled, the AArch64 ELF backend checks immediately before
-    emission that an NZCV clear reaches each supported machine return on every
-    incoming path. The flags-clearing sequence preserves FPCR, FPSR and
+    emission that an NZCV clear reaches each supported machine return and the
+    supported outgoing Android resume call on every incoming path. The flags-clearing sequence preserves FPCR, FPSR and
     execution-control state. Ordinary ELF C, fast, vector PCS,
     and SVE vector PCS returns are supported. Signed returns, SME streaming
     or ZA/ZT0 protocols, Windows,

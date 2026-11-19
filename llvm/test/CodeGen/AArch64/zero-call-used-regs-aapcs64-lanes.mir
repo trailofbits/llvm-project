@@ -19,6 +19,7 @@ body: |
     $q0 = MOVIv2d_ns 255
     RET undef $lr, implicit $q0
 # CHECK-LABEL: name: full_result
+# CHECK: ![[FULL:[0-9]+]] = !{!"aarch64.zero-call-used-regs", !"FFFF00FE0007FFFF", !"FF", !"100000000", !"0", !"return"}
 # CHECK: $q0 = MOVIv2d_ns 255
 # CHECK-NOT: $q0 =
 # CHECK: $q8 = INSvi64gpr undef $q8, 1, $xzr, implicit $d8
@@ -29,7 +30,7 @@ body: |
 # CHECK-NEXT: $q13 = INSvi64gpr undef $q13, 1, $xzr, implicit $d13
 # CHECK-NEXT: $q14 = INSvi64gpr undef $q14, 1, $xzr, implicit $d14
 # CHECK-NEXT: $q15 = INSvi64gpr undef $q15, 1, $xzr, implicit $d15
-# CHECK-NEXT: RET undef $lr, implicit $q0
+# CHECK-NEXT: RET undef $lr, ![[FULL]], implicit $q0
 # NO-LANES-LABEL: name: full_result
 # NO-LANES-NOT: INSvi64gpr
 # NO-LANES: RET

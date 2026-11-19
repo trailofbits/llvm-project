@@ -867,10 +867,7 @@ static MCRegister getRegisterOrZero(MCRegister Reg, bool HasSVE) {
 void AArch64FrameLowering::addZeroCallUsedRegsSubRegs(
     const MachineFunction &MF, BitVector &Candidates) const {
   const auto &STI = MF.getSubtarget<AArch64Subtarget>();
-  if (!STI.isTargetELF() ||
-      MF.getFunction().getCallingConv() != CallingConv::C ||
-      !STI.hasFPARMv8() || STI.hasSVE() || STI.hasSME() || STI.isStreaming() ||
-      STI.isStreamingCompatible())
+  if (!hasAArch64ZeroizeUpperLaneABI(MF))
     return;
 
   // Base AAPCS64 preserves D8-D15, leaving the high half of each Q register
@@ -1015,8 +1012,10 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
     for (MachineInstr &MI : make_range(MBBI, MBB.end()))
       if (MI.getOpcode() == AArch64::RET_ReallyLR ||
           (MI.getOpcode() == AArch64::RET &&
-           MI.getOperand(0).getReg() == AArch64::LR))
-        recordAArch64ZeroizationObligation(MI, FullRegsToZero);
+           MI.getOperand(0).getReg() == AArch64::LR) ||
+          isAArch64ZeroizeShadowResume(MI))
+        recordAArch64ZeroizationObligation(MI, FullRegsToZero, RegsToZero,
+                                           Live);
   }
 
   // Zero out GPRs.
