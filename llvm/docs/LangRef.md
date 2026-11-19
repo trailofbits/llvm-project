@@ -2752,8 +2752,16 @@ fn -> other_fn -> other_fn ; fn is norecurse
     The frame stays allocated at the resume call. An exception that propagates
     directly out of a call can bypass both an ordinary return and the explicit
     resume.
-    Other exception protocols, XRay instrumentation, return thunks and LVI return
-    hardening are unsupported. Ordinary tail-call optimization is disabled and
+    For a fixed SysV C frame with only ordinary returns, the joint
+    `"zeroize-stack"="used"`, `"zero-call-used-regs"="all"` and
+    `"zeroize-flags"` request can retain the LVI-hardened return sequence.
+    This requires the incoming return address to be fixed permitted public
+    control-flow context. At transfer the available caller-saved register
+    contains that entire address after a POP, LFENCE and indirect jump. Other
+    covered registers retain their existing clearing and ABI obligations. The
+    epilogue diagnoses a return without a verifiable full-register replacement.
+    Other exception protocols, XRay instrumentation and return thunks are
+    unsupported. Ordinary tail-call optimization is disabled and
     mandatory tail calls are diagnosed. The flags sequence does not write stack
     memory after stack clearing.
 
@@ -2829,7 +2837,8 @@ fn -> other_fn -> other_fn ; fn is norecurse
     resume call also bypasses its clearing sequence. Dynamic or realigned frames,
     SafeStack, split stacks, variadic functions, XRay instrumentation or events,
     flag intrinsics requiring transient stack storage, other exceptional exits,
-    return thunks, and LVI return hardening are unsupported. Clearing loops
+    return thunks, and LVI return hardening outside the joint ordinary-return
+    protocol above are unsupported. Clearing loops
     require two dead caller-saved registers and dead condition flags. Ordinary tail calls are disabled,
     and mandatory tail calls are diagnosed. This stack clear alone does not
     request final condition-flag clearing.
