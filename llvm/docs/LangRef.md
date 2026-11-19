@@ -2671,6 +2671,14 @@ fn -> other_fn -> other_fn ; fn is norecurse
     from clearing. Callee-saved registers, including per-function additions, and
     the target's return-address register remain excluded.
 
+    On ARM, AArch64 and X86, an ordinary machine return may share a block
+    with an internal continuation. Frame lowering gives each such supported
+    return its own epilogue before clearing. ARM and Thumb can branch around
+    the epilogue using the original return predicate, preserving the condition
+    and arguments on the continuation. Machine input that already bundles a
+    conditional return into a Thumb IT block is diagnosed when PEI would
+    need to split it.
+
     Targets must preserve live register units when widening a clear. On x86-64,
     a live `AL` return can coexist with clearing `AH` and the remaining upper
     bits of `RAX`.

@@ -219,6 +219,20 @@ public:
     return false;
   }
 
+  /// Whether MI is an ordinary return whose edge PEI can separate from
+  /// in-function successors before inserting epilogues and clearing.
+  virtual bool isOrdinaryZeroizeReturn(const MachineInstr &MI) const {
+    return false;
+  }
+
+  /// Replace a predicated return with a branch to Continue on the opposite
+  /// condition followed by the same unpredicated return. Leave MI intact on
+  /// failure. PEI moves the unpredicated return into its own block.
+  virtual bool branchAroundZeroizeReturn(MachineInstr &MI,
+                                         MachineBasicBlock &Continue) const {
+    return false;
+  }
+
   /// Add independently clearable subregisters of partially preserved registers
   /// to the allocatable candidates for the full or used register modes. PEI
   /// applies the usual use, preserved-register and exit-liveness filters.

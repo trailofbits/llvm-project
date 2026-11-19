@@ -25,6 +25,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -345,12 +346,123 @@ static void stashEntryDbgValues(MachineBasicBlock &MBB,
       MI->removeFromParent();
 }
 
+static ZeroCallUsedRegs::ZeroCallUsedRegsKind
+getZeroCallUsedRegsKind(const Function &F);
+
+/// Keep the false path intact, including explicit branches or further
+/// conditional returns. Branch around the new epilogue before it can change
+/// either the predicate or an operand of the continuation.
+static bool unpredicateClearingReturn(MachineInstr &Ret,
+                                      const TargetFrameLowering &TFI) {
+  MachineBasicBlock &MBB = *Ret.getParent();
+  MachineFunction &MF = *MBB.getParent();
+  if (MBB.getFirstInstrTerminator() != Ret.getIterator() ||
+      MBB.hasEHPadSuccessor())
+    return false;
+  auto After = std::next(Ret.getIterator());
+  if (llvm::all_of(make_range(After, MBB.instr_end()),
+                   [](const MachineInstr &MI) { return MI.isDebugInstr(); }) &&
+      (MBB.succ_size() != 1 || MBB.getNextNode() != *MBB.succ_begin()))
+    return false;
+  MachineBasicBlock *Continue = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
+  if (!TFI.branchAroundZeroizeReturn(Ret, *Continue)) {
+    MF.deleteMachineBasicBlock(Continue);
+    return false;
+  }
+  MF.insert(std::next(MBB.getIterator()), Continue);
+  Continue->setSectionID(MBB.getSectionID());
+  Continue->splice(Continue->end(), &MBB, After, MBB.end());
+  Continue->transferSuccessorsAndUpdatePHIs(&MBB);
+  MBB.addSuccessor(Continue);
+  if (MF.getProperties().hasTracksLiveness())
+    recomputeLiveIns(*Continue);
+  return true;
+}
+
+static bool splitClearingReturn(MachineInstr &Ret,
+                                const TargetFrameLowering &TFI) {
+  MachineBasicBlock &MBB = *Ret.getParent();
+  MachineFunction &MF = *MBB.getParent();
+  const auto &TII = *MF.getSubtarget().getInstrInfo();
+  if (Ret.isBundled())
+    return false;
+  for (const MachineInstr &MI :
+       make_range(MBB.getFirstTerminator(), MachineBasicBlock::iterator(Ret)))
+    if (!MI.isDebugInstr() && (!MI.isConditionalBranch() || MI.isBundled()))
+      return false;
+  if (TII.isPredicated(Ret)) {
+    if (!unpredicateClearingReturn(Ret, TFI))
+      return false;
+  } else if (!llvm::all_of(
+                 make_range(std::next(Ret.getIterator()), MBB.instr_end()),
+                 [](const MachineInstr &MI) { return MI.isDebugInstr(); })) {
+    return false;
+  }
+
+  // Every original internal edge is taken before the return. The newly
+  // explicit fallthrough edge represents leaving the function. The previous
+  // probabilities had no entry for that edge.
+  MachineBasicBlock *Exit = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
+  MF.insert(std::next(MBB.getIterator()), Exit);
+  Exit->setSectionID(MBB.getSectionID());
+  // isReturnBlock() examines the last instruction when selecting the CSR
+  // restores. Keep any trailing debug records with this exit, before RET.
+  Exit->splice(Exit->end(), &MBB, std::next(Ret.getIterator()), MBB.end());
+  Exit->splice(Exit->end(), &MBB, Ret.getIterator());
+  MBB.addSuccessorWithoutProb(Exit);
+  if (MF.getProperties().hasTracksLiveness())
+    recomputeLiveIns(*Exit);
+  return true;
+}
+
+static void separateClearingReturns(MachineFunction &MF) {
+  const Function &F = MF.getFunction();
+  if (F.hasFnAttribute(Attribute::Naked) ||
+      (!F.hasZeroizeStack() && !F.hasFnAttribute("zeroize-flags") &&
+       getZeroCallUsedRegsKind(F) ==
+           ZeroCallUsedRegs::ZeroCallUsedRegsKind::Skip))
+    return;
+  const auto &TFI = *MF.getSubtarget().getFrameLowering();
+  const auto &TII = *MF.getSubtarget().getInstrInfo();
+  // Visit new continuation blocks as well: more than one predicated return
+  // can occur in a single terminator sequence.
+  for (MachineBasicBlock &MBB : MF) {
+    auto End = MBB.instr_end();
+    auto Ret = llvm::find_if(make_range(MBB.getFirstInstrTerminator(), End),
+                             [&](const MachineInstr &MI) {
+                               return TFI.isOrdinaryZeroizeReturn(MI);
+                             });
+    if (Ret == End)
+      continue;
+    if (MBB.succ_empty() && (!TII.isPredicated(*Ret) ||
+                             llvm::none_of(make_range(std::next(Ret), End),
+                                           [](const MachineInstr &MI) {
+                                             return MI.isTerminator() &&
+                                                    !MI.isMetaInstruction();
+                                           })))
+      continue;
+    if (!splitClearingReturn(*Ret, TFI)) {
+      F.getContext().diagnose(DiagnosticInfoUnsupported{
+          F, "cannot separate ordinary return from in-function control flow "
+             "for clearing"});
+      continue;
+    }
+    // Shrink wrapping selected its save/restore points for the old CFG. Use
+    // the entry and the real return blocks for this function's frame.
+    MF.getFrameInfo().setSavePoints(SaveRestorePoints());
+    MF.getFrameInfo().setRestorePoints(SaveRestorePoints());
+  }
+}
+
 bool PEIImpl::run(MachineFunction &MF) {
   NumFuncSeen++;
   const Function &F = MF.getFunction();
   const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
   const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
 
+  // Split before selecting CSR and frame save/restore blocks: neither an
+  // epilogue nor a clearing sequence may run on an internal continuation.
+  separateClearingReturns(MF);
   RS = TRI->requiresRegisterScavenging(MF) ? new RegScavenger() : nullptr;
   FrameIndexVirtualScavenging = TRI->requiresFrameIndexScavenging(MF);
 
@@ -1412,12 +1524,12 @@ static bool isUnwindResumeCall(const MachineInstr &MI) {
 /// placed at it, or null if it cannot. Only what the exit does with the frame
 /// decides this.
 ///
-/// A block with a successor continues in the function, so it is never an exit,
-/// and that is tested first. isReturn alone is not enough: catchret carries it
-/// but only leaves the exception scope, resuming the function at the block it
-/// names, so its registers are still the function's and clearing belongs at the
-/// real exit downstream. Clearing at it would also destroy the resumption
-/// address the funclet ABI returns.
+/// Supported ordinary return edges have been separated before frame lowering.
+/// A remaining block with a successor continues in the function. isReturn alone
+/// is not enough: catchret carries it but only leaves the exception scope,
+/// resuming the function at the block it names, so its registers are still the
+/// function's and clearing belongs at the real exit downstream. Clearing at it
+/// would also destroy the resumption address the funclet ABI returns.
 ///
 /// Plain returns, tail calls and cleanupret-to-caller carry isReturn. Find the
 /// return even when target unwind directives follow it. Landing pads can also
@@ -1429,8 +1541,7 @@ static bool isUnwindResumeCall(const MachineInstr &MI) {
 /// control transfer as an exit; skip instructions that cannot transfer control.
 /// Return null if no in-scope exit is found.
 static MachineInstr *getEnforceableExit(MachineBasicBlock &MBB) {
-  // A block with a successor continues in the function, so it is not an exit
-  // however its terminator reads; catchret reaches here carrying isReturn.
+  // Ordinary returns have their own blocks. Catchret still has a successor.
   if (!MBB.succ_empty())
     return nullptr;
 

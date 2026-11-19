@@ -1962,6 +1962,42 @@ static void annotateClearsForWinCFI(MachineBasicBlock &MBB,
   }
 }
 
+bool ARMFrameLowering::isOrdinaryZeroizeReturn(const MachineInstr &MI) const {
+  switch (MI.getOpcode()) {
+  case ARM::BX_RET:
+  case ARM::tBX_RET:
+  case ARM::tBX_RET_vararg:
+  case ARM::MOVPCLR:
+  case ARM::LDMIA_RET:
+  case ARM::t2LDMIA_RET:
+  case ARM::tPOP_RET:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool ARMFrameLowering::branchAroundZeroizeReturn(
+    MachineInstr &MI, MachineBasicBlock &Continue) const {
+  int P = MI.findFirstPredOperandIdx();
+  if (P < 0 || MI.isBundled() ||
+      MI.readsRegister(ARM::ITSTATE, /*TRI=*/nullptr))
+    return false;
+  auto CC = static_cast<ARMCC::CondCodes>(MI.getOperand(P).getImm());
+  if (CC >= ARMCC::AL || MI.getOperand(P + 1).getReg() != ARM::CPSR)
+    return false;
+  const auto &TII = *STI.getInstrInfo();
+  unsigned Bcc =
+      STI.isThumb2() ? ARM::t2Bcc : (STI.isThumb() ? ARM::tBcc : ARM::Bcc);
+  BuildMI(*MI.getParent(), MI, MI.getDebugLoc(), TII.get(Bcc))
+      .addMBB(&Continue)
+      .addImm(ARMCC::getOppositeCondition(CC))
+      .add(MI.getOperand(P + 1));
+  MI.getOperand(P).setImm(ARMCC::AL);
+  MI.getOperand(P + 1).ChangeToRegister(0, /*isDef=*/false);
+  return true;
+}
+
 bool ARMFrameLowering::supportsZeroizeFlags(const MachineFunction &MF) const {
   const Function &F = MF.getFunction();
   const ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();

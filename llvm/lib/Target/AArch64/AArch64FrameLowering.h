@@ -222,6 +222,7 @@ private:
   void emitZeroizeStack(MachineBasicBlock &MBB,
                         MachineBasicBlock::iterator InsertPt,
                         BitVector &ScratchRegs) const override;
+  bool isOrdinaryZeroizeReturn(const MachineInstr &MI) const override;
   bool supportsZeroizeFlags(const MachineFunction &MF) const override;
   bool prepareZeroizeFlags(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator InsertPt,
