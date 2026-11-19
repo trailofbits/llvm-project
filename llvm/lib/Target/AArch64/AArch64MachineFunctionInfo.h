@@ -570,7 +570,7 @@ public:
     return SignCondition;
   }
 
-  bool needsShadowCallStackPrologueEpilogue(MachineFunction &MF) const;
+  bool needsShadowCallStackPrologueEpilogue(const MachineFunction &MF) const;
 
   bool shouldSignWithBKey() const { return SignWithBKey; }
 

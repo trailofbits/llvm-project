@@ -1725,8 +1725,11 @@ void AArch64EpilogueEmitter::emitSwiftAsyncContextFramePointer(
   }
 }
 
-void AArch64EpilogueEmitter::emitShadowCallStackEpilogue(
-    MachineBasicBlock::iterator MBBI, const DebugLoc &DL) const {
+void AArch64FrameLowering::emitShadowCallStackPop(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
+    const DebugLoc &DL) const {
+  const auto *TII =
+      MBB.getParent()->getSubtarget<AArch64Subtarget>().getInstrInfo();
   // Shadow call stack epilog: ldr x30, [x18, #-8]!
   BuildMI(MBB, MBBI, DL, TII->get(AArch64::LDRXpre))
       .addReg(AArch64::X18, RegState::Define)
@@ -1734,7 +1737,11 @@ void AArch64EpilogueEmitter::emitShadowCallStackEpilogue(
       .addReg(AArch64::X18)
       .addImm(-8)
       .setMIFlag(MachineInstr::FrameDestroy);
+}
 
+void AArch64EpilogueEmitter::emitShadowCallStackEpilogue(
+    MachineBasicBlock::iterator MBBI, const DebugLoc &DL) const {
+  AFL.emitShadowCallStackPop(MBB, MBBI, DL);
   if (NeedsWinCFI)
     BuildMI(MBB, MBBI, DL, TII->get(AArch64::SEH_Nop))
         .setMIFlag(MachineInstr::FrameDestroy);

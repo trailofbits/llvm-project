@@ -2761,10 +2761,12 @@ fn -> other_fn -> other_fn ; fn is norecurse
     incoming path. The flags-clearing sequence preserves FPCR, FPSR and
     execution-control state. Ordinary ELF C, fast, vector PCS,
     and SVE vector PCS returns are supported. Signed returns, SME streaming
-    or ZA/ZT0 protocols, shadow call stacks, exceptional exits, Windows,
+    or ZA/ZT0 protocols, Windows,
     and other calling conventions are diagnosed. XRay entry/exit instrumentation
     is unsupported because it can run after clearing; an explicit `xray-never`
     opt-out remains supported. Ordinary tail calls are disabled for this request.
+    Exceptional exits and shadow call stacks are diagnosed except for the
+    Android stack-clearing configuration below.
 
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
@@ -2846,6 +2848,15 @@ fn -> other_fn -> other_fn ; fn is norecurse
     extent tracking; PAC and SME require separate proofs for late instructions
     and vector-length changes. Unsupported layouts and insufficient scratch
     registers are diagnosed rather than partially cleared.
+
+    On AArch64 Android API 29 and later, fixed-frame C-convention functions
+    compiled with ShadowCallStack, reserved X18 and without SVE also support
+    ordinary returns and direct Itanium C++ cleanup calls to `_Unwind_Resume`.
+    The cleanup restores the saved registers and erases the owned frame with SP
+    still in place. The unwinder recovers the caller's LR from the existing
+    shadow stack using DWARF and advances past the frame. An ordinary return
+    pops the return address from the shadow stack. This configuration requires
+    a ShadowCallStack-compatible unwinder.
 
     Inlining is constrained accordingly. A function that carries this attribute
     is inlined only into a caller that carries it as well, and only where the
