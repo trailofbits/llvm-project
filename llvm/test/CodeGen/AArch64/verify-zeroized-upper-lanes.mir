@@ -1,0 +1,68 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-before=prolog-epilog -stop-after=unpack-mi-bundles %t/two.mir -o %t/final.mir
+# RUN: FileCheck %s --check-prefix=PLAN < %t/final.mir
+# RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs -start-after=unpack-mi-bundles -filetype=obj %t/final.mir -o %t/native.o
+# RUN: sed 's/tracksRegLiveness: true/tracksRegLiveness: false/' %t/final.mir > %t/change.mir
+# RUN: sed '/\$q8 = INSvi64gpr/d' %t/change.mir > %t/missing.mir
+# RUN: not llc -verify-machineinstrs -start-after=unpack-mi-bundles %t/missing.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=UPPER
+# RUN: %if expensive_checks %{ not llc -start-after=unpack-mi-bundles %t/missing.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=UPPER %}
+# RUN: llc -verify-machineinstrs=0 -start-after=unpack-mi-bundles -filetype=obj %t/missing.mir -o /dev/null
+# RUN: sed '/\$q8 = INSvi64gpr/s/, 1, \$xzr/, 0, \$xzr/' %t/change.mir > %t/low.mir
+# RUN: not llc -verify-machineinstrs -start-after=unpack-mi-bundles %t/low.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=UPPER
+# RUN: sed '/\$q8 = INSvi64gpr/s/, 1, \$xzr/, 1, \$x19/' %t/change.mir > %t/source.mir
+# RUN: not llc -verify-machineinstrs -start-after=unpack-mi-bundles %t/source.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=UPPER
+# RUN: %python %t/join.py %t/change.mir %t/join.mir
+# RUN: not llc -verify-machineinstrs -start-after=unpack-mi-bundles %t/join.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=JOIN
+# RUN: sed '/!"aarch64.zero-call-used-regs"/s/!"FF",/!"FE",/' %t/missing.mir > %t/mask.mir
+# RUN: not llc -verify-machineinstrs -start-after=unpack-mi-bundles %t/mask.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=PLAN-ERROR
+# RUN: llc -mtriple=aarch64-linux-gnu -mattr=-neon -verify-machineinstrs -stop-after=unpack-mi-bundles %t/scalar.ll -o %t/fp.mir
+# RUN: llc -mtriple=aarch64-linux-gnu -mattr=-neon -verify-machineinstrs -start-after=unpack-mi-bundles -filetype=obj %t/fp.mir -o /dev/null
+# RUN: sed '/\$q9 = FMOVXDHighr/s/\$xzr/\$x0/' %t/fp.mir > %t/fp-source.mir
+# RUN: not llc -mtriple=aarch64-linux-gnu -mattr=-neon -verify-machineinstrs -start-after=unpack-mi-bundles %t/fp-source.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=FP
+
+# A true D8 output only protects its low 64 bits. A true Q8 output protects
+# both halves. The frozen original interface predates PEI's liveness operands.
+# PLAN-DAG: !"aarch64.zero-call-used-regs", !"{{[0-9A-F]+}}", !"FF", !"{{[0-9A-F]+}}", !"0", !"return"
+# PLAN-DAG: !"aarch64.zero-call-used-regs", !"{{[0-9A-F]+}}", !"FE", !"{{[0-9A-F]+}}", !"1", !"return"
+# UPPER: AArch64 zeroization verifier: V8[127:64] is not proven zero at return in bb.2
+# JOIN: AArch64 zeroization verifier: V8[127:64] is not proven zero at return in bb.4
+# FP: AArch64 zeroization verifier: V9[127:64] is not proven zero at return
+# PLAN-ERROR: AArch64 zeroization verifier: register obligation disagrees with eligible units and exit interface
+
+#--- two.mir
+--- |
+  target triple = "aarch64-unknown-linux-gnu"
+  define void @two() "zero-call-used-regs"="all" { ret void }
+...
+---
+name: two
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $w0, $q8
+    CBZW $w0, %bb.2
+    B %bb.1
+  bb.1:
+    liveins: $q8
+    RET undef $lr, implicit $d8
+  bb.2:
+    liveins: $q8
+    RET undef $lr, implicit $q8
+...
+
+#--- scalar.ll
+define i64 @scalar(i64 %arg) "zero-call-used-regs"="all" { ret i64 %arg }
+
+#--- join.py
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text()
+ret = "    RET undef $lr, !1,"
+assert source.count(ret) == 1
+branch = """    CBNZW $w0, %bb.4
+  bb.3:
+    $q8 = MOVIv2d_ns 255
+  bb.4:
+"""
+pathlib.Path(sys.argv[2]).write_text(source.replace(ret, branch + ret))

@@ -11,18 +11,35 @@
 
 namespace llvm {
 class BitVector;
+class LiveRegUnits;
 class MachineFunction;
 class MachineInstr;
+class MachineOperand;
 
-/// Whether the fixed-width ordinary ELF register contract can be checked.
+/// Whether the fixed-width ELF register contract can be checked in this
+/// function.
 bool shouldVerifyAArch64ZeroizedRegisters(const MachineFunction &MF);
+
+/// Whether the base ELF ABI exposes fixed-width V8–V15 upper halves.
+bool hasAArch64ZeroizeUpperLaneABI(const MachineFunction &MF);
+
+/// Whether this is the supported Android SCS transfer to _Unwind_Resume.
+bool isAArch64ZeroizeShadowResume(const MachineInstr &MI);
+
+/// Whether this calls one of the recognized C++ unwind-transfer entry points.
+bool isAArch64ZeroizeUnwindResume(const MachineInstr &MI);
+
+/// Whether an operand is a backend verification record (never an MC operand).
+bool isAArch64ZeroizationObligation(const MachineOperand &MO);
 
 /// Freeze the per-exit target requirements before emitting or retaining clears.
 void recordAArch64ZeroizationObligation(MachineInstr &Exit,
-                                        const BitVector &FullRegs);
+                                        const BitVector &FullRegs,
+                                        const BitVector &Selected,
+                                        const LiveRegUnits &Interface);
 
 /// Diagnose a required register or NZCV value not proven zero at a final
-/// return.
+/// return or supported outgoing resume call.
 bool verifyAArch64Zeroization(const MachineFunction &MF);
 } // namespace llvm
 

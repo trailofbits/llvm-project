@@ -56,7 +56,9 @@ jobs:
             llvm/test/CodeGen/AArch64/zero-call-used-regs.ll \
             llvm/test/CodeGen/AArch64/zeroize-flags.ll \
             llvm/test/CodeGen/AArch64/verify-zeroize-flags.mir \
-            llvm/test/CodeGen/AArch64/verify-zeroized-registers.mir
+            llvm/test/CodeGen/AArch64/verify-zeroized-registers.mir \
+            llvm/test/CodeGen/AArch64/verify-zeroized-upper-lanes.mir \
+            llvm/test/CodeGen/AArch64/verify-zeroized-scs-resume.mir
 
   llvm-clang:
     name: LLVM and Clang (Linux, all targets)
