@@ -220,6 +220,7 @@
 ; CHECK-NEXT:      Machine Natural Loop Construction
 ; CHECK-NEXT:      Reaching Definitions Analysis
 ; CHECK-NEXT:      ARM Low Overhead Loops pass
+; CHECK-NEXT:      Check CFA info and insert CFI instructions if needed
 ; CHECK-NEXT:      Lazy Machine Block Frequency Analysis
 ; CHECK-NEXT:      Machine Optimization Remark Emitter
 ; CHECK-NEXT:      ARM Assembly Printer
