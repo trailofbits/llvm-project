@@ -128,16 +128,18 @@ jobs:
             --build-dir build --report artifacts/zeroization-compatibility.json \
             2>&1 | tee artifacts/compatibility.log
 
-      - name: Run the x86-64 protected C++ cleanup
+      - name: Run the x86-64 protected C++ cleanups
         run: |
           set -euo pipefail
           tests=clang/test/CodeGenCXX
-          build/bin/clang --driver-mode=g++ -O2 -msahf -fexceptions -DPROTECTED \
-            -Werror -mllvm -verify-machineinstrs \
-            "$tests/zeroize-on-return-escaping-cleanup.cpp" \
-            "$tests/Inputs/zeroize-on-return-escaping-cleanup-driver.cpp" \
-            -o build/zeroize-cleanup
-          build/zeroize-cleanup
+          for case in escaping mixed; do
+            build/bin/clang --driver-mode=g++ -O2 -msahf -fexceptions -DPROTECTED \
+              -Werror -mllvm -verify-machineinstrs \
+              "$tests/zeroize-on-return-${case}-cleanup.cpp" \
+              "$tests/Inputs/zeroize-on-return-${case}-cleanup-driver.cpp" \
+              -o build/zeroize-cleanup
+            build/zeroize-cleanup
+          done
 
       - name: Build and run full test suites
         run: |
