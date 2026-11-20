@@ -113,6 +113,10 @@ static bool hasPublicReturnTransfer(const MachineBasicBlock &MBB,
       !Retention->readsRegister(Scratch, nullptr))
     return false;
   for (; It != Insns.end(); ++It) {
+    // POP must still read the incoming return slot after the scratch clear.
+    if (It->mayStore() || It->isCall() || It->isInlineAsm() ||
+        It->modifiesRegister(X86::RSP, &TRI))
+      return false;
     if (!It->modifiesRegister(Scratch, &TRI))
       continue;
     // A retained use is not a proof of a complete clear. Match the last
