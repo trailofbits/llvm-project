@@ -3,7 +3,7 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu %s -emit-llvm -std=c23 -fzero-call-used-regs=used-gpr -o - | FileCheck %s --check-prefixes=CHECK,USEDGPR
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu %s -emit-llvm -std=c23 -fzero-call-used-regs=all -o - | FileCheck %s --check-prefixes=CHECK,ALL
 
-// A protected function requests register clearing and stack clearing together,
+// A protected function requests register, stack, and flags clearing together,
 // and does so identically under every command-line mode: the attribute's
 // guarantee is a minimum that -fzero-call-used-regs may not narrow.
 
@@ -20,22 +20,22 @@
 // CHECK:       call void @zeroize_std(){{$}}
 
 // A use before the definition creates the function from a declaration that
-// lacks the attribute. The definition still carries both requests.
+// lacks the attribute. The definition still carries all three requests.
 // CHECK:     define {{.*}} @early_caller() #[[PLAIN]]
 // CHECK:     define {{.*}} @zeroize_after_use() #[[PROT]]
 
-// An explicitly annotated main keeps both requests. The exemption that strips
+// An explicitly annotated main keeps all requests. The exemption that strips
 // the command-line default from an un-annotated main still applies, and
 // zero-call-used-regs.c is what pins that.
 // CHECK:     define {{.*}} @main() #[[PROT]]
 
 // Which attribute group comes first depends on the mode, so these are -DAG.
 // Every line is anchored on the closing brace: LLVM prints string attributes
-// in alphabetical order, so "zero-call-used-regs" and "zeroize-stack" both
+// in alphabetical order, so all three zeroization requests
 // sort after "target-features", and a line that ends before them proves they
 // are absent rather than merely unmatched.
 
-// CHECK-DAG:   attributes #[[PROT]] = {{.*}}"zero-call-used-regs"="all" "zeroize-stack"="used" }
+// CHECK-DAG: #[[PROT]] = {{.*}}"zero-call-used-regs"="all" "zeroize-flags" "zeroize-stack"="used" }
 
 // An un-annotated function follows the command line, and never gets a stack
 // request: nothing on the command line asks for stack zeroization.

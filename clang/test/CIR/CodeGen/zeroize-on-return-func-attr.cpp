@@ -12,9 +12,9 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fzero-call-used-regs=skip -emit-llvm %s -o %t.ll
 // RUN: FileCheck --input-file=%t.ll %s -check-prefix=LLVM
 
-// The same prefix is used for every mode on purpose: a protected function
-// emits the same two requests whatever the command line says. The third RUN
-// of each group is classic codegen, which pins ClangIR to parity with it.
+// Both codegen paths retain the register and stack requests regardless of
+// command-line overrides. Classic codegen additionally requests flags clearing;
+// that request is not yet supported by ClangIR.
 
 extern "C" {
   [[clang::zeroize_on_return]]

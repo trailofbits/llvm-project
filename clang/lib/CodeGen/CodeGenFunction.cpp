@@ -1114,12 +1114,13 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
   if (FD && FD->hasAttr<ZeroizeOnReturnAttr>()) {
     Fn->removeFnAttr("zero-call-used-regs");
     Fn->addFnAttr("zero-call-used-regs", "all");
+    Fn->addFnAttr("zeroize-flags");
     Fn->addFnAttr("zeroize-stack", "used");
   }
 
   // Preserve the existing main exemption for both the command-line default
   // and an explicit zero_call_used_regs attribute. An explicit
-  // zeroize_on_return requests both capabilities even on main.
+  // zeroize_on_return requests all three capabilities even on main.
   if (FD && FD->isMain() && !FD->hasAttr<ZeroizeOnReturnAttr>())
     Fn->removeFnAttr("zero-call-used-regs");
 

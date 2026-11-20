@@ -8828,23 +8828,28 @@ def ZeroizeOnReturnDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{
 The ``zeroize_on_return`` attribute takes no arguments and applies to functions
-only. Clang lowers it to two LLVM IR function attributes:
-``"zero-call-used-regs"="all"`` requests call-used register clearing, and
-``"zeroize-stack"="used"`` requests clearing of the function's used stack memory.
+only. Classic Clang lowers it to three LLVM IR function attributes:
+``"zero-call-used-regs"="all"`` requests call-used register clearing,
+``"zeroize-stack"="used"`` requests clearing of the function's used stack memory,
+and ``"zeroize-flags"`` requests condition-state clearing after the other clears.
 The register request overrides both ``-fzero-call-used-regs`` and an explicit
 ``zero_call_used_regs`` attribute on the same function, including ``"skip"``.
-An explicitly annotated ``main`` also retains both requests.
+An explicitly annotated ``main`` also retains all three requests.
+ClangIR currently emits only the register and stack requests; it does not request
+condition-state clearing.
 
-**Current implementation limits.** No target implements stack or flag clearing
-yet. The attribute therefore does not currently ensure that stack-resident
-secrets are erased. Register clearing uses the existing target implementation
-of ``zero_call_used_regs("all")``; it does not clear every caller-observable
-register or condition flag. Return-value registers and registers preserved by
-the calling convention are excluded.
+**Current implementation limits.** ARM32 supports stack and condition-state
+clearing for supported static frames and ordinary return protocols. Other
+targets and unsupported ARM32 configurations are diagnosed; see the LLVM IR
+``zeroize-stack`` and ``zeroize-flags`` documentation for the target limits.
+Register clearing uses the target implementation of ``zero_call_used_regs("all")``.
+Return-value registers and registers preserved by the calling convention are
+excluded. Floating-point control/status registers are not cleared by the flags
+request.
 
 Unsupported stack requests produce a backend warning, which ``-Werror`` can
-promote to an error. Unsupported register requests produce a backend error,
-including on ARM32. Compilation is therefore not guaranteed to succeed on an
+promote to an error. Unsupported register or flags requests produce a backend
+error. Compilation is therefore not guaranteed to succeed on an
 unsupported target. The attribute cannot be combined with ``naked`` because a
 naked function has no compiler-generated epilogue in which to clear anything.
 
@@ -8874,10 +8879,10 @@ requests because it executes the body itself.
   void encrypt(void) {
     [[clang::sensitive]] unsigned char round_keys[176];
     /* ... */
-  } // requests register and stack clearing; stack clearing is not implemented
+  } // requests register, stack, and condition-state clearing
 
-Unlike ``zero_call_used_regs``, this attribute also emits a stack-clearing
-request. The local-variable ``sensitive`` attribute refines allocation metadata,
+Unlike ``zero_call_used_regs``, this attribute also emits stack and flags
+requests. The local-variable ``sensitive`` attribute refines allocation metadata,
 but does not change the ``"used"`` mode requested here.
   }];
 }
