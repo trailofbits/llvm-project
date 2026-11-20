@@ -86,10 +86,9 @@ Makes programs 10x faster by doing Special New Thing.
 ### Changes to the ARM Backend
 
 * Added support for the `zero-call-used-regs` function attribute on 32-bit Arm,
-  including ARM, Thumb-1, and Thumb-2 code generation. Windows targets are not
-  supported yet and report an error. Thumb-1 functions do not clear VFP
-  registers, which the Thumb-1 instruction set cannot write, even on cores
-  that have them.
+  including ARM, Thumb-1, and Thumb-2 code generation. Thumb-1 targets with VFP
+  registers support only general-purpose-register modes; other modes are
+  diagnosed because Thumb-1 cannot write VFP registers.
 
 ### Changes to the AVR Backend
 
@@ -127,6 +126,9 @@ Makes programs 10x faster by doing Special New Thing.
   preserving the live byte. Unsupported clears of live upper register fragments
   are diagnosed.
 
+* LVI return hardening can reuse registers kept live solely to preserve emitted
+  clears.
+
 * `llvm.zeroize` now lowers to a clearing sequence on x86-64 (LP64). Other
   subtargets, segment-relative and 32-bit-pointer address spaces, and counts
   that cannot be shown to fit are reported as unsupported rather than
@@ -145,6 +147,10 @@ Makes programs 10x faster by doing Special New Thing.
 
 * Register clearing ignores register uses marked `undef` when filtering exit
   operands, while preserving definitions and non-undef uses.
+
+* Emitted register clears remain live through late machine optimizations.
+  AArch64 tail-call authentication can still reuse available scratch registers
+  after clearing.
 
 ### Changes to the Metadata Info
 

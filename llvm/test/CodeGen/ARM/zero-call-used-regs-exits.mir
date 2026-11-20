@@ -1,0 +1,84 @@
+# RUN: llc -mtriple=armv7-none-eabi -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s
+
+# The two returns deliberately have different physical live-outs. A clear at
+# one must not inherit the other exit's exclusions.
+# CHECK-LABEL: name: different_liveouts
+# CHECK: bb.1:
+# CHECK-NOT: $r0 = MOVi
+# CHECK: $r1 = MOVi 0,
+# CHECK: $r2 = MOVi 0,
+# CHECK-NOT: $r0 = MOVi
+# CHECK: BX_RET 14{{.*}}implicit $r0
+# CHECK: bb.2:
+# CHECK: $r0 = MOVi 0,
+# CHECK-NOT: $r2 = MOVi
+# CHECK: $r3 = MOVi 0,
+# CHECK-NOT: $r2 = MOVi
+# CHECK: BX_RET 14{{.*}}implicit $r2
+
+# Clearing belongs before the non-returning cleanup call, while r0 still
+# carries the exception object. Nothing emitted after the call can protect it.
+# CHECK-LABEL: name: cleanup_exit
+# CHECK-NOT: $r0 = MOVi
+# CHECK: $r1 = MOVi 0,
+# CHECK-NEXT: $r2 = MOVi 0,
+# CHECK-NEXT: $r3 = MOVi 0,
+# CHECK-NEXT: $r12 = MOVi 0,
+# CHECK-NEXT: BL @_Unwind_Resume, {{.*}}implicit $r0
+# CHECK-NOT: MOVi
+# CHECK: ...
+
+# r4 is modified, saved and restored. Register clearing must preserve the
+# restored value as well as the return address and result.
+# CHECK-LABEL: name: callee_saved
+# CHECK: frame-setup
+# CHECK: $r4 = MOVr $r0,
+# CHECK: $r1 = MOVi 0,
+# CHECK-NOT: $r4 = MOVi
+# CHECK-NOT: $lr = MOVi
+# CHECK: frame-destroy LDMIA_RET {{.*}}def $r4, def $pc, implicit $r0
+
+--- |
+  declare void @_Unwind_Resume(ptr)
+  define void @different_liveouts() "zero-call-used-regs"="all-gpr" { ret void }
+  define void @cleanup_exit(ptr %exception) "zero-call-used-regs"="all-gpr" {
+    call void @_Unwind_Resume(ptr %exception)
+    unreachable
+  }
+  define void @callee_saved() "zero-call-used-regs"="all-gpr" { ret void }
+...
+---
+name: different_liveouts
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r0, $r2, $r3
+    CMPri $r3, 0, 14, $noreg, implicit-def $cpsr
+    Bcc %bb.2, 0, killed $cpsr
+  bb.1:
+    liveins: $r0
+    BX_RET 14, $noreg, implicit $r0
+  bb.2:
+    liveins: $r2
+    BX_RET 14, $noreg, implicit $r2
+...
+---
+name: cleanup_exit
+tracksRegLiveness: true
+frameInfo:
+  hasCalls: true
+body: |
+  bb.0:
+    liveins: $r0
+    BL @_Unwind_Resume, csr_aapcs, implicit-def $lr, implicit $sp, implicit $r0
+...
+---
+name: callee_saved
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0
+    $r4 = MOVr $r0, 14, $noreg, $noreg
+    BX_RET 14, $noreg, implicit $r0
+...

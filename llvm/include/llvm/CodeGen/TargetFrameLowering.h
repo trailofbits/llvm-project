@@ -230,22 +230,26 @@ public:
     return false;
   }
 
+  /// Keep clearing uses in a FAKE_USE before the exit so late exit rewrites
+  /// can reuse scratch registers without discarding genuine return operands.
+  virtual bool useFakeUseForZeroCallUsedRegs(const MachineInstr &ExitMI) const {
+    return false;
+  }
+
   /// Zero call-used registers; supportsZeroCallUsedRegs() must return true.
   ///
   /// Emit at \p MBBI and leave it valid: the first terminator for terminating
   /// exits, or the exit call otherwise. This preserves PEI's ClearingSequence
   /// ordering.
   ///
-  /// PEI filters \p RegsToZero using register operands from
-  /// \p MBBI to the block end, excluding aliases. Mode selection excludes
-  /// nonallocatable and fixed registers, plus sub- and superregisters of
-  /// callee-saved registers and the return-address register.
+  /// PEI clears dead flags on all inserted allocatable physical defs, including
+  /// target-selected scratch. It adds missing exact, non-undef exit uses as
+  /// implicit operands, optionally on a separate FAKE_USE as requested by
+  /// useFakeUseForZeroCallUsedRegs(). These need not represent return values.
   ///
-  /// Disjoint siblings may remain live. Targets must preserve required state
-  /// not covered by PEI's filtering and diagnose requests they cannot emit
-  /// safely. Widened writes must preserve additional units unless safe to
-  /// clobber; absence from \p RegsToZero is no guarantee. PEI does not validate
-  /// widened writes.
+  /// Exit rewrites must preserve these uses until no remaining pass can alter
+  /// clears based on liveness. AArch64 PAC return expansion drops them after
+  /// the last machine copy propagation pass in the standard pipeline.
   virtual void emitZeroCallUsedRegs(BitVector RegsToZero,
                                     MachineBasicBlock &MBB,
                                     MachineBasicBlock::iterator MBBI,
@@ -254,12 +258,43 @@ public:
   /// Returns true if this target can clear the stack frame of a function
   /// carrying the "zeroize-stack" attribute. Defaults to false.
   ///
-  /// No emission hook is paired with this query yet, so nothing can honor a
-  /// true answer: PEI reads it only to warn, and every target warns. Overriding
-  /// it before the emission exists silences the warning and clears nothing.
   virtual bool supportsZeroizeStack(const MachineFunction &MF) const {
     return false;
   }
+
+  /// Clear the owned static frame before releasing its storage. The target
+  /// must restore saved values before erasing their slots. It may split MBB,
+  /// but must retain the exit instruction. Declare every dead scratch register
+  /// for the subsequent register clear, including addressing temporaries.
+  virtual void emitZeroizeStack(MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator InsertPt,
+                                BitVector &ScratchRegs) const {}
+
+  /// Whether this target implements the "zeroize-flags" request for MF.
+  /// Unsupported requests are errors, including unsupported exit protocols.
+  virtual bool supportsZeroizeFlags(const MachineFunction &MF) const {
+    return false;
+  }
+
+  /// Plan the flags step at an exit, before any clearing is emitted. Declare
+  /// dead, unreserved scratch registers to be zeroed by ClearRegisters. The
+  /// flags emitter receives these registers zeroed and must leave them zero.
+  /// Diagnose an unsupported exit and return false rather than emit a partial
+  /// sequence. This hook must not insert instructions or change the CFG.
+  virtual bool prepareZeroizeFlags(MachineBasicBlock &MBB,
+                                   MachineBasicBlock::iterator InsertPt,
+                                   BitVector &ScratchRegs) const {
+    return false;
+  }
+
+  /// Clear non-allocatable condition state after stack and register clearing.
+  /// ScratchRegs contains the zero sources selected by prepareZeroizeFlags.
+  /// Add cleared state to ClearedRegs for exit retention. The target must also
+  /// preserve ordering through late scheduling and instruction expansion.
+  virtual void emitZeroizeFlags(MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator InsertPt,
+                                const BitVector &ScratchRegs,
+                                BitVector &ClearedRegs) const {}
 
   /// With basic block sections, emit callee saved frame moves for basic blocks
   /// that are in a different section.

@@ -27,8 +27,6 @@ protected:
 public:
   explicit ARMFrameLowering(const ARMSubtarget &sti);
 
-  bool supportsZeroCallUsedRegs(const MachineFunction &MF) const override;
-
   /// emitProlog/emitEpilog - These methods insert prolog and epilog code into
   /// the function.
   void emitPrologue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
@@ -91,6 +89,16 @@ public:
 
   const SpillSlot *
   getCalleeSavedSpillSlots(unsigned &NumEntries) const override;
+
+  bool supportsZeroizeStack(const MachineFunction &MF) const override;
+  void emitZeroizeStack(MachineBasicBlock &MBB,
+                        MachineBasicBlock::iterator InsertPt,
+                        BitVector &ScratchRegs) const override;
+
+  bool supportsZeroCallUsedRegs(const MachineFunction &MF) const override;
+
+  bool isZeroCallUsedRegsScratchReg(const MachineFunction &MF,
+                                    MCRegister Reg) const override;
 
 protected:
   bool hasFPImpl(const MachineFunction &MF) const override;

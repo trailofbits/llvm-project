@@ -58,8 +58,8 @@ define double @unprotected_libcall(double %a, double %b) {
 ; register clearing. Without the attribute the function has a tail-call exit and
 ; a return exit, and the clearing at each of them is computed for that exit.
 ; EXITS-LABEL: clearing sequence for function 'regs_unprotected':
-; EXITS-NEXT:  %bb.1 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
-; EXITS-NEXT:  %bb.2 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; EXITS-NEXT:  %bb.1 tail-call: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
+; EXITS-NEXT:  %bb.2 return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 define i32 @regs_unprotected(i1 %c, i32 %a, i32 %b) "zero-call-used-regs"="used-gpr" {
 entry:
   br i1 %c, label %tail, label %plain
@@ -76,8 +76,8 @@ plain:
 ; computed for a return. The two mechanisms do not overlap for a protected
 ; function, because it no longer has the exit the tail-call case was about.
 ; EXITS-LABEL: clearing sequence for function 'regs_protected':
-; EXITS-NEXT:  %bb.1 return: clear-stack=unsupported clear-registers=emitted clear-flags=unimplemented
-; EXITS-NEXT:  %bb.2 return: clear-stack=unsupported clear-registers=emitted clear-flags=unimplemented
+; EXITS-NEXT:  %bb.1 return: clear-stack=unsupported clear-registers=emitted clear-flags=not-requested
+; EXITS-NEXT:  %bb.2 return: clear-stack=unsupported clear-registers=emitted clear-flags=not-requested
 define i32 @regs_protected(i1 %c, i32 %a, i32 %b) "zero-call-used-regs"="used-gpr" "zeroize-stack"="used" {
 entry:
   br i1 %c, label %tail, label %plain

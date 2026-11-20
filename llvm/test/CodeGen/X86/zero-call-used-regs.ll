@@ -135,6 +135,22 @@ define dso_local i32 @all_arg(i32 returned %x) local_unnamed_addr #0 "zero-call-
 ; I386-LABEL: all_arg:
 ; I386:       # %bb.0: # %entry
 ; I386-NEXT:    movl {{[0-9]+}}(%esp), %eax
+; I386-NEXT:    fldz
+; I386-NEXT:    fldz
+; I386-NEXT:    fldz
+; I386-NEXT:    fldz
+; I386-NEXT:    fldz
+; I386-NEXT:    fldz
+; I386-NEXT:    fldz
+; I386-NEXT:    fldz
+; I386-NEXT:    fstp %st(0)
+; I386-NEXT:    fstp %st(0)
+; I386-NEXT:    fstp %st(0)
+; I386-NEXT:    fstp %st(0)
+; I386-NEXT:    fstp %st(0)
+; I386-NEXT:    fstp %st(0)
+; I386-NEXT:    fstp %st(0)
+; I386-NEXT:    fstp %st(0)
 ; I386-NEXT:    xorl %ecx, %ecx
 ; I386-NEXT:    xorl %edx, %edx
 ; I386-NEXT:    retl

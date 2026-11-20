@@ -12,7 +12,7 @@ declare void @llvm.trap()
 ; Inline asm ending the block may jump or not come back. The sequence goes in
 ; front of it and spares the registers the asm declares.
 ; SEQ-LABEL: clearing sequence for function 'opaque_asm':
-; SEQ-NEXT:  %bb.0 unknown: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:  %bb.0 unknown: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; SEQ-NEXT:  end clearing sequence for function 'opaque_asm'
 ; CHECK-LABEL: opaque_asm:
 ; CHECK:       xorl %eax, %eax
@@ -29,7 +29,7 @@ define void @opaque_asm(i64 %a, i64 %b) "zero-call-used-regs"="used-gpr" {
 
 ; A fallback trap must not hide the opaque asm exit before it.
 ; SEQ-LABEL: clearing sequence for function 'opaque_asm_then_trap':
-; SEQ-NEXT:  %bb.0 unknown: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:  %bb.0 unknown: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; SEQ-NEXT:  end clearing sequence for function 'opaque_asm_then_trap'
 ; CHECK-LABEL: opaque_asm_then_trap:
 ; CHECK:       xorl %r10d, %r10d
@@ -45,7 +45,7 @@ define void @opaque_asm_then_trap() "zero-call-used-regs"="used-gpr" {
 
 ; A fallback noreturn call must not hide the asm, or lose its own argument.
 ; SEQ-LABEL: clearing sequence for function 'opaque_asm_then_noreturn':
-; SEQ-NEXT:  %bb.0 unknown: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:  %bb.0 unknown: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; SEQ-NEXT:  end clearing sequence for function 'opaque_asm_then_noreturn'
 ; CHECK-LABEL: opaque_asm_then_noreturn:
 ; CHECK-NOT:   xorl %edi, %edi
@@ -77,7 +77,7 @@ define void @traps(i64 %a, i64 %b) "zero-call-used-regs"="used-gpr" {
 
 ; An empty block has nothing to be unsure about; the return is the only exit.
 ; SEQ-LABEL: clearing sequence for function 'empty_unreachable':
-; SEQ-NEXT:  %bb.1 return: clear-stack=not-requested clear-registers=emitted clear-flags=unimplemented
+; SEQ-NEXT:  %bb.1 return: clear-stack=not-requested clear-registers=emitted clear-flags=not-requested
 ; SEQ-NEXT:  end clearing sequence for function 'empty_unreachable'
 define void @empty_unreachable(i32 %x) "zero-call-used-regs"="used-gpr" {
 entry:

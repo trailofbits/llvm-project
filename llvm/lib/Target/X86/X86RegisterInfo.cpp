@@ -764,10 +764,29 @@ bool X86RegisterInfo::isArgumentRegister(const MachineFunction &MF,
   return X86GenRegisterInfo::isArgumentRegister(MF, Reg);
 }
 
+static bool isUnavailableZeroCallUsedRegister(const X86Subtarget &ST,
+                                              MCRegister PhysReg) {
+  if (X86::VR64RegClass.contains(PhysReg))
+    return !ST.hasMMX() || ST.useSoftFloat();
+  if (X86::VR128XRegClass.contains(PhysReg))
+    return !ST.hasSSE1();
+  if (X86::VR256XRegClass.contains(PhysReg))
+    return !ST.hasAVX();
+  if (X86::VR512RegClass.contains(PhysReg) ||
+      X86::VK1RegClass.contains(PhysReg))
+    return !ST.hasAVX512();
+  return false;
+}
+
 bool X86RegisterInfo::isFixedRegister(const MachineFunction &MF,
                                       MCRegister PhysReg) const {
   const X86Subtarget &ST = MF.getSubtarget<X86Subtarget>();
   const TargetRegisterInfo &TRI = *ST.getRegisterInfo();
+
+  // Limit clearing to enabled register files without changing allocator
+  // reservations, which also apply to MIR with explicit physical registers.
+  if (isUnavailableZeroCallUsedRegister(ST, PhysReg))
+    return true;
 
   // Stack pointer.
   if (TRI.isSuperOrSubRegisterEq(X86::RSP, PhysReg))

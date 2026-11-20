@@ -2675,6 +2675,40 @@ fn -> other_fn -> other_fn ; fn is norecurse
     a live `AL` return can coexist with clearing `AH` and the remaining upper
     bits of `RAX`.
 
+    Emitted clears remain live through late machine optimizations. Return
+    hardening may subsequently reuse a cleared register for the return address
+    (X86 LVI) or an authentication check (AArch64 tail calls).
+
+    On X86, vector selection follows the function's enabled target features:
+    SSE enables the 128-bit `XMM` width, AVX adds the 256-bit `YMM` width, and
+    AVX-512 adds the 512-bit `ZMM` width. Vector registers numbered 8 through 15
+    additionally require 64-bit mode, and registers 16 through 31 require both
+    64-bit mode and AVX-512. The exit exclusions above still apply. In particular,
+    `"all"` does not request every physical vector width present on the CPU.
+    Wider state written by a callee or inline assembly using additional features
+    is outside this selection; this attribute alone does not promise to erase
+    that state.
+
+    For X86, every selected register must be cleared across its full width or
+    diagnosed as unsupported. A write to an overlapping subregister is sufficient
+    only when the instruction also clears the remaining bits. On X86, a legacy
+    SSE `XMM` clear cannot satisfy an explicit `YMM` or `ZMM` request; such a
+    request is diagnosed if AVX is unavailable.
+
+`"zeroize-flags"`
+:   This attribute requests zeroization of the target's non-allocatable
+    condition state at every supported function exit, after stack and register
+    clearing. It takes no value. It does not implicitly request clearing of
+    the function's stack or general-purpose registers. Temporary registers
+    required for the sequence are cleared even when `"zero-call-used-regs"`
+    is absent or selects `"skip"`.
+
+    Unsupported targets, exit protocols, naked functions, and exits where
+    clearing would destroy live state are compilation errors. Targets must
+    document the state they clear and their supported exit protocols.
+    Inlining a callee with this attribute requires the caller to carry it as
+    well, including for `alwaysinline` callees.
+
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
     returning, so that data the frame held is not left readable to whatever
@@ -2705,6 +2739,21 @@ fn -> other_fn -> other_fn ; fn is norecurse
 
     A transform may not leave a function carrying this attribute with a frame
     that is not cleared on every return from it.
+
+    ARM32 currently implements this request for ordinary static frames in ARM,
+    Thumb-1, and Thumb-2 mode. Both attribute modes clear the entire owned
+    allocation, including spill slots, saved-register slots, and padding. Saved
+    registers are restored before their slots are erased, and stack storage is
+    released only after erasure. Temporary registers used for clearing are
+    cleared even when `"zero-call-used-regs"` is absent or selects `"skip"`.
+
+    The ARM32 implementation diagnoses unsupported dynamic or realigned frames,
+    SafeStack, XRay instrumentation, variadic functions, nonstandard calling
+    conventions and protected entry/return protocols, and unwind-resume exits
+    that require the saved frame.
+    It also diagnoses insufficient scratch registers or live condition flags at a
+    clearing exit. Ordinary tail-call optimization is disabled for these functions.
+    Explicit condition-flag zeroization is not implemented by this stack clear.
 
     Inlining is constrained accordingly. A function that carries this attribute
     is inlined only into a caller that carries it as well, and only where the

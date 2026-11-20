@@ -206,10 +206,15 @@ features cannot lower the translation-unit ABI level;
   clears for `-fzero-call-used-regs` and the `zero_call_used_regs` attribute.
 
 - The `-fzero-call-used-regs` flag is now supported on 32-bit Arm targets,
-  including Thumb-1 and Thumb-2. Windows on 32-bit Arm is not supported yet.
-  Thumb-1 code clears only general-purpose registers: the Thumb-1 instruction
-  set cannot write VFP registers, so values left there by ARM or Thumb-2
-  callees survive the return on cores such as the ARM1176JZF-S.
+  including Thumb-1 and Thumb-2.
+  On Thumb-1 targets with VFP hardware, only general-purpose-register modes
+  are supported. Requests that may require VFP clearing are diagnosed because
+  the Thumb-1 instruction set cannot write those registers.
+
+- Clears emitted for `-fzero-call-used-regs` and the `zero_call_used_regs`
+  attribute are preserved through late machine optimizations. X86 LVI return
+  hardening and AArch64 tail-call authentication can still reuse available
+  scratch registers after clearing.
 
 ### Removed Compiler Flags
 
