@@ -3,6 +3,7 @@
 ; CHECK: error: {{.*}}in function dynamic_frame {{.*}}X86 stack clearing does not support
 ; CHECK: error: {{.*}}in function realigned_frame {{.*}}X86 stack clearing does not support
 ; CHECK: error: {{.*}}in function has_handler {{.*}}X86 stack clearing does not support
+; CHECK: error: {{.*}}in function exception_filter {{.*}}X86 stack clearing does not support
 ; CHECK: error: {{.*}}in function unknown_personality {{.*}}X86 stack clearing does not support
 ; CHECK: error: {{.*}}in function stack_only {{.*}}X86 stack clearing does not support
 ; CHECK: error: {{.*}}in function flags_only {{.*}}"zeroize-flags" is not supported
@@ -45,6 +46,17 @@ normal:
   ret i32 %result
 cleanup:
   %exception = landingpad {ptr, i32} catch ptr null
+  call void @clean()
+  resume {ptr, i32} %exception
+}
+
+define i32 @exception_filter() "zero-call-used-regs"="all" "zeroize-stack"="used" "zeroize-flags" personality ptr @__gxx_personality_v0 {
+entry:
+  invoke void @may_throw() to label %normal unwind label %cleanup
+normal:
+  ret i32 0
+cleanup:
+  %exception = landingpad {ptr, i32} cleanup filter [0 x ptr] zeroinitializer
   call void @clean()
   resume {ptr, i32} %exception
 }
