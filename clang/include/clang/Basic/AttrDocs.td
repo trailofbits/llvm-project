@@ -8843,15 +8843,25 @@ stack and condition-state clearing for supported frames and ordinary return
 protocols. AArch64 also covers scalable SVE spill storage. X86 condition-state
 clearing requires SAHF support. Ordinary returns after internal catch handlers
 are covered under those same frame limits. On X86-64 this requires GNU C++ DWARF
-handling and the C calling convention. A call that propagates an exception out
-of the function, including ``__cxa_end_catch``, can bypass the ordinary return.
-On X86-64 LP64 ELF, classic Clang also supports
-a cleanup-only GNU C++ DWARF landing pad that explicitly calls
-``_Unwind_Resume`` with the C calling convention. Its fixed frame must be fully
-allocated. The compiler restores saved general-purpose registers, including a
-dedicated frame pointer, and switches to SP-based unwind rules before clearing
-the owned frame. The frame stays allocated at the resume call. An exception that propagates directly out of a call can bypass this
-sequence. See the LLVM IR
+handling and the C calling convention.
+
+An exception that leaves after running a local destructor has a separate exit.
+Classic Clang supports these explicit GNU C++ DWARF cleanup paths with the C
+calling convention:
+
+* On X86-64 LP64 ELF, the compiler restores saved general-purpose registers,
+  including a dedicated frame pointer, and switches to SP-based unwind rules
+  before clearing the fully allocated fixed frame. The frame stays allocated at
+  the call to ``_Unwind_Resume``.
+* On AArch64 Android API level 29 and later, a supported fixed frame can use
+  the shadow call stack with X18 reserved and SVE disabled. The cleanup clears
+  the owned frame and NZCV before calling ``_Unwind_Resume``. The unwinder
+  recovers the caller's return address from the shadow stack.
+
+ARM32 Linux and AArch64 Linux without this shadow-stack protocol diagnose a
+protected cleanup that resumes unwinding. An exception
+that propagates directly out of a call, including ``__cxa_end_catch``, can
+bypass both an ordinary return and an explicit cleanup. See the LLVM IR
 ``zeroize-stack`` and ``zeroize-flags`` documentation for the target limits.
 Register clearing uses the target implementation of ``zero_call_used_regs("all")``.
 Return-value registers and registers preserved by the calling convention are
