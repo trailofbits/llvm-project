@@ -1,0 +1,33 @@
+# RUN: not llc -mtriple=x86_64-unknown-linux-gnu -run-pass=prolog-epilog \
+# RUN:   -verify-machineinstrs %s -o /dev/null 2>&1 | FileCheck %s
+
+# CHECK: error: {{.*}}in function live_flags
+# CHECK-SAME: {{ .*}}X86 stack clearing needs dead condition flags for its loop
+# CHECK: error: {{.*}}in function no_scratch
+# CHECK-SAME: {{ .*}}X86 stack clearing needs two free caller-saved registers
+--- |
+  define void @live_flags() "zeroize-stack"="used" { ret void }
+  define void @no_scratch() "zeroize-stack"="used" { ret void }
+...
+---
+name: live_flags
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 128, alignment: 8 }
+body: |
+  bb.0:
+    liveins: $eflags
+    RET64 0, implicit $eflags
+...
+---
+name: no_scratch
+tracksRegLiveness: true
+# The long RET keeps all nine caller-saved GPRs live in one MIR instruction,
+# preserving the scratch-exhaustion case despite the 100-column limit.
+stack:
+  - { id: 0, size: 128, alignment: 8 }
+body: |
+  bb.0:
+    liveins: $rax, $rcx, $rdx, $rsi, $rdi, $r8, $r9, $r10, $r11
+    RET64 0, implicit $rax, implicit $rcx, implicit $rdx, implicit $rsi, implicit $rdi, implicit $r8, implicit $r9, implicit $r10, implicit $r11
+...

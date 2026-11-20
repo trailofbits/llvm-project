@@ -78,6 +78,9 @@ class X86MachineFunctionInfo : public MachineFunctionInfo {
   /// stack frame in bytes.
   unsigned CalleeSavedFrameSize = 0;
 
+  /// Owned static extent before emitPrologue folds bytes into the red zone.
+  uint64_t ZeroizeStackSize = 0;
+
   /// BytesToPopOnReturn - Number of bytes function pops on return (in addition
   /// to the space used by the return address).
   /// Used on windows platform for stdcall & fastcall name decoration
@@ -210,6 +213,9 @@ public:
 
   unsigned getCalleeSavedFrameSize() const { return CalleeSavedFrameSize; }
   void setCalleeSavedFrameSize(unsigned bytes) { CalleeSavedFrameSize = bytes; }
+
+  uint64_t getZeroizeStackSize() const { return ZeroizeStackSize; }
+  void setZeroizeStackSize(uint64_t Size) { ZeroizeStackSize = Size; }
 
   unsigned getBytesToPopOnReturn() const { return BytesToPopOnReturn; }
   void setBytesToPopOnReturn (unsigned bytes) { BytesToPopOnReturn = bytes;}
