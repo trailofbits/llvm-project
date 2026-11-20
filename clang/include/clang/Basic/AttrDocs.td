@@ -8932,9 +8932,10 @@ objects: capturing a sensitive variable does not mark the closure sensitive.
 If the IR is used with the ``"sensitive"`` stack mode, the programmer must mark
 every local whose storage needs clearing so it is not exempted. The current
 ``zeroize_on_return`` lowering always requests ``"used"``, which ignores these
-exemptions. No target implements stack clearing yet, so the annotation currently
-changes IR metadata only. Losing ``!nozeroize`` metadata can only widen the
-requested clearing in ``"sensitive"`` mode.
+exemptions. The annotation changes allocation metadata; stack clearing follows
+the enclosing function's request and the target limits documented above.
+Losing ``!nozeroize`` metadata can only widen the requested clearing in
+``"sensitive"`` mode.
 Compiler-introduced temporary and parameter storage remains unmarked, as does
 storage shared with return objects or Blocks runtime bookkeeping.
 ClangIR currently omits these exemptions, requesting coverage of all local
