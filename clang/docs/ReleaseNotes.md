@@ -222,10 +222,9 @@ features cannot lower the translation-unit ABI level;
 
 - Clang now properly propagates attributes on class and variable templates to their redeclarations, which will result in redeclarations not interfering with diagnostics. (#GH209812)
 
-- Added the `zeroize_on_return` function attribute. Classic Clang lowers it to
+- Added the `zeroize_on_return` function attribute. It lowers to
   `"zero-call-used-regs"="all"`, `"zeroize-stack"="used"`, and `"zeroize-flags"`
-  IR requests. ClangIR currently emits only the register and stack requests.
-  ARM32 supports static-frame stack clearing and condition-state
+  IR requests. ARM32 supports static-frame stack clearing and condition-state
   clearing for its supported return protocols; other configurations are diagnosed.
   Clang rejects the attribute on `naked` functions and rejects coroutines and
   `musttail` returns in annotated functions.
