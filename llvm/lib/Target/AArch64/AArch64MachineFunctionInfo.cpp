@@ -199,7 +199,7 @@ bool AArch64FunctionInfo::shouldSignReturnAddress(
 }
 
 bool AArch64FunctionInfo::needsShadowCallStackPrologueEpilogue(
-    MachineFunction &MF) const {
+    const MachineFunction &MF) const {
   if (!(isLRSpilled(MF) &&
         MF.getFunction().hasFnAttribute(Attribute::ShadowCallStack)))
     return false;

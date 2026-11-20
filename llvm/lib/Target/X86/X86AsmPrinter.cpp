@@ -21,6 +21,7 @@
 #include "X86InstrInfo.h"
 #include "X86MachineFunctionInfo.h"
 #include "X86Subtarget.h"
+#include "X86ZeroizeLVIReturn.h"
 #include "llvm-c/Visibility.h"
 #include "llvm/Analysis/StaticDataProfileInfo.h"
 #include "llvm/BinaryFormat/COFF.h"
@@ -77,6 +78,8 @@ X86AsmPrinter::X86AsmPrinter(TargetMachine &TM,
 /// runOnMachineFunction - Emit the function body.
 ///
 bool X86AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
+  if (isX86ZeroizeLVIReturn(MF) && !verifyX86ZeroizeLVIReturns(MF))
+    return false;
   PSI = GetPSI(*MF.getFunction().getParent());
   SDPI = GetSDPI(*MF.getFunction().getParent());
 

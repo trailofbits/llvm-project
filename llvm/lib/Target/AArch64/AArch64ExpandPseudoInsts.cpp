@@ -1661,7 +1661,10 @@ bool AArch64ExpandPseudoImpl::expandMI(MachineBasicBlock &MBB,
     MachineInstrBuilder MIB =
         BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(AArch64::RET))
           .addReg(AArch64::LR, RegState::Undef);
-    transferImpOps(MI, MIB, MIB);
+    // Keep the original implicit return operands and any frozen per-exit
+    // zeroization obligation attached to this return.
+    for (const MachineOperand &MO : MI.operands())
+      MIB.add(MO);
     MI.eraseFromParent();
     return true;
   }

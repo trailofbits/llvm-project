@@ -13,6 +13,7 @@
 #include "AArch64InstrInfo.h"
 #include "AArch64MachineFunctionInfo.h"
 #include "AArch64Subtarget.h"
+#include "AArch64Zeroization.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
 #include "llvm/CodeGen/CFIInstBuilder.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -370,10 +371,16 @@ void AArch64PointerAuthImpl::authenticateLR(
           BuildMI(MBB, MBBI, DL, TII->get(AArch64::PACM))
               .setMIFlag(MachineInstr::FrameDestroy);
         }
-        BuildMI(MBB, TI, DL,
-                TII->get(UseBKey ? AArch64::RETAB : AArch64::RETAA))
-            .copyImplicitOps(*MBBI)
-            .setMIFlag(MachineInstr::FrameDestroy);
+        auto Ret = BuildMI(MBB, TI, DL,
+                           TII->get(UseBKey ? AArch64::RETAB : AArch64::RETAA))
+                       .copyImplicitOps(*MBBI)
+                       .setMIFlag(MachineInstr::FrameDestroy);
+        if (MF.getFunction().hasZeroizeStack()) {
+          Ret.copyImplicitOps(*TI);
+          for (const MachineOperand &MO : TI->operands())
+            if (isAArch64ZeroizationObligation(MO))
+              Ret.add(MO);
+        }
       }
       MBB.erase(TI);
       return;

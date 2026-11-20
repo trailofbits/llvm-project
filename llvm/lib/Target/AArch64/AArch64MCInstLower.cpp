@@ -13,6 +13,7 @@
 
 #include "AArch64MCInstLower.h"
 #include "AArch64MachineFunctionInfo.h"
+#include "AArch64Zeroization.h"
 #include "MCTargetDesc/AArch64MCAsmInfo.h"
 #include "Utils/AArch64BaseInfo.h"
 #include "llvm/CodeGen/AsmPrinter.h"
@@ -377,6 +378,13 @@ void AArch64MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   OutMI.setOpcode(MI->getOpcode());
 
   for (const MachineOperand &MO : MI->operands()) {
+    // Verification records stay in MIR, including when authentication folds
+    // the original RET into RETAA or RETAB.
+    if (MO.isMetadata() &&
+        (MI->getOpcode() == AArch64::RET ||
+         ((MI->isReturn() || MI->getOpcode() == AArch64::BL) &&
+          isAArch64ZeroizationObligation(MO))))
+      continue;
     MCOperand MCOp;
     if (lowerOperand(MO, MCOp))
       OutMI.addOperand(MCOp);

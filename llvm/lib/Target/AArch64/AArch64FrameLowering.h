@@ -45,6 +45,9 @@ public:
   /// emitProlog/emitEpilog - These methods insert prolog and epilog code into
   /// the function.
   void emitPrologue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
+  void emitShadowCallStackPop(MachineBasicBlock &MBB,
+                              MachineBasicBlock::iterator InsertPt,
+                              const DebugLoc &DL) const;
   void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
 
   /// Harden the entire function with pac-ret.
@@ -219,6 +222,7 @@ private:
   void emitZeroizeStack(MachineBasicBlock &MBB,
                         MachineBasicBlock::iterator InsertPt,
                         BitVector &ScratchRegs) const override;
+  bool isOrdinaryZeroizeReturn(const MachineInstr &MI) const override;
   bool supportsZeroizeFlags(const MachineFunction &MF) const override;
   bool prepareZeroizeFlags(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator InsertPt,
@@ -227,6 +231,9 @@ private:
                         MachineBasicBlock::iterator InsertPt,
                         const BitVector &ScratchRegs,
                         BitVector &ClearedRegs) const override;
+
+  void addZeroCallUsedRegsSubRegs(const MachineFunction &MF,
+                                  BitVector &Candidates) const override;
 
   bool isZeroCallUsedRegsScratchReg(const MachineFunction &MF,
                                     MCRegister Reg) const override;

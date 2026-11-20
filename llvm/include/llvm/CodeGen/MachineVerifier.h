@@ -14,6 +14,12 @@
 #include <string>
 
 namespace llvm {
+class TargetMachine;
+
+/// Use the machine verifier's command-line override and expensive-checks
+/// default.
+LLVM_ABI bool isMachineVerificationEnabled(const TargetMachine &TM);
+
 class MachineVerifierPass : public RequiredPassInfoMixin<MachineVerifierPass> {
   std::string Banner;
 

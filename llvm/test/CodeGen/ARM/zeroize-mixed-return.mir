@@ -1,0 +1,32 @@
+# RUN: llc -O0 -verify-machineinstrs -start-before=prolog-epilog %s -o - | FileCheck %s
+
+# A taken branch still receives the public second argument. Each return clears
+# that argument register only after the return value has been selected.
+# CHECK-LABEL: public_choose:
+# CHECK: bne [[MORE:\.LBB[0-9_]+]]
+# CHECK: mov r1, #0
+# CHECK: bx lr
+# CHECK: [[MORE]]:
+# CHECK: add r0, r1, #29
+# CHECK: mov r1, #0
+# CHECK: bx lr
+
+--- |
+  target triple = "armv7-none-eabi"
+  define i32 @public_choose(i32 %x, i32 %y) "zero-call-used-regs"="all-gpr" { ret i32 %x }
+...
+---
+name: public_choose
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $r0, $r1, $lr
+    CMPri $r0, 0, 14, $noreg, implicit-def $cpsr
+    Bcc %bb.1, 1, killed $cpsr
+    BX_RET 14, $noreg, implicit $r0
+  bb.1:
+    liveins: $r1, $lr
+    $r0 = ADDri $r1, 29, 14, $noreg, $noreg
+    BX_RET 14, $noreg, implicit $r0
+...

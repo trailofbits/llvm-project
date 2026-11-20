@@ -2671,6 +2671,14 @@ fn -> other_fn -> other_fn ; fn is norecurse
     from clearing. Callee-saved registers, including per-function additions, and
     the target's return-address register remain excluded.
 
+    On ARM, AArch64 and X86, an ordinary machine return may share a block
+    with an internal continuation. Frame lowering gives each such supported
+    return its own epilogue before clearing. ARM and Thumb can branch around
+    the epilogue using the original return predicate, preserving the condition
+    and arguments on the continuation. Machine input that already bundles a
+    conditional return into a Thumb IT block is diagnosed when PEI would
+    need to split it.
+
     Targets must preserve live register units when widening a clear. On x86-64,
     a live `AL` return can coexist with clearing `AH` and the remaining upper
     bits of `RAX`.
@@ -2678,6 +2686,20 @@ fn -> other_fn -> other_fn ; fn is norecurse
     Emitted clears remain live through late machine optimizations. Return
     hardening may subsequently reuse a cleared register for the return address
     (X86 LVI) or an authentication check (AArch64 tail calls).
+
+    With machine verification enabled, fixed-width AArch64 ELF checks an
+    explicit `"all"` request at ordinary returns through LR, at the signed
+    stack-clearing returns described below, and at the outgoing Android
+    shadow-call-stack `_Unwind_Resume` call described
+    below. The backend records each exit's selected registers and original
+    interface before inserting register clears. Immediately before emission it
+    checks that the required bits are zero on every incoming path. This covers
+    64-bit GPRs, full 128-bit SIMD/FP registers where FP is enabled, and the
+    eligible upper 64 bits of V8–V15 under the base C calling convention.
+    Scalar FP targets without Advanced SIMD are included. At the resume call
+    the check precedes the call's register clobbers and excludes the X0
+    exception argument. Scalable state, streaming mode, tail transfers, and
+    instrumented returns are outside this verification scope.
 
     On X86, vector selection follows the function's enabled target features:
     SSE enables the 128-bit `XMM` width, AVX adds the 256-bit `YMM` width, and
@@ -2724,19 +2746,52 @@ fn -> other_fn -> other_fn ; fn is norecurse
     flags OF, SF, ZF, AF, PF, and CF. Control flags and floating-point
     control/status registers are preserved. Ordinary C and fast-convention
     returns are supported, including integer return values in RAX and RDX.
-    Exception handling, XRay instrumentation, return thunks, LVI return
-    hardening, and other exit protocols are unsupported. Ordinary tail-call
-    optimization is disabled;
-    mandatory tail calls are diagnosed. The sequence does not write stack
+    GNU C++ DWARF handlers using the C calling convention may return normally
+    through the same clearing epilogue. Stack and flags requests remain
+    independent for these returns. This does not protect an exception that
+    propagates directly out of a call, including `__cxa_end_catch`, or a branch
+    that terminates instead of returning.
+    With `"zeroize-stack"` and `"zero-call-used-regs"="all"`, cleanup-only GNU C++
+    DWARF landing pads may also resume through a direct `_Unwind_Resume` call using
+    the C calling convention. This case requires a fixed, fully allocated
+    frame with recoverable eight-byte stack slots for saved GPRs. A dedicated
+    frame pointer is restored after switching the final CFA to RSP. The cleanup
+    moves the exception pointer to RDI,
+    restores caller values to the saved GPRs and updates their unwind rules
+    before overwriting their slots. Larger frames use the usual clearing loop.
+    The frame stays allocated at the resume call. An exception that propagates
+    directly out of a call can bypass both an ordinary return and the explicit
+    resume.
+    For a fixed SysV C frame with only ordinary returns, the joint
+    `"zeroize-stack"="used"`, `"zero-call-used-regs"="all"` and
+    `"zeroize-flags"` request can retain the LVI-hardened return sequence.
+    This requires the incoming return address to be fixed permitted public
+    control-flow context. At transfer the available caller-saved register
+    contains that entire address after a POP, LFENCE and indirect jump. Other
+    covered registers retain their existing clearing and ABI obligations. The
+    epilogue diagnoses a return without a verifiable full-register replacement.
+    Other exception protocols, XRay instrumentation and return thunks are
+    unsupported. Ordinary tail-call optimization is disabled and
+    mandatory tail calls are diagnosed. The flags sequence does not write stack
     memory after stack clearing.
 
-    AArch64 clears NZCV with `MSR NZCV, XZR` after other clearing. It preserves
-    FPCR, FPSR, and execution-control state. Ordinary ELF C, fast, vector PCS,
-    and SVE vector PCS returns are supported. Signed returns, SME streaming
-    or ZA/ZT0 protocols, shadow call stacks, exceptional exits, Windows,
+    AArch64 clears NZCV with `MSR NZCV, XZR` after other clearing. When machine
+    verification is enabled, the AArch64 ELF backend checks immediately before
+    emission that an NZCV clear reaches each supported machine return and the
+    supported outgoing Android resume call on every incoming path. The flags-clearing sequence preserves FPCR, FPSR and
+    execution-control state. Ordinary ELF C, fast, vector PCS,
+    and SVE vector PCS returns are supported. For functions that also request
+    stack clearing, the fixed-width C calling convention supports ordinary
+    `RETAA` and `RETAB` returns on ELF targets with hardware pointer
+    authentication and without SVE, SME, or a shadow call stack. These returns
+    authenticate LR using the restored entry SP after clearing. Signing that
+    uses an additional PC discriminator, other signing protocols, SME streaming
+    or ZA/ZT0 protocols, Windows,
     and other calling conventions are diagnosed. XRay entry/exit instrumentation
     is unsupported because it can run after clearing; an explicit `xray-never`
     opt-out remains supported. Ordinary tail calls are disabled for this request.
+    Exceptional exits and shadow call stacks are diagnosed except for the
+    Android stack-clearing configuration below.
 
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
@@ -2776,6 +2831,10 @@ fn -> other_fn -> other_fn ; fn is norecurse
     released only after erasure. Temporary registers used for clearing are
     cleared even when `"zero-call-used-regs"` is absent or selects `"skip"`.
 
+    When a register spill would otherwise cause an ARM32 static frame to be
+    realigned, the allocator uses a spill instruction that supports the ABI
+    stack alignment. Objects with stricter alignment requirements still require
+    realignment.
     The ARM32 implementation diagnoses unsupported dynamic or realigned frames,
     SafeStack, XRay instrumentation, variadic functions, nonstandard calling
     conventions and protected entry/return protocols, and unwind-resume exits
@@ -2788,13 +2847,18 @@ fn -> other_fn -> other_fn ; fn is norecurse
     frame pointer. Both modes clear the whole owned frame, including red-zone
     storage, padding, saved-register slots, and reserved outgoing arguments;
     the incoming return address and caller-owned arguments are excluded.
-    Saved registers are restored before their slots are erased, and storage is
-    released afterward. Dynamic or realigned frames, SafeStack, split stacks,
-    variadic functions, XRay instrumentation or events, flag intrinsics
-    requiring transient stack storage,
-    exceptional exits, return thunks, and LVI return hardening are unsupported.
-    Clearing loops require two dead caller-saved
-    registers and dead condition flags. Ordinary tail calls are disabled,
+    On an ordinary return, saved registers are restored before their slots are
+    erased and the frame is then released. The combined request also supports
+    the narrow GNU C++ DWARF cleanup configuration described under
+    `"zeroize-flags"`. At the resume call the owned frame is erased but stays
+    allocated, preserving the call site's CFA and the unwinder's access to the
+    caller's incoming return address. An exception that bypasses the explicit
+    resume call also bypasses its clearing sequence. Dynamic or realigned frames,
+    SafeStack, split stacks, variadic functions, XRay instrumentation or events,
+    flag intrinsics requiring transient stack storage, other exceptional exits,
+    return thunks, and LVI return hardening outside the joint ordinary-return
+    protocol above are unsupported. Clearing loops
+    require two dead caller-saved registers and dead condition flags. Ordinary tail calls are disabled,
     and mandatory tail calls are diagnosed. This stack clear alone does not
     request final condition-flag clearing.
 
@@ -2811,9 +2875,18 @@ fn -> other_fn -> other_fn ; fn is norecurse
     variadic functions, split SVE layouts, XRay custom/typed events, and the exit
     protocols excluded by AArch64 flags clearing are unsupported. XRay events
     use storage outside the tracked frame. Dynamic layouts need additional
-    extent tracking; PAC and SME require separate proofs for late instructions
-    and vector-length changes. Unsupported layouts and insufficient scratch
-    registers are diagnosed rather than partially cleared.
+    extent tracking. Other PAC and SME protocols require separate proofs for
+    late instructions and vector-length changes. Unsupported layouts and
+    insufficient scratch registers are diagnosed rather than partially cleared.
+
+    On AArch64 Android API 29 and later, fixed-frame C-convention functions
+    compiled with ShadowCallStack, reserved X18 and without SVE also support
+    ordinary returns and direct Itanium C++ cleanup calls to `_Unwind_Resume`.
+    The cleanup restores the saved registers and erases the owned frame with SP
+    still in place. The unwinder recovers the caller's LR from the existing
+    shadow stack using DWARF and advances past the frame. An ordinary return
+    pops the return address from the shadow stack. This configuration requires
+    a ShadowCallStack-compatible unwinder.
 
     Inlining is constrained accordingly. A function that carries this attribute
     is inlined only into a caller that carries it as well, and only where the
