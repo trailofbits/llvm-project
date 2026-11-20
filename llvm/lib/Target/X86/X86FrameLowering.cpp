@@ -1065,8 +1065,13 @@ static bool hasSupportedZeroizeExits(const MachineFunction &MF) {
     if (!BB.isEHPad())
       continue;
     const LandingPadInst *LP = BB.getLandingPadInst();
-    if (!LP || !LP->isCleanup() || LP->getNumClauses())
+    if (!LP || !LP->isCleanup())
       return false;
+    // A cleanup can catch a matching type and resume a different exception.
+    // Exception filters use a separate handler protocol.
+    for (unsigned I = 0, E = LP->getNumClauses(); I != E; ++I)
+      if (LP->isFilter(I))
+        return false;
     HasCleanup = true;
   }
   return HasCleanup;
