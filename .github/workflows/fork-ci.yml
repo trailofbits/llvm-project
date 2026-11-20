@@ -55,6 +55,7 @@ jobs:
           build/bin/llvm-lit -sv \
             llvm/test/CodeGen/AArch64/zero-call-used-regs.ll \
             llvm/test/CodeGen/AArch64/zeroize-flags.ll \
+            llvm/test/CodeGen/AArch64/zeroize-signed-spill-catch.ll \
             llvm/test/CodeGen/AArch64/verify-zeroize-flags.mir \
             llvm/test/CodeGen/AArch64/verify-zeroized-registers.mir \
             llvm/test/CodeGen/AArch64/verify-zeroized-upper-lanes.mir \
