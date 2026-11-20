@@ -12,4 +12,10 @@
 # RUN: not llc -mtriple=x86_64-linux-gnu -mattr=+sahf,+lvi-cfi -start-after=unpack-mi-bundles -filetype=obj -verify-machineinstrs=0 %t.width.mir -o /dev/null 2>&1 | FileCheck %s
 # RUN: sed 's/^    JMP64r \$rcx.*/    JMP64r $rcx, implicit $rcx/' %t.mir > %t.live.mir
 # RUN: not llc -mtriple=x86_64-linux-gnu -mattr=+sahf,+lvi-cfi -start-after=unpack-mi-bundles -filetype=obj -verify-machineinstrs=0 %t.live.mir -o /dev/null 2>&1 | FileCheck %s
+# The scratch clear and fence survive both edits, but POP could read a different
+# stack slot or a replacement value in the original slot.
+# RUN: sed '/^    FAKE_USE/{h;s/.*/    $rsp = LEA64r $rsp, 1, $noreg, 8, $noreg/;p;g;}' %t.mir > %t.sp.mir
+# RUN: not llc -mtriple=x86_64-linux-gnu -mattr=+sahf,+lvi-cfi -start-after=unpack-mi-bundles -filetype=obj -verify-machineinstrs=0 %t.sp.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: sed '/^    FAKE_USE/{h;s/.*/    MOV64mr $rsp, 1, $noreg, 0, $noreg, $rax/;p;g;}' %t.mir > %t.slot.mir
+# RUN: not llc -mtriple=x86_64-linux-gnu -mattr=+sahf,+lvi-cfi -start-after=unpack-mi-bundles -filetype=obj -verify-machineinstrs=0 %t.slot.mir -o /dev/null 2>&1 | FileCheck %s
 # CHECK: cannot verify the protected X86 LVI return transfer
