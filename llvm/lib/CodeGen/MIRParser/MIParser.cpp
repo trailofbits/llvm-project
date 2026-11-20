@@ -463,9 +463,10 @@ public:
   bool parseImmediateOperand(MachineOperand &Dest);
   bool parseSymbolicInlineAsmOperand(unsigned OpIdx, MachineOperand &Dest);
   bool parseIRConstant(StringRef::iterator Loc, StringRef StringValue,
-                       const Constant *&C);
-  bool parseIRConstant(StringRef::iterator Loc, const Constant *&C);
+                       Constant *&C);
+  bool parseIRConstant(StringRef::iterator Loc, Constant *&C);
   bool parseLowLevelType(StringRef::iterator Loc, LLT &Ty);
+  bool parseIntegerConstant(Constant *&C);
   bool parseTypedImmediateOperand(MachineOperand &Dest);
   bool parseFPImmediateOperand(MachineOperand &Dest);
   bool parseMBBReference(MachineBasicBlock *&MBB);
@@ -1422,7 +1423,15 @@ bool MIParser::parseMDNodeVector(SmallVectorImpl<Metadata *> &Elts) {
 
 // ::= !42
 // ::= !"string"
+// ::= <integer type> <integer literal>
 bool MIParser::parseMetadata(Metadata *&MD) {
+  if (Token.is(MIToken::Identifier) && Token.range().starts_with("i")) {
+    Constant *C;
+    if (parseIntegerConstant(C))
+      return true;
+    MD = ConstantAsMetadata::get(C);
+    return false;
+  }
   if (Token.isNot(MIToken::exclaim))
     return error("expected '!' here");
   lex();
@@ -2078,7 +2087,7 @@ bool MIParser::parseTargetImmMnemonic(const unsigned OpCode,
 }
 
 static bool parseIRConstant(StringRef::iterator Loc, StringRef StringValue,
-                            PerFunctionMIParsingState &PFS, const Constant *&C,
+                            PerFunctionMIParsingState &PFS, Constant *&C,
                             ErrorCallbackType ErrCB) {
   auto Source = StringValue.str(); // The source has to be null terminated.
   SMDiagnostic Err;
@@ -2090,7 +2099,7 @@ static bool parseIRConstant(StringRef::iterator Loc, StringRef StringValue,
 }
 
 bool MIParser::parseIRConstant(StringRef::iterator Loc, StringRef StringValue,
-                               const Constant *&C) {
+                               Constant *&C) {
   return ::parseIRConstant(
       Loc, StringValue, PFS, C,
       [this](StringRef::iterator Loc, const Twine &Msg) -> bool {
@@ -2098,7 +2107,7 @@ bool MIParser::parseIRConstant(StringRef::iterator Loc, StringRef StringValue,
       });
 }
 
-bool MIParser::parseIRConstant(StringRef::iterator Loc, const Constant *&C) {
+bool MIParser::parseIRConstant(StringRef::iterator Loc, Constant *&C) {
   if (parseIRConstant(Loc, StringRef(Loc, Token.range().end() - Loc), C))
     return true;
   lex();
@@ -2255,6 +2264,17 @@ bool MIParser::parseLowLevelType(StringRef::iterator Loc, LLT &Ty) {
   return false;
 }
 
+bool MIParser::parseIntegerConstant(Constant *&C) {
+  auto Loc = Token.location();
+  lex();
+  if (Token.isNot(MIToken::IntegerLiteral)) {
+    if (Token.isNot(MIToken::Identifier) ||
+        !(Token.range() == "true" || Token.range() == "false"))
+      return error("expected an integer literal");
+  }
+  return parseIRConstant(Loc, C);
+}
+
 bool MIParser::parseTypedImmediateOperand(MachineOperand &Dest) {
   assert(Token.is(MIToken::Identifier));
   StringRef TypeDigits = Token.range();
@@ -2267,15 +2287,8 @@ bool MIParser::parseTypedImmediateOperand(MachineOperand &Dest) {
     return error(
         "expected integers after 'i'/'s'/'f'/'bf'/'p' type identifier");
 
-  auto Loc = Token.location();
-  lex();
-  if (Token.isNot(MIToken::IntegerLiteral)) {
-    if (Token.isNot(MIToken::Identifier) ||
-        !(Token.range() == "true" || Token.range() == "false"))
-      return error("expected an integer literal");
-  }
-  const Constant *C = nullptr;
-  if (parseIRConstant(Loc, C))
+  Constant *C;
+  if (parseIntegerConstant(C))
     return true;
   Dest = MachineOperand::CreateCImm(cast<ConstantInt>(C));
   return false;
@@ -2287,7 +2300,7 @@ bool MIParser::parseFPImmediateOperand(MachineOperand &Dest) {
   if (Token.isNot(MIToken::FloatingPointLiteral) &&
       Token.isNot(MIToken::HexLiteral))
     return error("expected a floating point literal");
-  const Constant *C = nullptr;
+  Constant *C = nullptr;
   if (parseIRConstant(Loc, C))
     return true;
   Dest = MachineOperand::CreateFPImm(cast<ConstantFP>(C));
@@ -3510,7 +3523,7 @@ static bool parseIRValue(const MIToken &Token, PerFunctionMIParsingState &PFS,
     break;
   }
   case MIToken::QuotedIRValue: {
-    const Constant *C = nullptr;
+    Constant *C = nullptr;
     if (parseIRConstant(Token.location(), Token.stringValue(), PFS, C, ErrCB))
       return true;
     V = C;
