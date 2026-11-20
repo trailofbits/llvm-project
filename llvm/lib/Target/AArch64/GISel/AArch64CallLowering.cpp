@@ -990,6 +990,9 @@ bool AArch64CallLowering::isEligibleForTailCallOptimization(
   MachineFunction &MF = MIRBuilder.getMF();
   const Function &CallerF = MF.getFunction();
 
+  if (CallerF.hasZeroizeStack() || CallerF.hasFnAttribute("zeroize-flags"))
+    return false;
+
   LLVM_DEBUG(dbgs() << "Attempting to lower call as tail call\n");
 
   if (Info.SwiftErrorVReg) {

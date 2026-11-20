@@ -10881,6 +10881,10 @@ bool AArch64InstrInfo::isFunctionSafeToOutlineFrom(
     MachineFunction &MF, bool OutlineFromLinkOnceODRs) const {
   const Function &F = MF.getFunction();
 
+  // An outlined call can save LR into stack storage after it was cleared.
+  if (F.hasZeroizeStack())
+    return false;
+
   // Can F be deduplicated by the linker? If it can, don't outline from it.
   if (!OutlineFromLinkOnceODRs && F.hasLinkOnceODRLinkage())
     return false;
