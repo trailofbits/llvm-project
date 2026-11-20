@@ -9,6 +9,7 @@
 #include "../../lib/CodeGen/RegisterClearing.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
@@ -374,14 +375,45 @@ TEST_P(RegisterClearingTest, UnsupportedRegisterRejected) {
   expectRejected(reg(GetParam().Unsupported));
   EXPECT_THAT(Diagnostics, HasSubstr("not supported for scratch"));
   if (TM->getTargetTriple().isAArch64()) {
-    // The emitter skips X19-X30 even when the calling convention preserves
-    // none.
+    // The frame pointer remains outside the scratch-clearing contract.
     for (auto CC : {CallingConv::PreserveNone, CallingConv::GHC}) {
       MF->getFunction().setCallingConv(CC);
-      for (StringRef Name : {"X19", "X28", "FP"})
-        expectRejected(reg(Name));
+      expectRejected(reg("FP"));
+      expectRejected(reg("W29"));
     }
   }
+}
+
+TEST_P(RegisterClearingTest, AArch64NonstandardCalleeSavedRegisters) {
+  if (!TM->getTargetTriple().isAArch64())
+    GTEST_SKIP() << "Uses AArch64 calling conventions";
+  for (auto CC : {CallingConv::PreserveNone, CallingConv::GHC}) {
+    MF->getFunction().setCallingConv(CC);
+    auto &MBB = addExit();
+    MCRegister Candidate = reg("X19");
+    MCRegister Scratch = reg("X28");
+    ASSERT_TRUE(clear(MBB, regs({Candidate}), regs({Scratch})));
+    expectClears(MBB, {Candidate, Scratch});
+  }
+}
+
+TEST_P(RegisterClearingTest, AArch64SelectedFramePointerAlias) {
+  if (!TM->getTargetTriple().isAArch64())
+    GTEST_SKIP() << "Uses an AArch64 register alias";
+  MF->getFunction().setCallingConv(CallingConv::GHC);
+  MF->getFrameInfo().setMaxCallFrameSize(0);
+  MF->getRegInfo().freezeReservedRegs();
+  ASSERT_TRUE(TRI->getAllocatableSet(*MF).test(reg("W29")));
+  auto &MBB = addExit();
+  ASSERT_TRUE(clear(MBB, regs({reg("W29")}), regs({})));
+  expectClears(MBB, {reg("FP")});
+
+  MF->getFunction().setCallingConv(CallingConv::C);
+  auto &PreservedExit = addExit();
+  clear(PreservedExit, regs({reg("W29")}), regs({}));
+  EXPECT_EQ(PreservedExit.size(), 1u);
+  EXPECT_EQ(Errors, 1u);
+  EXPECT_THAT(Diagnostics, HasSubstr("cannot clear register 'FP'"));
 }
 
 TEST_P(RegisterClearingTest, ReturnAddressRejected) {
