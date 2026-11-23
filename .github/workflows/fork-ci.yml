@@ -89,13 +89,15 @@ jobs:
           set -euo pipefail
           python3 .ci/check_zeroization_compatibility_test.py
           python3 .ci/check_zeroization_ffr_test.py
+          python3 .ci/check_zeroization_aarch64_cleanup_test.py
 
       - name: Install build dependencies
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            clang lld cmake ninja-build python3 python3-psutil python3-yaml qemu-user
+            clang lld cmake ninja-build python3 python3-psutil python3-yaml \
+            qemu-user g++-aarch64-linux-gnu
 
       - name: Configure
         env:
@@ -155,6 +157,16 @@ jobs:
             --llc "$PWD/build/bin/llc" --clang "$PWD/build/bin/clang" \
             --linker /usr/bin/ld.lld --qemu /usr/bin/qemu-aarch64 \
             --output artifacts/sve-ffr 2>&1 | tee artifacts/sve-ffr.log
+
+      - name: Observe AArch64 C++ cleanup state
+        run: |
+          set -euo pipefail
+          ulimit -c 0
+          python3 .ci/check_zeroization_aarch64_cleanup.py \
+            --clang "$PWD/build/bin/clang" --cxx /usr/bin/aarch64-linux-gnu-g++ \
+            --qemu /usr/bin/qemu-aarch64 --sysroot / \
+            --source-revision "$(git rev-parse HEAD)" \
+            --output artifacts/aarch64-cleanup 2>&1 | tee artifacts/aarch64-cleanup.log
 
       - name: Build and run full test suites
         run: |
