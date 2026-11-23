@@ -1,0 +1,32 @@
+# RUN: llc -mtriple=aarch64-linux-gnu -mattr=+sve -run-pass=prolog-epilog \
+# RUN:   -verify-machineinstrs %s -o - | FileCheck %s
+
+--- |
+  define void @live_ffr() "zero-call-used-regs"="used" { ret void }
+  define void @retained_ffr() "zero-call-used-regs"="used" { ret void }
+...
+---
+name: live_ffr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    ; CHECK-LABEL: name: live_ffr
+    ; CHECK: SETFFR implicit-def $ffr
+    ; CHECK-NOT: WRFFR
+    ; CHECK: RET_ReallyLR implicit $ffr
+    SETFFR implicit-def $ffr
+    RET_ReallyLR implicit $ffr
+...
+---
+name: retained_ffr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    ; CHECK-LABEL: name: retained_ffr
+    ; CHECK: SETFFR implicit-def $ffr
+    ; CHECK-NEXT: $p0 = PFALSE
+    ; CHECK-NEXT: WRFFR $p0, implicit-def $ffr
+    ; CHECK-NEXT: RET_ReallyLR implicit $ffr, implicit $p0
+    SETFFR implicit-def $ffr
+    RET_ReallyLR
+...

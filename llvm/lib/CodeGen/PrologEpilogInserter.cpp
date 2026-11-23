@@ -1907,7 +1907,7 @@ PEIImpl::planClearRegisters(MachineFunction &MF,
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
   BitVector SelectableRegs = TRI.getAllocatableSet(MF);
   if (!OnlyGPR && !OnlyArg)
-    TFI.addZeroCallUsedRegsSubRegs(MF, SelectableRegs);
+    TFI.addZeroCallUsedRegsCandidates(MF, SelectableRegs);
 
   // Mark all used registers. Implicit operands count too: an inline asm's
   // clobbers and physical-register outputs, a call's argument and result
