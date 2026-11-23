@@ -17,17 +17,18 @@ compile -DCES_FUNCTION=ces_unprotected -c "$source_dir/function.c" \
 compile -c "$source_dir/probe.S" -o "$result_dir/probe.o"
 for level in 0 2; do
   for frame in omit keep; do
+    configuration="O$level-$frame"
     frame_flag=-fomit-frame-pointer
     if [[ "$frame" == keep ]]; then
       frame_flag=-fno-omit-frame-pointer
     fi
     compile -O"$level" "$frame_flag" -DCES_FUNCTION=ces_protected \
       -DCES_PROTECTED -c "$source_dir/function.c" \
-      -o "$result_dir/protected.o"
+      -o "$result_dir/protected-$configuration.o"
     compile -DCES_HAVE_PROTECTED "$source_dir/driver.c" \
-      "$result_dir/control.o" "$result_dir/protected.o" "$result_dir/probe.o" \
-      -o "$result_dir/probe"
-    "$result_dir/probe" >"$result_dir/O$level-$frame.log"
-    cat "$result_dir/O$level-$frame.log"
+      "$result_dir/control.o" "$result_dir/protected-$configuration.o" \
+      "$result_dir/probe.o" -o "$result_dir/probe-$configuration"
+    "$result_dir/probe-$configuration" >"$result_dir/$configuration.log"
+    cat "$result_dir/$configuration.log"
   done
 done

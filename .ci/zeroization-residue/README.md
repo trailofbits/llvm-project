@@ -10,6 +10,9 @@ Run on x86-64 Linux with a candidate Clang supporting zeroize_on_return and SAHF
 
     bash .ci/check_zeroization_residue.sh /absolute/path/to/clang artifacts/residue
 
-The fork CI retains the four execution logs. A probe-only build can link driver.c, probe.S and an unprotected function.c object and run with --self-test.
+The fork CI retains each configuration's execution log, protected object and executable,
+for example `O0-omit.log`, `protected-O0-omit.o` and `probe-O0-omit`.
+The shared inputs remain `control.o` and `probe.o`. A probe-only build can link driver.c,
+probe.S and an unprotected function.c object and run with --self-test.
 
 This increment does not prove all owned padding/spill bytes, x87/MMX state, upper AVX lanes, every callee-save, exceptional exits, LVI, ARM or AArch64. It is a reproducible residue test for the listed state, not a whole-target completeness claim. The broader matrix remains tracked by internal issues 57–59.
