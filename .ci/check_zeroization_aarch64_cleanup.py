@@ -71,19 +71,20 @@ def frame_layout(assembly: str) -> tuple[int, int]:
     )
     require(body is not None, "Missing generated inner function extent")
     assert body is not None
-    cfa = re.search(r"\.cfi_def_cfa_offset\s+(\d+)", body[1])
-    require(cfa is not None, "Missing initial frame allocation CFI")
-    assert cfa is not None
-    size = int(cfa[1])
-    allocations = re.findall(
-        r"\bsub\s+sp,\s*sp,\s*#(\d+)|\[sp,\s*#-(\d+)\]!", body[1][: cfa.start()]
-    )
+    call = re.search(r"^\s*blr?\s+", body[1], re.MULTILINE)
+    require(call is not None, "Missing first fixture call")
+    assert call is not None
+    prologue = body[1][: call.start()]
+    cfa = re.findall(r"\.cfi_def_cfa_offset\s+(\d+)", prologue)
+    require(len(cfa) == 1, "Expected one prologue CFA allocation")
+    size = int(cfa[0])
+    allocations = re.findall(r"\bsub\s+sp,\s*sp,\s*#(\d+)|\[sp,\s*#-(\d+)\]!", prologue)
     require(len(allocations) == 1, "Expected one fixed prologue allocation")
     require(
         int(allocations[0][0] or allocations[0][1]) == size, "SP/CFI extent mismatch"
     )
     require(0 < size <= 4096 and size % 16 == 0, "Unsupported fixture frame size")
-    lr = re.search(r"\.cfi_offset\s+[wx]30,\s*-(\d+)", body[1])
+    lr = re.search(r"\.cfi_offset\s+[wx]30,\s*-(\d+)", prologue)
     require(lr is not None, "Missing saved-LR unwind rule")
     assert lr is not None
     offset = size - int(lr[1])

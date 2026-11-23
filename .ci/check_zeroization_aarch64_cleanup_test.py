@@ -15,6 +15,7 @@ ASSEMBLY = """inner:
   str d8, [sp, #-64]!
   .cfi_def_cfa_offset 64
   .cfi_offset w30, -40
+  bl action
   ldr x21, [x9] // Reload
   ldr x19, [x9]
   ldr x21, [x8] // Reload
@@ -42,6 +43,37 @@ class CleanupTests(unittest.TestCase):
             ),
             (64, 24),
         )
+        self.assertEqual(
+            runner.frame_layout(
+                ASSEMBLY.replace("  bl action", "  .cfi_def_cfa w29, 48\n  bl action")
+            ),
+            (64, 24),
+        )
+
+    def test_split_prologue_cannot_underreport_the_original_frame(self):
+        split = """inner:
+  sub sp, sp, #64
+  .cfi_def_cfa_offset 64
+  sub sp, sp, #16
+  .cfi_def_cfa_offset 80
+  .cfi_offset w30, -40
+  bl action
+  .size inner, .-inner
+"""
+        cases = [
+            split,
+            split.replace("  .cfi_def_cfa_offset 80\n", ""),
+            split.replace("  sub sp, sp, #16\n", ""),
+            split.replace("sub sp, sp, #16", "str x0, [sp, #-16]!").replace(
+                "  .cfi_def_cfa_offset 80\n", ""
+            ),
+        ]
+        for text in cases:
+            with (
+                self.subTest(text=text),
+                self.assertRaisesRegex(ValueError, "Expected one"),
+            ):
+                runner.frame_layout(text)
 
     def test_layout_rejects_missing_inconsistent_or_invalid_bounds(self):
         changes = [
@@ -53,6 +85,7 @@ class CleanupTests(unittest.TestCase):
             ("-40", "-72"),
             ("-40", "-3"),
             ("str d8, [sp, #-64]!", "nop"),
+            ("bl action", "nop"),
         ]
         for old, new in changes:
             with self.subTest(old=old, new=new), self.assertRaises(ValueError):

@@ -30,7 +30,9 @@ marker registers; these options do not reserve registers in the protected callee
 - Eight of those cases observe the original frame during forced cleanup: four
   protected cases require all original bytes to be zero; four unprotected
   controls require nonzero residue. The generated prologue allocation must
-  match its initial CFI extent before the observer reads that many bytes.
+  match its CFI extent before the observer reads that many bytes. The parser
+  requires one fixed allocation and one CFA-offset allocation before the first
+  call; it rejects split prologues rather than interpreting general frame layouts.
 - Protected forced cases also check original frame identity, the separate
   32-byte helper allocation, restored X19/X20, inherited X21 and saved LR, and
   the continuation matching the observed unwind PC. Destructor order and the
