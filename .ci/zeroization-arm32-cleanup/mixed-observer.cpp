@@ -17,6 +17,7 @@ static _Unwind_Exception forced;
 
 [[noreturn]] static void fail(const char *reason) {
   std::printf("FAIL reason=%s\n", reason);
+  std::fflush(stdout);
   std::_Exit(84);
 }
 static void require(bool value, const char *reason) {
