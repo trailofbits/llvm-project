@@ -43,9 +43,13 @@ def personalities() -> str:
     for name in ("personality", "helper_personality"):
         symbol = f".Larm_zeroize_{name}_0"
         text += f"{symbol}:\n  .save {{{registers}}}\n  push {{{registers}}}\n"
-        text += "  .pad #60\n  sub sp, sp, #60\n  bl runtime\n  ldm r12, {r4, lr}\n"
+        text += "  .pad #60\n  sub sp, sp, #60\n  bl runtime\n"
+        if name == "personality":
+            text += "  mov r0, #7\n  bne .Lcleanup_return0\n.Lcleanup_return0:\n"
+        text += "  ldm r12, {r4, lr}\n"
         text += "  str r1, [sp]\n"
         text += "".join(f"  str r1, [sp, #{offset}]\n" for offset in range(4, 96, 4))
+        text += "  mov r2, #0\n  msr APSR_nzcvq, r1\n"
         text += f"  add sp, sp, #96\n  bx lr\n  .fnend\n  .size {symbol}, .-{symbol}\n"
     return text
 
@@ -85,6 +89,15 @@ class ArmCleanupTests(unittest.TestCase):
             with self.subTest(mir=mir), self.assertRaises(ValueError):
                 runner.frame_layout(ASSEMBLY, mir)
 
+    def test_mixed_mir_selects_original_not_terminate_helper(self):
+        original = "---\n" + MIR + "...\n"
+        helper = "---\nname: __clang_call_terminate\nframeInfo:\n  stackSize: 999\n...\n"
+        for text in (original + helper, helper + original):
+            self.assertEqual(runner.frame_layout(ASSEMBLY, runner.inner_mir(text)), 32)
+        for text in (helper, original + original):
+            with self.assertRaises(ValueError):
+                runner.inner_mir(text)
+
     def test_original_mutation_requires_one_actual_cleanup_store(self):
         changed = runner.omit_original_wipe(ASSEMBLY)
         self.assertNotIn("str r3", changed)
@@ -93,7 +106,10 @@ class ArmCleanupTests(unittest.TestCase):
             ASSEMBLY.replace("str r3", "str r2"),
             ASSEMBLY.replace("bx r12", "str r3, [r0, #4]\n  bx r12"),
         ):
-            with self.subTest(text=text), self.assertRaisesRegex(ValueError, "exactly one"):
+            with (
+                self.subTest(text=text),
+                self.assertRaisesRegex(ValueError, "exactly one"),
+            ):
                 runner.omit_original_wipe(text)
 
     def test_private_mutations_keep_the_other_personality_intact(self):
@@ -103,6 +119,24 @@ class ArmCleanupTests(unittest.TestCase):
             self.assertEqual(result.count("Deliberately omit"), 1)
             self.assertEqual(result.count(f"str r1, [sp, #{offset}]"), 1)
             self.assertEqual(result.count("str sp,[r12]"), 2)
+
+    def test_raw_helpers_do_not_add_observer_clears(self):
+        source = personalities()
+        raw = runner.raw_personalities(source, "none")
+        self.assertTrue(raw.startswith(source))
+        self.assertNotIn("private_observations", raw)
+        self.assertEqual(raw.count("mov r2, #0"), 2)
+        self.assertEqual(raw.count("msr APSR_nzcvq, r1"), 2)
+        for index in (0, 1):
+            for kind, instruction in (("r2", "mov r2, #0"), ("flags", "msr APSR_nzcvq, r1")):
+                changed = runner.raw_personalities(source, f"{index}-{kind}")
+                self.assertEqual(changed.count(instruction), 1)
+                self.assertEqual(changed.count("nop"), 1)
+        conflated = runner.raw_personalities(source, "conflate")
+        self.assertNotIn("bne .Lcleanup_return0", conflated)
+        self.assertEqual(conflated.count("mov r2, #0"), 2)
+        with self.assertRaisesRegex(ValueError, "positive-handler"):
+            runner.raw_personalities(source.replace("bne .Lcleanup_return0", "nop"), "conflate")
 
     def test_private_observer_rejects_partial_or_extended_allocations(self):
         source = personalities()
@@ -122,7 +156,10 @@ class ArmCleanupTests(unittest.TestCase):
         runner.check_observation("PASS mode=normal\n", mode="normal", variant="protected", size=32)
         for variant, data in (("protected", bytes(32)), ("control", bytes([1]) * 32)):
             runner.check_observation(
-                frame(data) + "PASS mode=forced\n", mode="forced", variant=variant, size=32
+                frame(data) + "PASS mode=forced\n",
+                mode="forced",
+                variant=variant,
+                size=32,
             )
 
     def test_missing_partial_duplicate_or_wrong_residue_fails(self):

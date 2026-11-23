@@ -6,7 +6,10 @@
 // RUN: not %{compile} -S -ffixed-r9 -o %t.s 2>&1 | FileCheck %s --check-prefix=REJECT
 // RUN: %{compile} -S -ffixed-r9 -DNO_THROW -o - | FileCheck %s --check-prefix=ORDINARY
 // RUN: not %{compile} -S -fno-omit-frame-pointer -o %t.s 2>&1 | FileCheck %s --check-prefix=REJECT
-// RUN: not %{compile} -S -DWITH_CATCH -o %t.s 2>&1 | FileCheck %s --check-prefix=REJECT
+// RUN: %{compile} -S -marm -DWITH_CATCH -o - | FileCheck %s
+// RUN: %{compile} -S -mthumb -DWITH_CATCH -o - | FileCheck %s
+// RUN: not %{compile} -S -DWITH_CATCH -ffixed-r9 -o %t.s 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=REJECT
 // RUN: %{compile} -S -DCATCH_RETURN_ONLY -o - | FileCheck %s --check-prefix=ORDINARY
 
 #ifdef NO_THROW

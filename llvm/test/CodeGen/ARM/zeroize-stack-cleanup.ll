@@ -17,10 +17,14 @@
 ; RUN: not llc -mtriple=armv7-linux-gnueabihf -mattr=+neon %t.vararg -o /dev/null 2>&1 \
 ; RUN:   | FileCheck %s --check-prefix=ERROR
 ; RUN: sed 's/landingpad { ptr, i32 } cleanup/landingpad { ptr, i32 } cleanup catch ptr null/' %s > %t.catch
-; RUN: not llc -mtriple=armv7-linux-gnueabihf -mattr=+neon %t.catch -o /dev/null 2>&1 \
-; RUN:   | FileCheck %s --check-prefix=ERROR
+; RUN: llc -mtriple=armv7-linux-gnueabihf -mattr=+neon -verify-machineinstrs %t.catch -o - \
+; RUN:   | FileCheck %s
+; RUN: llc -mtriple=thumbv7-linux-gnueabihf -mattr=+neon -verify-machineinstrs %t.catch -o - \
+; RUN:   | FileCheck %s
 ; RUN: sed 's/landingpad { ptr, i32 } cleanup/landingpad { ptr, i32 } cleanup filter [0 x ptr] zeroinitializer/' %s > %t.filter
 ; RUN: not llc -mtriple=armv7-linux-gnueabihf -mattr=+neon %t.filter -o /dev/null 2>&1 \
+; RUN:   | FileCheck %s --check-prefix=ERROR
+; RUN: not llc -mtriple=thumbv7-linux-gnueabihf -mattr=+neon %t.filter -o /dev/null 2>&1 \
 ; RUN:   | FileCheck %s --check-prefix=ERROR
 ; RUN: sed 's/__gxx_personality_v0/custom_personality/g' %s > %t.custom
 ; RUN: not llc -mtriple=armv7-linux-gnueabihf -mattr=+neon %t.custom -o /dev/null 2>&1 \
@@ -82,8 +86,12 @@ attributes #0 = { "zeroize-stack"="used" "zero-call-used-regs"="all-gpr" "zeroiz
 ; CHECK: cmp r0, #7
 ; CHECK: bl _Unwind_VRS_Get
 ; CHECK: cmp r10, #0
+; CHECK-NEXT: blt [[FAILURE:.Lcleanup_failure[0-9]+]]
+; CHECK-NEXT: mov r0, #7
+; CHECK-NEXT: bne [[RETURN:.Lcleanup_return[0-9]+]]
 ; CHECK: str r9, [sp, #36]
 ; CHECK: bl __gnu_unwind_frame
+; CHECK: [[RETURN]]:
 ; CHECK: ldm r12, {r4, r5, r6, r7, r8, r9, r10, r11, lr}
 ; CHECK-COUNT-24: str r1, [sp
 ; CHECK: msr APSR_nzcvq, r1

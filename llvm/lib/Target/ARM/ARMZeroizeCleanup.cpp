@@ -30,26 +30,28 @@ static bool hasGNUCleanupPersonality(const MachineFunction &MF) {
   return F.hasPersonalityFn() &&
          classifyEHPersonality(F.getPersonalityFn()) ==
              EHPersonality::GNU_CXX &&
-         !MF.hasEHFunclets() && MF.getTypeInfos().empty() &&
-         MF.getFilterIds().empty();
+         !MF.hasEHFunclets() && MF.getFilterIds().empty();
 }
 
-static bool hasIRCleanupOnlyPads(const Function &F) {
+static bool hasIRCatchAndCleanupPads(const Function &F) {
   for (const BasicBlock &BB : F) {
     if (!BB.isEHPad())
       continue;
     const auto *LP = dyn_cast<LandingPadInst>(&*BB.getFirstNonPHIIt());
-    if (!LP || !LP->isCleanup() || LP->getNumClauses())
+    if (!LP)
       return false;
+    for (unsigned I = 0; I != LP->getNumClauses(); ++I)
+      if (!LP->isCatch(I))
+        return false;
   }
   return true;
 }
 
-static bool hasCleanupOnlyPads(const MachineFunction &MF) {
+static bool hasCatchAndCleanupPads(const MachineFunction &MF) {
   return hasGNUCleanupPersonality(MF) &&
-         hasIRCleanupOnlyPads(MF.getFunction()) &&
+         hasIRCatchAndCleanupPads(MF.getFunction()) &&
          llvm::all_of(MF.getLandingPads(), [](const LandingPadInfo &LP) {
-           return llvm::all_of(LP.TypeIds, [](int ID) { return ID == 0; });
+           return llvm::all_of(LP.TypeIds, [](int ID) { return ID >= 0; });
          });
 }
 
@@ -96,7 +98,7 @@ static bool hasCleanupRegisters(const MachineFunction &MF) {
 
 static bool hasCleanupProtocol(const MachineFunction &MF) {
   return hasCleanupTarget(MF) && hasCleanupLayout(MF) &&
-         hasCleanupEntryProtocol(MF) && hasCleanupOnlyPads(MF) &&
+         hasCleanupEntryProtocol(MF) && hasCatchAndCleanupPads(MF) &&
          hasCleanupRegisters(MF);
 }
 
@@ -500,8 +502,13 @@ class CleanupEmitter {
     compare(ARM::R0, 7); // _URC_INSTALL_CONTEXT
     branch(Return, ARMCC::NE);
     get(1, ARM::R10);
-    compare(ARM::R10, 0); // Only cleanup selectors are admitted.
-    branch(Failure, ARMCC::NE);
+    compare(ARM::R10, 0);
+    branch(Failure, ARMCC::LT); // Exception filters are not supported.
+    // VRS_Get clobbers R0. Preserve the selected catching frame without
+    // stepping it: phase 1 may already have identified it as the exception
+    // barrier.
+    imm(ARM::R0, 7); // _URC_INSTALL_CONTEXT
+    branch(Return, ARMCC::NE);
     get(15, ARM::R7);
     get(13, ARM::R8);
     get(4, ARM::R9);

@@ -2851,9 +2851,13 @@ fn -> other_fn -> other_fn ; fn is norecurse
     ARMv7-A/R ELF also implements an initial bounded GNU C++ EHABI cleanup
     protocol in ARM or Thumb-2 mode. It requires the C calling convention,
     SP-based fixed frames of at most 224 bytes, and contiguous saved R4-R11/LR
-    slots at the top of the frame, including R4 and LR. All landing pads must
-    be cleanup-only, without catch, filter, or terminate actions. Frame pointers,
-    saved VFP registers, reserved working registers R0-R12/LR (including a
+    slots at the top of the frame, including R4 and LR. Cleanup and catch landing
+    pads are supported, including catch-all handlers; exception filters and
+    funclets are excluded. Catching-handler installation preserves the original
+    virtual context, so a local catch does not erase a still-active frame.
+    Generated terminate handlers retain their termination semantics; this does
+    not promise erasure on process termination. Frame pointers, saved VFP
+    registers, reserved working registers R0-R12/LR (including a
     platform-reserved R9), and the unsupported layouts and instrumentation
     listed above are excluded. Ordinary returns following a local catch remain
     governed by the ordinary-return rules.
@@ -2874,6 +2878,10 @@ fn -> other_fn -> other_fn ; fn is norecurse
     and recover the caller without rereading erased slots. Each personality
     restores its ABI registers and erases its entire private 96-byte allocation,
     including padding and saved slots, on every success and error return.
+    The separate 16-byte carrier is not included in that wipe and has no
+    post-use erasure guarantee. Incoming caller context may be sensitive; the
+    carrier preserves only preexisting interface values, never protected
+    working temporaries.
     Existing unwind-runtime allocations are outside this private-frame proof.
     This protocol is verified against the tested GNU and LLVM implementations
     of that extension; it does not establish portability to every EHABI runtime

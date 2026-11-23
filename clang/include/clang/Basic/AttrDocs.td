@@ -8866,16 +8866,21 @@ calling convention:
   recovers the caller's return address from the shadow stack.
 * On ARMv7-A/R ELF in ARM or Thumb-2 mode, the initial EHABI profile supports
   SP-based fixed frames up to 224 bytes with contiguous saved R4-R11/LR slots,
-  including R4 and LR, and cleanup-only landing pads. Frame pointers, saved VFP
-  registers, catch/filter/terminate actions, and reserved working registers
-  R0-R12/LR, including platform-reserved R9, are excluded. The compiler restores
+  including R4 and LR. Cleanup, typed catch and catch-all landing pads are
+  supported; local catches retain the active frame until it actually exits.
+  Generated terminate handlers preserve termination behavior without promising
+  erasure on process termination. Frame pointers, saved VFP registers, exception
+  filters, funclets, and reserved working registers R0-R12/LR, including
+  platform-reserved R9, are excluded. The compiler restores
   incoming registers and erases the original frame before allocating a separate
   16-byte carrier below it. The carrier stores only restored incoming R4/LR,
   zero, and one constant continuation per function. Its pointer derives only
   from the permitted original SP; continuation and entry addresses depend only
   on fixed code and load context. Two local personalities erase their entire
-  96-byte private allocations on all success and error returns. This uses the
-  public VRS interface and GNU ``__gnu_unwind_frame`` extension as exercised by
+  96-byte private allocations on all success and error returns. The separate
+  carrier has no post-use erasure guarantee; restored incoming context is not
+  necessarily public data. This uses the public VRS interface and GNU
+  ``__gnu_unwind_frame`` extension as exercised by
   the tested GNU and LLVM runtimes, not a guarantee for every EHABI runtime or
   asynchronous instruction-boundary unwinding. Existing runtime allocations are
   outside the private-frame proof.
