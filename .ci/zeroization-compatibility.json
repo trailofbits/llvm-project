@@ -1,7 +1,7 @@
 {
-  "baseline": "657dd456bef04ccd9f04e48319fe6e0b7c174579",
-  "previous_baseline": "7932207f03ab3b3ed2fad5ea3fe2298d7e426dce",
-  "decision": "Proposed for review. Acceptance of the AArch64 upper-half expectations is pending.",
+  "baseline": "b0632252fce3fa21c308b2db4c299eab706173e2",
+  "previous_baseline": "657dd456bef04ccd9f04e48319fe6e0b7c174579",
+  "decision": "Proposed for review. Acceptance of the fixed-width and SVE upper-lane expectations is pending.",
   "files": {
     "llvm/test/CodeGen/X86/zero-call-used-regs.ll":
       "ce37dce4b723f3bde6d43c63b0f176e3d2e5c2c0f9196ab60c7bbc80bc991811",
@@ -12,7 +12,7 @@
     "llvm/test/CodeGen/X86/zero-call-used-regs-simd.ll":
       "6657a2a9121484b86a896b76866bb62987b00ae79f7ab2db2aabba3ccfb7b32d",
     "llvm/test/CodeGen/AArch64/zero-call-used-regs.ll":
-      "319501e76c1e7fc68963d31ae22c0a668643f9e58d8db58990636c9cea51ae51",
+      "d75d6c4ffefcbb1f765d503b3f93f289cc9787126d47b45e7f90a0b2ba7bc474",
     "clang/test/CodeGen/zero-call-used-regs.c":
       "d8c327b508967bc4fbe6e67340ae5f5858b7c0a9e549c13036de4ae950c534dc"
   }
