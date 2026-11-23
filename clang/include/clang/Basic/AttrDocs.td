@@ -8854,13 +8854,30 @@ calling convention:
   before clearing the fully allocated fixed frame. The frame stays allocated at
   the call to ``_Unwind_Resume``. A cleanup can also catch a matching C++
   exception and let another exception propagate to the caller.
+* On AArch64 ELF, an ordinary fixed frame can use a compiler-local cleanup
+  helper without SVE, SME, return-address signing, or a shadow call stack.
+  The compiler restores saved caller registers and clears the original frame.
+  The helper allocates separate storage strictly below the erased frame and
+  calls ``_Unwind_Resume``. Its unwind rules preserve the original function's
+  frame identity and restore the caller's context.
 * On AArch64 Android API level 29 and later, a supported fixed frame can use
   the shadow call stack with X18 reserved and SVE disabled. The cleanup clears
   the owned frame and NZCV before calling ``_Unwind_Resume``. The unwinder
   recovers the caller's return address from the shadow stack.
 
-ARM32 Linux and AArch64 Linux without this shadow-stack protocol diagnose a
-protected cleanup that resumes unwinding. An exception
+The AArch64 local helper permits the exception-object interface, restored
+incoming LR and X21, one constant continuation per function determined only by
+fixed code and load context, and a carrier pointer derived only from the
+permitted original SP and fixed allocation size. The continuation cannot depend
+on the selected cleanup path or protected data. This narrow protocol does not
+permit arbitrary compiler-created values or protected temporaries in helper
+storage. The original frame remains erased; deeper helper and unwinder storage
+are outside that frame's clearing request.
+
+ARM32 Linux still diagnoses a protected cleanup that resumes unwinding.
+Dynamic or realigned frames, other personalities, other calling conventions,
+basic-block sections, and the other documented unsupported AArch64 layouts and
+instrumentation remain outside the local helper protocol. An exception
 that propagates directly out of a call, including ``__cxa_end_catch``, can
 bypass both an ordinary return and an explicit cleanup. See the LLVM IR
 ``zeroize-stack`` and ``zeroize-flags`` documentation for the target limits.

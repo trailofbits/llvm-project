@@ -2689,16 +2689,18 @@ fn -> other_fn -> other_fn ; fn is norecurse
 
     With machine verification enabled, fixed-width AArch64 ELF checks an
     explicit `"all"` request at ordinary returns through LR, at the signed
-    stack-clearing returns described below, and at the outgoing Android
-    shadow-call-stack `_Unwind_Resume` call described
-    below. The backend records each exit's selected registers and original
-    interface before inserting register clears. Immediately before emission it
-    checks that the required bits are zero on every incoming path. This covers
+    stack-clearing returns described below, and at the outgoing AArch64 cleanup
+    transfers described below. The backend records each exit's selected registers
+    and original interface before inserting register clears. Immediately before
+    emission it checks that the required bits are zero on every incoming path. This covers
     64-bit GPRs, full 128-bit SIMD/FP registers where FP is enabled, and the
     eligible upper 64 bits of V8–V15 under the base C calling convention.
-    Scalar FP targets without Advanced SIMD are included. At the resume call
-    the check precedes the call's register clobbers and excludes the X0
-    exception argument. Scalable state, streaming mode, tail transfers, and
+    Scalar FP targets without Advanced SIMD are included. At a cleanup transfer
+    the check precedes any unwinder call and excludes the X0
+    exception argument. The local cleanup-carrier protocol also excludes X1,
+    whose constant continuation address is checked before emission. Its restored
+    LR and X21 are caller context, as described under `"zeroize-stack"` below.
+    Scalable state, streaming mode, other tail transfers, and
     instrumented returns are outside this verification scope.
 
     On X86, vector selection follows the function's enabled target features:
@@ -2780,7 +2782,8 @@ fn -> other_fn -> other_fn ; fn is norecurse
     AArch64 clears NZCV with `MSR NZCV, XZR` after other clearing. When machine
     verification is enabled, the AArch64 ELF backend checks immediately before
     emission that an NZCV clear reaches each supported machine return and the
-    supported outgoing Android resume call on every incoming path. The flags-clearing sequence preserves FPCR, FPSR and
+    supported outgoing cleanup transfer on every incoming path. The
+    flags-clearing sequence preserves FPCR, FPSR and
     execution-control state. Ordinary ELF C, fast, vector PCS,
     and SVE vector PCS returns are supported. For functions that also request
     stack clearing, the fixed-width C calling convention supports ordinary
@@ -2793,7 +2796,7 @@ fn -> other_fn -> other_fn ; fn is norecurse
     is unsupported because it can run after clearing; an explicit `xray-never`
     opt-out remains supported. Ordinary tail calls are disabled for this request.
     Exceptional exits and shadow call stacks are diagnosed except for the
-    Android stack-clearing configuration below.
+    fixed-frame cleanup and Android shadow-stack configurations below.
 
 `"zeroize-stack"`
 :   This attribute requests that the function clear its stack frame before
@@ -2880,6 +2883,33 @@ fn -> other_fn -> other_fn ; fn is norecurse
     extent tracking. Other PAC and SME protocols require separate proofs for
     late instructions and vector-length changes. Unsupported layouts and
     insufficient scratch registers are diagnosed rather than partially cleared.
+
+    AArch64 ELF fixed-frame functions using the C calling convention and the GNU
+    C++ DWARF personality also support terminal direct cleanup transfers to
+    `_Unwind_Resume`. The compiler restores saved caller registers, clears the
+    entire original frame, and leaves its SP in place. A compiler-local helper
+    allocates separate storage strictly below that original extent and calls
+    `_Unwind_Resume`; it does not write back into the erased frame. Its unwind
+    rules expose the original function at the original SP before recovering the
+    caller's context. This preserves the original frame's identity for
+    forced-unwind stop callbacks.
+
+    This protocol permits only explicit interface and control-flow context:
+    the exception object in X0, restored incoming LR and X21, one constant
+    continuation address per function in X1, and a carrier pointer derived
+    solely from the permitted original SP and fixed allocation size. The
+    continuation depends only on fixed code and load context, not the selected
+    cleanup path or protected data. The helper saves that context in its own
+    allocation, and the unwinder restores the caller's X21 from it. This is not
+    an allowance for arbitrary compiler-created values or protected temporaries.
+    Helper and unwinder storage remain outside the original function's frame.
+
+    The local helper protocol requires an ordinary fixed frame without SVE,
+    SME, return-address signing, shadow call stack, basic-block sections, or the
+    unsupported layouts and instrumentation listed above. Other personalities
+    and calling conventions remain unsupported. It does not implement ARM32
+    EHABI cleanup clearing or protect an exception that bypasses an explicit
+    cleanup transfer.
 
     On AArch64 Android API 29 and later, fixed-frame C-convention functions
     compiled with ShadowCallStack, reserved X18 and without SVE also support
