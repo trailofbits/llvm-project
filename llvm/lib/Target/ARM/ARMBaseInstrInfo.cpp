@@ -6116,6 +6116,11 @@ bool ARMBaseInstrInfo::isFunctionSafeToOutlineFrom(
     MachineFunction &MF, bool OutlineFromLinkOnceODRs) const {
   const Function &F = MF.getFunction();
 
+  // Outlining can move clearing past the protected exit or spill LR into an
+  // already-cleared frame.
+  if (F.hasZeroizeStack())
+    return false;
+
   // Can F be deduplicated by the linker? If it can, don't outline from it.
   if (!OutlineFromLinkOnceODRs && F.hasLinkOnceODRLinkage())
     return false;
