@@ -2751,10 +2751,12 @@ fn -> other_fn -> other_fn ; fn is norecurse
     independent for these returns. This does not protect an exception that
     propagates directly out of a call, including `__cxa_end_catch`, or a branch
     that terminates instead of returning.
-    With `"zeroize-stack"` and `"zero-call-used-regs"="all"`, cleanup-only GNU C++
-    DWARF landing pads may also resume through a direct `_Unwind_Resume` call using
-    the C calling convention. This case requires a fixed, fully allocated
-    frame with recoverable eight-byte stack slots for saved GPRs. A dedicated
+    With `"zeroize-stack"` and `"zero-call-used-regs"="all"`, GNU C++ DWARF
+    cleanup landing pads may also resume through a direct `_Unwind_Resume` call
+    using the C calling convention. Cleanup pads may also have typed catches.
+    Exception filters and catch-only pads in functions that resume unwinding are
+    unsupported. This case requires a fixed, fully allocated frame with
+    recoverable eight-byte stack slots for saved GPRs. A dedicated
     frame pointer is restored after switching the final CFA to RSP. The cleanup
     moves the exception pointer to RDI,
     restores caller values to the saved GPRs and updates their unwind rules
