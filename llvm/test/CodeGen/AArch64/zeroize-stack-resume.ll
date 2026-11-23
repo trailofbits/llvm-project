@@ -4,6 +4,8 @@
 ; RUN: not llc -mtriple=aarch64-unknown-linux-gnu -mattr=+sve < %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=REJECT
 ; RUN: sed 's/__gxx_personality_v0/custom_personality/g' %s > %t-unknown.ll
 ; RUN: not llc -mtriple=aarch64-unknown-linux-gnu %t-unknown.ll -o /dev/null 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: llc -mtriple=aarch64-unknown-linux-gnu -save-temp-labels -stop-before=prolog-epilog %s -o %t-before.mir
+; RUN: not llc -mtriple=aarch64-unknown-linux-gnu -mattr=+reserve-x1 -start-before=prolog-epilog %t-before.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=REJECT
 ; RUN: llc -mtriple=aarch64-unknown-linux-gnu -save-temp-labels -stop-after=prolog-epilog %s -o %t.mir
 ; RUN: sed 's/\.Lzeroize_resume_0/.Lwrong_continuation/g' %t.mir > %t-wrong.mir
 ; RUN: not llc -mtriple=aarch64-unknown-linux-gnu -verify-machineinstrs -start-after=prolog-epilog %t-wrong.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=WRONG

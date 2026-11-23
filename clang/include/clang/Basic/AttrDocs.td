@@ -8876,9 +8876,10 @@ are outside that frame's clearing request.
 
 ARM32 Linux still diagnoses a protected cleanup that resumes unwinding.
 Dynamic or realigned frames, other personalities, other calling conventions,
-basic-block sections, and the other documented unsupported AArch64 layouts and
-instrumentation remain outside the local helper protocol. An exception
-that propagates directly out of a call, including ``__cxa_end_catch``, can
+basic-block sections, functions reserving X1 or X21, and the other documented
+unsupported AArch64 layouts and instrumentation remain outside the local helper
+protocol. An exception that propagates directly out of a call, including
+``__cxa_end_catch``, can
 bypass both an ordinary return and an explicit cleanup. See the LLVM IR
 ``zeroize-stack`` and ``zeroize-flags`` documentation for the target limits.
 Register clearing uses the target implementation of ``zero_call_used_regs("all")``.

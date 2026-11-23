@@ -2907,9 +2907,9 @@ fn -> other_fn -> other_fn ; fn is norecurse
     The local helper protocol requires an ordinary fixed frame without SVE,
     SME, return-address signing, shadow call stack, basic-block sections, or the
     unsupported layouts and instrumentation listed above. Other personalities
-    and calling conventions remain unsupported. It does not implement ARM32
-    EHABI cleanup clearing or protect an exception that bypasses an explicit
-    cleanup transfer.
+    and calling conventions, and functions reserving X1 or X21, remain
+    unsupported. It does not implement ARM32 EHABI cleanup clearing or protect
+    an exception that bypasses an explicit cleanup transfer.
 
     On AArch64 Android API 29 and later, fixed-frame C-convention functions
     compiled with ShadowCallStack, reserved X18 and without SVE also support

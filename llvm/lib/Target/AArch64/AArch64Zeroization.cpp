@@ -324,8 +324,9 @@ static bool hasCarrierResumeProtocol(const MachineFunction &MF) {
   const Function &F = MF.getFunction();
   const auto &STI = MF.getSubtarget<AArch64Subtarget>();
   const auto &AFI = *MF.getInfo<AArch64FunctionInfo>();
-  return F.getCallingConv() == CallingConv::C && !STI.hasSVE() &&
-         !STI.hasSME() && !AFI.shouldSignReturnAddress(MF) &&
+  return F.getCallingConv() == CallingConv::C && !STI.isXRegisterReserved(1) &&
+         !STI.isXRegisterReserved(21) && !STI.hasSVE() && !STI.hasSME() &&
+         !AFI.shouldSignReturnAddress(MF) &&
          !F.hasFnAttribute(Attribute::ShadowCallStack) && !MF.hasBBSections() &&
          AFI.needsDwarfUnwindInfo(MF);
 }
