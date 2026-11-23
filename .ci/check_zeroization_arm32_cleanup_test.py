@@ -182,9 +182,11 @@ class ArmCleanupTests(unittest.TestCase):
     def test_timeout_keeps_partial_output(self):
         log = self.root / "timeout.log"
         error = subprocess.TimeoutExpired(["compiler"], 30, output=b"partial output\n")
-        with mock.patch.object(subprocess, "run", side_effect=error):
-            with self.assertRaisesRegex(ValueError, "timed out"):
-                runner.execute(["compiler"], log)
+        with (
+            mock.patch.object(subprocess, "run", side_effect=error),
+            self.assertRaisesRegex(ValueError, "timed out"),
+        ):
+            runner.execute(["compiler"], log)
         self.assertIn("partial output\n\nTIMEOUT", log.read_text())
 
     def test_existing_evidence_directory_is_not_overwritten(self):
