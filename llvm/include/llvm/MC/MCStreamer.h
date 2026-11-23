@@ -136,9 +136,17 @@ public:
 // FIXME: declared here because it is used from
 // lib/CodeGen/AsmPrinter/ARMException.cpp.
 class LLVM_ABI ARMTargetStreamer : public MCTargetStreamer {
+  const MCSymbol *PersonalityOverride = nullptr;
+
 public:
   ARMTargetStreamer(MCStreamer &S);
   ~ARMTargetStreamer() override;
+
+  /// A backend may interpose a local personality while retaining the LSDA.
+  void setPersonalityOverride(const MCSymbol *Symbol) {
+    PersonalityOverride = Symbol;
+  }
+  const MCSymbol *getPersonalityOverride() const { return PersonalityOverride; }
 
   virtual void emitFnStart();
   virtual void emitFnEnd();

@@ -113,6 +113,7 @@
 #include "ARMConstantPoolValue.h"
 #include "ARMMachineFunctionInfo.h"
 #include "ARMSubtarget.h"
+#include "ARMZeroizeCleanup.h"
 #include "MCTargetDesc/ARMAddressingModes.h"
 #include "MCTargetDesc/ARMBaseInfo.h"
 #include "Utils/ARMBaseInfo.h"
@@ -1670,7 +1671,8 @@ bool ARMFrameLowering::supportsZeroizeStack(const MachineFunction &MF) const {
               (MO.isSymbol() &&
                (StringRef(MO.getSymbolName()) == "_Unwind_Resume" ||
                 StringRef(MO.getSymbolName()) == "__cxa_end_cleanup")))
-            return false;
+            if (!isARMZeroizeCleanup(MI))
+              return false;
     }
   return true;
 }
@@ -1687,6 +1689,11 @@ void ARMFrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
     MF.getFunction().getContext().diagnose(
         DiagnosticInfoUnsupported{MF.getFunction(), Message});
   };
+  bool Cleanup = isARMZeroizeCleanup(*InsertPt);
+  if (Cleanup && !hasARMZeroizeCleanupFrame(MF)) {
+    Fail("ARM cleanup clearing requires the supported SP-based frame recipe");
+    return;
+  }
   if (Size == 0)
     return;
   if (Size > INT32_MAX || Size % 4) {
@@ -1714,9 +1721,10 @@ void ARMFrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
   }
   SmallVector<MCRegister, 3> Work;
   for (MCRegister R : {ARM::R0, ARM::R1, ARM::R2, ARM::R3})
-    if (!MF.getRegInfo().isReserved(R) && Live.available(R))
+    if ((!Cleanup || (R != ARM::R1 && R != ARM::R2)) &&
+        !MF.getRegInfo().isReserved(R) && Live.available(R))
       Work.push_back(R);
-  const bool Loop = Size > 64;
+  const bool Loop = Size > 64 && !Cleanup;
   MCRegister End;
   if (Loop) {
     if (!MF.getRegInfo().isReserved(ARM::R12) && Live.available(ARM::R12))
@@ -1850,9 +1858,34 @@ void ARMFrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
     recomputeLiveIns(*Body);
     recomputeLiveIns(*Body);
   }
-  Copy(*Tail, InsertPt, ARM::SP, Ptr);
-  CFIInstBuilder(*Tail, InsertPt, MachineInstr::FrameDestroy)
-      .buildDefCFA(ARM::SP, 0);
+  if (Cleanup) {
+    // Keep the original allocation and restored context until the private
+    // helper has recorded them below the erased interval.
+    for (auto [Reg, Kind] : {std::pair(ARM::R1, "continuation"),
+                             std::pair(ARM::R12, "carrier")}) {
+      unsigned Label = MF.getInfo<ARMFunctionInfo>()->createPICLabelUId();
+      MCSymbol *Symbol = getARMZeroizeSymbol(MF, Kind);
+      BuildMI(*Tail, InsertPt, DL,
+              TII.get(STI.isThumb() ? ARM::t2MOVi16_ga_pcrel : ARM::MOVi16_ga_pcrel), Reg)
+          .addSym(Symbol).addImm(Label);
+      BuildMI(*Tail, InsertPt, DL,
+              TII.get(STI.isThumb() ? ARM::t2MOVTi16_ga_pcrel : ARM::MOVTi16_ga_pcrel), Reg)
+          .addReg(Reg).addSym(Symbol).addImm(Label);
+      auto Add = BuildMI(*Tail, InsertPt, DL,
+                         TII.get(STI.isThumb() ? ARM::tPICADD : ARM::PICADD), Reg)
+                     .addReg(Reg).addImm(Label);
+      if (!STI.isThumb())
+        Add.add(predOps(ARMCC::AL));
+    }
+    TII.buildClearRegister(ARM::R2, *Tail, InsertPt, DL);
+    for (MCRegister R : {ARM::R1, ARM::R2, ARM::R4, ARM::R12, ARM::LR})
+      if (!InsertPt->readsRegister(R, &TRI))
+        InsertPt->addOperand(MF, MachineOperand::CreateReg(R, false, true));
+  } else {
+    Copy(*Tail, InsertPt, ARM::SP, Ptr);
+    CFIInstBuilder(*Tail, InsertPt, MachineInstr::FrameDestroy)
+        .buildDefCFA(ARM::SP, 0);
+  }
   if (Loop) {
     recomputeLiveIns(*Tail);
     for (MachineBasicBlock *Pred : Tail->predecessors()) {
@@ -2048,7 +2081,8 @@ bool ARMFrameLowering::supportsZeroizeFlags(const MachineFunction &MF) const {
               (MO.isSymbol() &&
                (StringRef(MO.getSymbolName()) == "_Unwind_Resume" ||
                 StringRef(MO.getSymbolName()) == "__cxa_end_cleanup")))
-            return false;
+            if (!isARMZeroizeCleanup(MI))
+              return false;
     }
   return true;
 }

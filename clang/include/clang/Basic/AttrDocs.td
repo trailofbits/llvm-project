@@ -8846,7 +8846,7 @@ are covered under those same frame limits. On X86-64 this requires GNU C++ DWARF
 handling and the C calling convention.
 
 An exception that leaves after running a local destructor has a separate exit.
-Classic Clang supports these explicit GNU C++ DWARF cleanup paths with the C
+Classic Clang supports these explicit GNU C++ cleanup paths with the C
 calling convention:
 
 * On X86-64 LP64 ELF, the compiler restores saved general-purpose registers,
@@ -8864,6 +8864,21 @@ calling convention:
   the shadow call stack with X18 reserved and SVE disabled. The cleanup clears
   the owned frame and NZCV before calling ``_Unwind_Resume``. The unwinder
   recovers the caller's return address from the shadow stack.
+* On ARMv7-A/R ELF in ARM or Thumb-2 mode, the initial EHABI profile supports
+  SP-based fixed frames up to 224 bytes with contiguous saved R4-R11/LR slots,
+  including R4 and LR, and cleanup-only landing pads. Frame pointers, saved VFP
+  registers, catch/filter/terminate actions, and reserved working registers
+  R0-R12/LR, including platform-reserved R9, are excluded. The compiler restores
+  incoming registers and erases the original frame before allocating a separate
+  16-byte carrier below it. The carrier stores only restored incoming R4/LR,
+  zero, and one constant continuation per function. Its pointer derives only
+  from the permitted original SP; continuation and entry addresses depend only
+  on fixed code and load context. Two local personalities erase their entire
+  96-byte private allocations on all success and error returns. This uses the
+  public VRS interface and GNU ``__gnu_unwind_frame`` extension as exercised by
+  the tested GNU and LLVM runtimes, not a guarantee for every EHABI runtime or
+  asynchronous instruction-boundary unwinding. Existing runtime allocations are
+  outside the private-frame proof.
 
 The AArch64 local helper permits the exception-object interface, restored
 incoming LR and X21, one constant continuation per function determined only by
@@ -8874,7 +8889,6 @@ permit arbitrary compiler-created values or protected temporaries in helper
 storage. The original frame remains erased; deeper helper and unwinder storage
 are outside that frame's clearing request.
 
-ARM32 Linux still diagnoses a protected cleanup that resumes unwinding.
 Dynamic or realigned frames, other personalities, other calling conventions,
 basic-block sections, functions reserving X1 or X21, and the other documented
 unsupported AArch64 layouts and instrumentation remain outside the local helper

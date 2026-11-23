@@ -4,8 +4,8 @@
 // DEFINE: %{arm} = %{compile} --target=armv7-linux-gnueabihf -marm -mfpu=neon
 // DEFINE: %{a64} = %{compile} --target=aarch64-linux-gnu
 // RUN: %if arm-registered-target %{ %{arm} -o - | FileCheck %s --check-prefix=ARM-CONTROL %}
-// RUN: %if arm-registered-target %{ not %{arm} %{protect} -o %t.s 2>&1 \
-// RUN:   | FileCheck %s --check-prefix=ARM-ERROR %}
+// RUN: %if arm-registered-target %{ %{arm} %{protect} -o - \
+// RUN:   | FileCheck %s --check-prefix=ARM %}
 // RUN: %if aarch64-registered-target %{ %{a64} -o - | FileCheck %s --check-prefix=A64-CONTROL %}
 // RUN: %if aarch64-registered-target %{ %{a64} %{protect} -o - \
 // RUN:   | FileCheck %s --check-prefix=A64 %}
@@ -47,7 +47,14 @@ unsigned outgoing(unsigned value) {
 // The control compilers emit the cleanup call for the same source.
 // ARM-CONTROL: bl record_cleanup
 // ARM-CONTROL: bl __cxa_end_cleanup
-// ARM-ERROR: error: ARM stack clearing does not support
+// ARM-LABEL: outgoing:
+// ARM: bx lr
+// ARM: bl record_cleanup
+// ARM: movw r1, :lower16:(.Larm_zeroize_continuation_0-
+// ARM: msr APSR_nzcvq,
+// ARM-NEXT: bx r12
+// ARM: .Larm_zeroize_carrier_0:
+// ARM: bl __cxa_end_cleanup
 // A64-CONTROL: bl record_cleanup
 // A64-CONTROL: bl _Unwind_Resume
 // A64-RESERVED: error: AArch64 stack clearing does not support

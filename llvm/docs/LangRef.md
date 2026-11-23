@@ -2848,6 +2848,39 @@ fn -> other_fn -> other_fn ; fn is norecurse
     clearing exit. Ordinary tail-call optimization is disabled for these functions.
     Explicit condition-flag zeroization is not implemented by this stack clear.
 
+    ARMv7-A/R ELF also implements an initial bounded GNU C++ EHABI cleanup
+    protocol in ARM or Thumb-2 mode. It requires the C calling convention,
+    SP-based fixed frames of at most 224 bytes, and contiguous saved R4-R11/LR
+    slots at the top of the frame, including R4 and LR. All landing pads must
+    be cleanup-only, without catch, filter, or terminate actions. Frame pointers,
+    saved VFP registers, reserved working registers R0-R12/LR (including a
+    platform-reserved R9), and the unsupported layouts and instrumentation
+    listed above are excluded. Ordinary returns following a local catch remain
+    governed by the ordinary-return rules.
+
+    At a terminal direct `__cxa_end_cleanup` transfer, the compiler restores
+    incoming saved registers and erases the whole original allocation without
+    releasing SP. A compiler-local carrier then allocates 16 bytes strictly
+    below that extent. Its only stored values are restored incoming R4 and LR,
+    zero, and one constant continuation address per function. The carrier
+    pointer derives only from the permitted original SP; both the continuation
+    and the carrier entry address depend only on fixed code and load context.
+    Incoming caller context is permitted by the ABI, but is not necessarily
+    public data. There is no allowance for arbitrary protected temporaries in
+    the carrier.
+
+    Two local personalities use the public VRS interface and the GNU
+    `__gnu_unwind_frame` extension to preserve the original frame's identity
+    and recover the caller without rereading erased slots. Each personality
+    restores its ABI registers and erases its entire private 96-byte allocation,
+    including padding and saved slots, on every success and error return.
+    Existing unwind-runtime allocations are outside this private-frame proof.
+    This protocol is verified against the tested GNU and LLVM implementations
+    of that extension; it does not establish portability to every EHABI runtime
+    or asynchronous instruction-boundary unwinding. An exception bypassing an
+    explicit cleanup transfer also bypasses its clearing sequence. Stack,
+    register, and condition-state requests retain their separate meanings.
+
     X86-64 LP64 ELF targets support ordinary static frames, with or without a
     frame pointer. Both modes clear the whole owned frame, including red-zone
     storage, padding, saved-register slots, and reserved outgoing arguments;
@@ -2908,8 +2941,9 @@ fn -> other_fn -> other_fn ; fn is norecurse
     SME, return-address signing, shadow call stack, basic-block sections, or the
     unsupported layouts and instrumentation listed above. Other personalities
     and calling conventions, and functions reserving X1 or X21, remain
-    unsupported. It does not implement ARM32 EHABI cleanup clearing or protect
-    an exception that bypasses an explicit cleanup transfer.
+    unsupported. This DWARF protocol is separate from the bounded ARM32 EHABI
+    protocol above and does not protect an exception that bypasses an explicit
+    cleanup transfer.
 
     On AArch64 Android API 29 and later, fixed-frame C-convention functions
     compiled with ShadowCallStack, reserved X18 and without SVE also support
