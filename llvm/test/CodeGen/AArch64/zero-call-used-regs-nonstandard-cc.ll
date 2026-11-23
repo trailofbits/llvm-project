@@ -1,16 +1,21 @@
 ; RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs %s -o - \
 ; RUN:   | FileCheck %s --check-prefixes=CHECK,NORMAL
-; RUN: llc -mtriple=aarch64-linux-gnu -mattr=+call-saved-x20 -verify-machineinstrs %s -o - \
-; RUN:   | FileCheck %s --implicit-check-not='mov x20, #0'
+; RUN: llc -mtriple=aarch64-linux-gnu -mattr=+call-saved-x9 -verify-machineinstrs %s -o %t
+; RUN: FileCheck %s --input-file=%t
+; RUN: FileCheck %s --input-file=%t --check-prefix=PRESERVE
 
 ; The final per-function CSR list, rather than the usual AAPCS list, determines
 ; which registers are call-used. Return values must still survive the clearing.
 
 define preserve_nonecc i64 @preserve_none() "zero-call-used-regs"="all-gpr" {
 ; CHECK-LABEL: preserve_none:
+; PRESERVE-LABEL: preserve_none:
+; PRESERVE-NOT: mov {{[wx]}}9, #0
+; PRESERVE: ret
 ; CHECK-DAG: mov w0, #42
+; NORMAL-DAG: mov x9, #0
 ; CHECK-DAG: mov x19, #0
-; NORMAL-DAG: mov x20, #0
+; CHECK-DAG: mov x20, #0
 ; CHECK-DAG: mov x21, #0
 ; CHECK-DAG: mov x22, #0
 ; CHECK-DAG: mov x23, #0
