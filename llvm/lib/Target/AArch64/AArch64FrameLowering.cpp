@@ -1046,7 +1046,8 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
   if (isMachineVerificationEnabled(MF.getTarget()) &&
       shouldVerifyAArch64ZeroizedRegisters(MF)) {
     for (MachineInstr &MI : make_range(MBBI, MBB.end()))
-      if (isOrdinaryZeroizeReturn(MI) || isAArch64ZeroizeShadowResume(MI))
+      if (isOrdinaryZeroizeReturn(MI) || isAArch64ZeroizeShadowResume(MI) ||
+          isAArch64ZeroizeCarrierResume(MI))
         recordAArch64ZeroizationObligation(MI, FullRegsToZero, RegsToZero,
                                            Live);
   }

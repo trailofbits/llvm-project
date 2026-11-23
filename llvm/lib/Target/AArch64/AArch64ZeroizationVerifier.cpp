@@ -402,7 +402,9 @@ bool llvm::verifyAArch64Zeroization(const MachineFunction &MF) {
     KnownZero State = In.lookup(MBB);
     bool FallsThrough = true;
     for (const MachineInstr &MI : MBB->instrs()) {
-      bool Resume = isAArch64ZeroizeShadowResume(MI);
+      bool Resume = isAArch64ZeroizeShadowResume(MI) ||
+                    (isAArch64ZeroizeCarrierResume(MI) &&
+                     hasAArch64ZeroizeCarrierInterface(MI));
       if (!Resume && (CheckFlags || MF.getFunction().hasZeroizeStack()) &&
           isAArch64ZeroizeUnwindResume(MI))
         return report(MI, "unsupported final unwind protocol");
