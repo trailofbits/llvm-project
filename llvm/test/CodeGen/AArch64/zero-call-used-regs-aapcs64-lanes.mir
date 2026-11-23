@@ -1,5 +1,5 @@
-# RUN: llc -mtriple=aarch64-linux-gnu -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s
-# RUN: llc -mtriple=aarch64-linux-gnu -mattr=+sve -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=NO-LANES
+# RUN: llc -mtriple=aarch64-linux-gnu -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s --check-prefixes=CHECK,LANES
+# RUN: llc -mtriple=aarch64-linux-gnu -mattr=+sve -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s --check-prefixes=SVE,LANES
 # RUN: llc -mtriple=aarch64-linux-gnu -mattr=+sme -run-pass=prolog-epilog -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=NO-LANES
 
 --- |
@@ -22,15 +22,17 @@ body: |
 # CHECK: ![[FULL:[0-9]+]] = !{!"aarch64.zero-call-used-regs", !"FFFF00FE0007FFFF", !"FF", !"100000000", !"0", !"return"}
 # CHECK: $q0 = MOVIv2d_ns 255
 # CHECK-NOT: $q0 =
-# CHECK: $q8 = INSvi64gpr undef $q8, 1, $xzr, implicit $d8
-# CHECK-NEXT: $q9 = INSvi64gpr undef $q9, 1, $xzr, implicit $d9
-# CHECK-NEXT: $q10 = INSvi64gpr undef $q10, 1, $xzr, implicit $d10
-# CHECK-NEXT: $q11 = INSvi64gpr undef $q11, 1, $xzr, implicit $d11
-# CHECK-NEXT: $q12 = INSvi64gpr undef $q12, 1, $xzr, implicit $d12
-# CHECK-NEXT: $q13 = INSvi64gpr undef $q13, 1, $xzr, implicit $d13
-# CHECK-NEXT: $q14 = INSvi64gpr undef $q14, 1, $xzr, implicit $d14
-# CHECK-NEXT: $q15 = INSvi64gpr undef $q15, 1, $xzr, implicit $d15
+# SVE-LABEL: name: full_result
+# LANES: $q8 = INSvi64gpr undef $q8, 1, $xzr, implicit $d8
+# LANES-NEXT: $q9 = INSvi64gpr undef $q9, 1, $xzr, implicit $d9
+# LANES-NEXT: $q10 = INSvi64gpr undef $q10, 1, $xzr, implicit $d10
+# LANES-NEXT: $q11 = INSvi64gpr undef $q11, 1, $xzr, implicit $d11
+# LANES-NEXT: $q12 = INSvi64gpr undef $q12, 1, $xzr, implicit $d12
+# LANES-NEXT: $q13 = INSvi64gpr undef $q13, 1, $xzr, implicit $d13
+# LANES-NEXT: $q14 = INSvi64gpr undef $q14, 1, $xzr, implicit $d14
+# LANES-NEXT: $q15 = INSvi64gpr undef $q15, 1, $xzr, implicit $d15
 # CHECK-NEXT: RET undef $lr, ![[FULL]], implicit $q0
+# SVE: RET undef $lr, implicit $q0
 # NO-LANES-LABEL: name: full_result
 # NO-LANES-NOT: INSvi64gpr
 # NO-LANES: RET
@@ -68,6 +70,9 @@ body: |
 # CHECK-LABEL: name: vector_pcs
 # CHECK-NOT: INSvi64gpr
 # CHECK: RET
+# SVE-LABEL: name: vector_pcs
+# SVE-NOT: INSvi64gpr
+# SVE: RET
 ...
 ---
 name: added_csr
