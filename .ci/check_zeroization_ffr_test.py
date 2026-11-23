@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 """Test snapshot rejection and negative-control construction without LLVM tools."""
 
+import hashlib
 import struct
 import subprocess
 import sys
@@ -11,7 +12,14 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from check_zeroization_ffr import Case, check_snapshot, run, unprotected, without_ffr
+from check_zeroization_ffr import (
+    Case,
+    check_snapshot,
+    copy_inputs,
+    run,
+    unprotected,
+    without_ffr,
+)
 
 
 class FFRTests(unittest.TestCase):
@@ -131,6 +139,37 @@ class FFRTests(unittest.TestCase):
         for invalid in ("ret void", source + source):
             with self.assertRaisesRegex(ValueError, "exactly one"):
                 unprotected(invalid)
+
+    def test_copied_inputs_match_original_bytes_and_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            hashes = copy_inputs(output)
+            self.assertEqual(
+                set(hashes),
+                {
+                    "check_zeroization_ffr.py",
+                    "zeroization-ffr/all.ll",
+                    "zeroization-ffr/used.ll",
+                    "zeroization-ffr/observer.S",
+                },
+            )
+            replay = output / "replay"
+            command = [sys.executable, str(output / "inputs/check_zeroization_ffr.py")]
+            for tool in ("llc", "clang", "linker", "qemu"):
+                command.extend([f"--{tool}", str(output / "missing-tool")])
+            command.extend(["--output", str(replay)])
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=10, check=False
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Missing llc executable", result.stderr)
+            self.assertFalse((replay / "results.json").exists())
+            source_dir = Path(__file__).resolve().parent
+            for name, digest in hashes.items():
+                copied = (output / "inputs" / name).read_bytes()
+                self.assertEqual(copied, (source_dir / name).read_bytes())
+                self.assertEqual(hashlib.sha256(copied).hexdigest(), digest)
+                self.assertEqual((replay / "inputs" / name).read_bytes(), copied)
 
     def test_tool_failure_and_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

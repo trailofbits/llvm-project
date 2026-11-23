@@ -141,9 +141,28 @@ def run(
         raise RuntimeError(f"{command[0]} exited {result.returncode}; see {log}")
 
 
+def copy_inputs(output: Path) -> dict[str, str]:
+    """Preserve the runner and fixtures before execution, with their source layout."""
+    source_dir = Path(__file__).resolve().parent
+    names = (
+        "check_zeroization_ffr.py",
+        "zeroization-ffr/all.ll",
+        "zeroization-ffr/used.ll",
+        "zeroization-ffr/observer.S",
+    )
+    hashes = {}
+    for name in names:
+        data = (source_dir / name).read_bytes()
+        destination = output / "inputs" / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+        hashes[name] = hashlib.sha256(data).hexdigest()
+    return hashes
+
+
 def build_variants(args: argparse.Namespace, mode: str, opt: int) -> dict[str, Path]:
     """Compile protected/control fixtures and assemble a checked missing-clear mutation."""
-    source_dir = Path(__file__).resolve().parent / "zeroization-ffr"
+    source_dir = args.output / "inputs" / "zeroization-ffr"
     prefix = args.output / f"{mode}-O{opt}"
     control = prefix.with_suffix(".ll")
     control.write_text(unprotected((source_dir / f"{mode}.ll").read_text()))
@@ -233,7 +252,8 @@ def main() -> int:
     args = parser.parse_args()
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
-    source_dir = Path(__file__).resolve().parent / "zeroization-ffr"
+    inputs = copy_inputs(args.output)
+    source_dir = args.output / "inputs" / "zeroization-ffr"
     tools = {}
     for name in ("llc", "clang", "linker", "qemu"):
         path = getattr(args, name).absolute()
@@ -276,10 +296,6 @@ def main() -> int:
     require(
         len(rows) == 144, "Expected 48 protected observations and 96 negative controls"
     )
-    sources = [Path(__file__), *source_dir.glob("*.ll"), source_dir / "observer.S"]
-    inputs = {
-        path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sources
-    }
     report = {"success": True, "tools": tools, "inputs": inputs, "observations": rows}
     (args.output / "results.json").write_text(json.dumps(report, indent=2) + "\n")
     print("PASS: 48 protected FFR observations and 96 negative controls")

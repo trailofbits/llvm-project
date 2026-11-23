@@ -53,13 +53,18 @@ registers, upper vector lanes, predicates, and NZCV.
 
 ## Evidence and scope
 
-The output contains raw snapshots, assembly, objects, executables, exact tool
-commands and diagnostics, tool versions, and `results.json`. That report is
-written only after every case succeeds and contains one row per observation,
+Before invoking any tools, the runner saves its exact bytes and all three
+fixtures under `inputs/`, preserving the `zeroization-ffr/` source layout. It
+compiles those saved fixtures. The output also contains raw snapshots,
+assembly, objects, executables, exact tool commands and diagnostics, tool
+versions, and `results.json`. That report is written only after every case
+succeeds and contains one row per observation,
 tool executable hashes, and fixture/runner hashes. A tool error, timeout,
 truncated snapshot, unexpected length, changed interface value, or incorrect
 FFR state fails the run. The workflow uploads the directory with its other
-artifacts even when a later step fails.
+artifacts even when a later step fails. To reproduce a downloaded artifact,
+run `python3 inputs/check_zeroization_ffr.py` with the same tool arguments and
+a new output directory; a repository checkout is not needed.
 
 Each snapshot is 200 header bytes followed by 32 vector registers, 16 predicate
 registers, and FFR. For vector length `VL`, FFR starts at
