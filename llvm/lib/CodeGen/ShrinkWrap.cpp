@@ -1037,6 +1037,10 @@ PreservedAnalyses ShrinkWrapPass::run(MachineFunction &MF,
 }
 
 bool ShrinkWrapImpl::isShrinkWrapEnabled(const MachineFunction &MF) {
+  // Stack clearing requires an allocated frame on every return path.
+  if (MF.getFunction().hasZeroizeStack())
+    return false;
+
   const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
 
   switch (EnableShrinkWrapOpt) {
