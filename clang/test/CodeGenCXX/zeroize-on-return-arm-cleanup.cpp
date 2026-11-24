@@ -1,13 +1,13 @@
 // REQUIRES: arm-registered-target
-// DEFINE: %{compile} = %clang --target=armv7-linux-gnueabihf -mfpu=neon -O1 -fomit-frame-pointer -mllvm -verify-machineinstrs -S %s
-// RUN: %{compile} -marm -o - | FileCheck %s
-// RUN: %{compile} -mthumb -o - | FileCheck %s
+// DEFINE: %{compile} = %clang --target=armv7-linux-gnueabihf -mfpu=neon -O1 -fomit-frame-pointer -mllvm -verify-machineinstrs %s
+// RUN: %{compile} -S -marm -o - | FileCheck %s
+// RUN: %{compile} -S -mthumb -o - | FileCheck %s
 // RUN: %{compile} -mthumb -c -o %t.o
-// RUN: not %{compile} -ffixed-r9 -o %t.s 2>&1 | FileCheck %s --check-prefix=UNSUPPORTED
-// RUN: %{compile} -ffixed-r9 -DNO_THROW -o - | FileCheck %s --check-prefix=ORDINARY
-// RUN: not %{compile} -fno-omit-frame-pointer -o %t.s 2>&1 | FileCheck %s --check-prefix=UNSUPPORTED
-// RUN: not %{compile} -DWITH_CATCH -o %t.s 2>&1 | FileCheck %s --check-prefix=UNSUPPORTED
-// RUN: %{compile} -DCATCH_RETURN_ONLY -o - | FileCheck %s --check-prefix=ORDINARY
+// RUN: not %{compile} -S -ffixed-r9 -o %t.s 2>&1 | FileCheck %s --check-prefix=REJECT
+// RUN: %{compile} -S -ffixed-r9 -DNO_THROW -o - | FileCheck %s --check-prefix=ORDINARY
+// RUN: not %{compile} -S -fno-omit-frame-pointer -o %t.s 2>&1 | FileCheck %s --check-prefix=REJECT
+// RUN: not %{compile} -S -DWITH_CATCH -o %t.s 2>&1 | FileCheck %s --check-prefix=REJECT
+// RUN: %{compile} -S -DCATCH_RETURN_ONLY -o - | FileCheck %s --check-prefix=ORDINARY
 
 #ifdef NO_THROW
 extern "C" void action() noexcept;
@@ -56,8 +56,8 @@ extern "C" [[clang::zeroize_on_return]] int protected_cleanup(int value) {
 // CHECK: .personality .Larm_zeroize_personality_0
 // CHECK: .Larm_zeroize_carrier_0:
 // CHECK: bl __cxa_end_cleanup
-// UNSUPPORTED: error: ARM stack clearing does not support
-// UNSUPPORTED-NOT: Assertion
+// REJECT: error: ARM stack clearing does not support
+// REJECT-NOT: Assertion
 // ORDINARY-LABEL: protected_cleanup:
 // ORDINARY: msr APSR_nzcvq,
 // ORDINARY: bx lr
