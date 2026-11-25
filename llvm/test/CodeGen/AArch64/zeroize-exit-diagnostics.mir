@@ -1,0 +1,53 @@
+# RUN: split-file %s %t
+# RUN: not llc -mtriple=aarch64-unknown-linux-gnu -run-pass=prolog-epilog %t/scratch.mir -o \
+# RUN: /dev/null 2>&1 | FileCheck %s --check-prefix=SCRATCH
+# RUN: not llc -mtriple=aarch64-unknown-linux-gnu -run-pass=prolog-epilog %t/flags.mir -o \
+# RUN: /dev/null 2>&1 | FileCheck %s --check-prefix=FLAGS
+# RUN: not llc -mtriple=aarch64-unknown-linux-gnu -run-pass=prolog-epilog %t/stack-flags.mir -o \
+# RUN: /dev/null 2>&1 | FileCheck %s --check-prefix=STACK-FLAGS
+# SCRATCH: error: {{.*}}stack clearing needs free caller-saved AArch64 registers
+# FLAGS: error: {{.*}}flags clearing requires dead NZCV at the exit
+# STACK-FLAGS: error: {{.*}}stack clearing requires dead NZCV at the exit
+
+#--- scratch.mir
+--- |
+  define void @scratch() "zeroize-stack"="used" { ret void }
+...
+---
+name: scratch
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 16, alignment: 16 }
+body: |
+  bb.0:
+    liveins: $x9, $x10, $x11, $x12, $x13, $x14, $x15
+    RET_ReallyLR implicit $x9, implicit $x10_x11, implicit $x12_x13, implicit $x14_x15
+...
+
+#--- flags.mir
+--- |
+  define void @flags() "zeroize-flags" { ret void }
+...
+---
+name: flags
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $nzcv
+    RET_ReallyLR implicit $nzcv
+...
+
+#--- stack-flags.mir
+--- |
+  define void @stack_flags() "zeroize-stack"="used" { ret void }
+...
+---
+name: stack_flags
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 128, alignment: 16 }
+body: |
+  bb.0:
+    liveins: $nzcv
+    RET_ReallyLR implicit $nzcv
+...
