@@ -814,7 +814,11 @@ static MCRegister getRegisterOrZero(MCRegister Reg, bool HasSVE) {
   CASE(28);
 #undef CASE
 
-  // Some calling conventions leave W29 call-used even though FP is fixed.
+  // X29 is only ever requested through W29. FP is in the FixedRegisters
+  // category, so the generic selection never offers it, while W29 is an
+  // ordinary GPR32 that is allocatable and call-used when the calling
+  // convention does not preserve X29 and the function has no frame pointer
+  // (e.g. GHC). Map it to the full register; FP itself stays unmapped.
   case AArch64::W29:
     return AArch64::FP;
 
@@ -901,6 +905,14 @@ static void collectZeroCallUsedRegs(const MachineFunction &MF,
   const AArch64Subtarget &STI = MF.getSubtarget<AArch64Subtarget>();
   const AArch64RegisterInfo &TRI = *STI.getRegisterInfo();
   bool HasSVE = STI.isSVEorStreamingSVEAvailable();
+  // The subtarget describes the function body. A locally streaming function
+  // has left streaming mode by the time it returns, so SVE instructions are
+  // only usable at the exit if the target has SVE itself. Without it there is
+  // also nothing to clear: SMSTOP zeroes the predicate registers and the
+  // Z-register bits above the low 128.
+  SMEAttrs SMEFnAttrs = MF.getInfo<AArch64FunctionInfo>()->getSMEFnAttrs();
+  if (SMEFnAttrs.hasStreamingBody() && !SMEFnAttrs.hasStreamingInterface())
+    HasSVE = STI.hasSVE();
   // Without an FP unit (e.g. -mgeneral-regs-only) the FP/vector registers can't
   // hold a value and there is no instruction to clear them, so leave them out.
   bool HasFPR = STI.hasFPARMv8();
