@@ -84,17 +84,18 @@ jobs:
             libc
             third-party
 
-      - name: Test the compatibility gate
+      - name: Test the zeroization gates
         run: |
           set -euo pipefail
           python3 .ci/check_zeroization_compatibility_test.py
+          python3 .ci/check_zeroization_ffr_test.py
 
       - name: Install build dependencies
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            clang lld cmake ninja-build python3 python3-psutil python3-yaml
+            clang lld cmake ninja-build python3 python3-psutil python3-yaml qemu-user
 
       - name: Configure
         env:
@@ -146,6 +147,14 @@ jobs:
           set -euo pipefail
           bash .ci/check_zeroization_residue.sh \
             "$PWD/build/bin/clang" artifacts/residue
+
+      - name: Observe AArch64 SVE first-fault register state
+        run: |
+          set -euo pipefail
+          python3 .ci/check_zeroization_ffr.py \
+            --llc "$PWD/build/bin/llc" --clang "$PWD/build/bin/clang" \
+            --linker /usr/bin/ld.lld --qemu /usr/bin/qemu-aarch64 \
+            --output artifacts/sve-ffr 2>&1 | tee artifacts/sve-ffr.log
 
       - name: Build and run full test suites
         run: |
