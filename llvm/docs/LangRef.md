@@ -2720,8 +2720,8 @@ fn -> other_fn -> other_fn ; fn is norecurse
     diagnosed. Thumb-2 A/R targets require DSP instruction support. Flags
     clearing alone does not erase stack storage.
 
-    X86-64 LP64 ELF targets with LAHF/SAHF support clear the arithmetic condition
-    flags OF, SF, ZF, AF, PF, and CF. Control flags and floating-point
+    X86-64 LP64 ELF targets, including baseline x86-64 CPUs, clear the arithmetic
+    condition flags OF, SF, ZF, AF, PF, and CF. Control flags and floating-point
     control/status registers are preserved. Ordinary C and fast-convention
     returns are supported, including integer return values in RAX and RDX.
     Exception handling, XRay instrumentation, return thunks, LVI return

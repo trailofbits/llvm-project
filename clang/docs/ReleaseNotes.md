@@ -226,8 +226,8 @@ features cannot lower the translation-unit ABI level;
   `"zero-call-used-regs"="all"`, `"zeroize-stack"="used"`, and `"zeroize-flags"`
   IR requests. ClangIR currently emits only the register and stack requests.
   ARM32 and X86-64 LP64 ELF support static-frame stack clearing and
-  condition-state clearing for their supported return protocols; X86 requires
-  SAHF support. Other configurations are diagnosed.
+  condition-state clearing for their supported return protocols, including
+  baseline x86-64 CPUs. Other configurations are diagnosed.
   Clang rejects the attribute on `naked` functions and rejects coroutines and
   `musttail` returns in annotated functions.
 - Added the `sensitive` attribute for automatic local variables in
