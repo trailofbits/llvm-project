@@ -59,6 +59,52 @@ additional byte-level observations. The two private cases separately observe
 their original frames and both complete private allocations. Repeated callbacks
 or omitted-store replays are not extra target coverage.
 
+## Mixed handlers and uninstrumented helper returns
+
+The same gate also runs:
+
+- **216 mixed-handler executions:** ARM/Thumb-2, protected/control, typed and
+  catch-all profiles, three layouts, and nine scenarios. The catch-all body
+  retains the published `WITH_CATCH` shape: `try { action(0); } catch (...) {
+  action(1); }`. Cases cover normal return, caught return, rethrow, replacement,
+  nonmatching types, forced unwinding, a second typed selector, and three nested
+  reentries that either return or escape. Each profile uses its small frame
+  (40 bytes typed, 32 bytes catch-all), a 224-byte maximum, and a 224-byte frame
+  saving all nine supported GPRs. Nested cases execute four protected functions;
+  they are not four independent scenario counts.
+- **Eight terminate-control executions:** protected/control, two ISAs, and
+  ordinary versus destructor-throws-during-unwind paths. These preserve the
+  generated terminate handler's behavior. They do not observe erasure at
+  process termination.
+- **Two raw helper executions:** one per ISA, with 62 controlled API/success/error
+  cases each. They export aliases for the actual emitted personalities and add
+  no memory observer or clearing instructions. The assembly caller checks
+  restored R4-R11 and cleared R1-R3/R12/NZCVQ immediately after return. Positive
+  selectors 1 and 2 must retain INSTALL_CONTEXT and the selected virtual state;
+  negative selectors fail. These checks make no private-memory observation.
+- **Ten raw mutation controls:** independently omit the R2 or NZCVQ clear in each
+  personality, plus remove the positive-handler pass-through, for both ISAs.
+  The gate requires the specific incorrect physical state or handler result,
+  not merely a nonzero exit. A phase-personality failure cannot mask the
+  helper-personality omission.
+
+The mixed fixture observes the entire original allocation only at actual
+escaping cleanup transfers, with a wrapper restricted to its code section.
+Normal/local-catch cases check behavior and caller state, not residual stack
+bytes after an ordinary return. The 16-byte carrier contains incoming interface
+context and is separate from both the original frame and the two private
+96-byte allocations; these checks do not claim its post-use erasure.
+
+Private-memory instrumentation necessarily restores its own temporary registers
+and flags. Its results establish the complete private-memory wipe, while the
+separate raw checks above establish the production helper's physical-register
+behavior. Do not attribute the observer's register clears to the compiler.
+
+The maintained gate uses GNU. Separate research replay found LLVM 18 and the
+pinned LLVM runtime abort on forced unwinding rethrown through a catch-all in
+both protected and unprotected controls. That matched runtime limitation is not
+counted as a successful case or evidence of general EHABI portability.
+
 ## Observation boundaries
 
 Original frame size must agree between the generated MIR and the assembly's
@@ -79,7 +125,7 @@ private storage does not retain the fixture marker before its C callback.
 The forced route follows the reviewed fixture's separate outer path; the typed
 route uses the caller's catch. This suite does not include callback backtracing,
 whose GNU limitation was also seen in the unprotected research control. It does
-not establish general EHABI portability, arbitrary catch/filter personalities,
+not establish general EHABI portability, arbitrary personalities or exception filters,
 asynchronous unwinding, saved-VFP/frame-pointer layouts, non-local bypasses,
 all register classes, hardware execution or milestone acceptance.
 

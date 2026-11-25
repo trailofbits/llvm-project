@@ -133,6 +133,13 @@ def frame_layout(assembly: str, mir: str) -> int:
     return size
 
 
+def inner_mir(text: str) -> str:
+    """Select the original function, excluding separately emitted terminate helpers."""
+    documents = re.findall(r"^---\nname:\s+inner\n.*?^\.\.\.$", text, re.MULTILINE | re.DOTALL)
+    require(len(documents) == 1, "Missing or repeated inner MIR function")
+    return documents[0]
+
+
 def prologue_adjustment(prologue: str) -> int:
     """Reject unmodelled or split SP changes instead of guessing an observation bound."""
     writes = re.findall(r"^\s*\w+(?:\.w)?\s+sp\b[^\n]*", prologue, re.MULTILINE)
@@ -175,7 +182,11 @@ def private_capture(index: int) -> str:
     ]
     for offset in range(0, 96, 4):
         text.extend(
-            [f"\tldr r1,[sp,#{offset}]", f"\tstr r1,[r12,#{offset + 12}]", "\torr r3,r3,r1"]
+            [
+                f"\tldr r1,[sp,#{offset}]",
+                f"\tstr r1,[r12,#{offset + 12}]",
+                "\torr r3,r3,r1",
+            ]
         )
     text.extend(
         [
@@ -268,19 +279,29 @@ def check_observation(text: str, *, mode: str, variant: str, size: int) -> None:
 
 def check_private(text: str, omitted: int | None) -> None:
     """Require both bounded private snapshots and the intended omission failure."""
-    require(not any(observed_frame(text, 32)), "Private probe retained original-frame residue")
+    require(
+        not any(observed_frame(text, 32)),
+        "Private probe retained original-frame residue",
+    )
     matches = re.findall(
         r"^PRIVATE index=(\d+) bytes=96 hex=([0-9a-f]+) returns=(\d+) OR=([0-9a-f]+)$",
         text,
         re.MULTILINE,
     )
-    require([int(row[0]) for row in matches] == [0, 1], "Missing or repeated private observation")
+    require(
+        [int(row[0]) for row in matches] == [0, 1],
+        "Missing or repeated private observation",
+    )
     for index, hexdata, returns, residue in matches:
         data = bytes.fromhex(hexdata)
-        require(len(data) == 96 and int(returns) > 0, "Truncated or unexecuted private observation")
+        require(
+            len(data) == 96 and int(returns) > 0,
+            "Truncated or unexecuted private observation",
+        )
         dirty = int(index) == omitted
         require(
-            any(data) == dirty and bool(int(residue, 16)) == dirty, "Wrong private-frame residue"
+            any(data) == dirty and bool(int(residue, 16)) == dirty,
+            "Wrong private-frame residue",
         )
     if omitted is None:
         check_observation(text, mode="private", variant="protected", size=32)
@@ -312,19 +333,28 @@ def clang_flags(args: argparse.Namespace, isa: str) -> list[str]:
     ]
 
 
-def compile_source(args: argparse.Namespace, stem: str, isa: str, definitions: list[str]) -> int:
+def compile_source(
+    args: argparse.Namespace,
+    stem: str,
+    isa: str,
+    definitions: list[str],
+    *,
+    source: str = "inner.cpp",
+) -> int:
     """Keep actual compiler objects plus matching assembly/MIR for bounded inspection."""
-    flags = [*clang_flags(args, isa), *definitions, str(args.inputs / "inner.cpp")]
+    flags = [*clang_flags(args, isa), *definitions, str(args.inputs / source)]
     for suffix, mode in (
         ("s", ["-S"]),
         ("o", ["-c"]),
         ("mir", ["-S", "-mllvm", "-stop-after=arm-cp-islands"]),
     ):
         execute(
-            [*flags, *mode, "-o", str(args.output / f"{stem}.{suffix}")], args.output / "build.log"
+            [*flags, *mode, "-o", str(args.output / f"{stem}.{suffix}")],
+            args.output / "build.log",
         )
     return frame_layout(
-        (args.output / f"{stem}.s").read_text(), (args.output / f"{stem}.mir").read_text()
+        (args.output / f"{stem}.s").read_text(),
+        inner_mir((args.output / f"{stem}.mir").read_text()),
     )
 
 
@@ -344,7 +374,17 @@ def build_observers(args: argparse.Namespace) -> None:
         "-Wextra",
         "-Werror",
     ]
-    for name in ("observer.cpp", "private-observer.cpp", "markers.S", "private-boundary.S"):
+    for name in (
+        "observer.cpp",
+        "private-observer.cpp",
+        "markers.S",
+        "private-boundary.S",
+        "mixed-observer.cpp",
+        "mixed-boundary.S",
+        "terminate-observer.cpp",
+        "helper-unit.cpp",
+        "helper-abi.S",
+    ):
         execute(
             [
                 *flags,
@@ -375,11 +415,22 @@ def assemble(args: argparse.Namespace, stem: str) -> None:
 
 def link_fixture(args: argparse.Namespace, stem: str, *, private: bool = False) -> Path:
     """Keep each static executable beside the exact object it uses."""
-    objects = [f"{stem}.o", "private-observer.o" if private else "observer.o", "markers.o"]
+    objects = [
+        f"{stem}.o",
+        "private-observer.o" if private else "observer.o",
+        "markers.o",
+    ]
     options = []
     if private:
         objects.append("private-boundary.o")
         options.append("-Wl,--wrap=__cxa_end_cleanup")
+    return link_objects(args, stem, objects, options=options)
+
+
+def link_objects(
+    args: argparse.Namespace, stem: str, objects: list[str], *, options: list[str]
+) -> Path:
+    """Link retained fixture objects against the unmodified static GNU runtime."""
     binary = args.output / f"{stem}.elf"
     execute(
         [
@@ -440,7 +491,10 @@ def runtime_case(
         expected=78 if mutation else 0,
     )
     if mutation:
-        require(any(observed_frame(text, size)), "Omitted original wipe did not leave residue")
+        require(
+            any(observed_frame(text, size)),
+            "Omitted original wipe did not leave residue",
+        )
         require(
             text.count("FAIL reason=original-residue\n") == 1,
             "Original wipe mutation failed for an unrelated reason",
@@ -519,7 +573,13 @@ def distinct_matrix(args: argparse.Namespace) -> list[dict[str, object]]:
         for mode in ("normal", "typed", "forced"):
             rows.extend(
                 runtime_case(
-                    args, binary, size, variant="protected", mode=mode, value=value, distinct=True
+                    args,
+                    binary,
+                    size,
+                    variant="protected",
+                    mode=mode,
+                    value=value,
+                    distinct=True,
                 )
                 for value in (7, 8)
             )
@@ -576,7 +636,12 @@ def private_case(
 def reject_oversized(args: argparse.Namespace) -> None:
     """Keep the 224-byte capability boundary explicit; a larger control still compiles."""
     for isa in ("arm", "thumb"):
-        flags = [*clang_flags(args, isa), "-DWORDS=56", "-S", str(args.inputs / "inner.cpp")]
+        flags = [
+            *clang_flags(args, isa),
+            "-DWORDS=56",
+            "-S",
+            str(args.inputs / "inner.cpp"),
+        ]
         text = execute(
             [*flags, "-DPROTECTED", "-o", str(args.output / f"rejected-{isa}.s")],
             args.output / f"rejected-{isa}.log",
@@ -587,8 +652,225 @@ def reject_oversized(args: argparse.Namespace) -> None:
             "Missing oversized-frame diagnostic",
         )
         execute(
-            [*flags, "-o", str(args.output / f"large-control-{isa}.s")], args.output / "build.log"
+            [*flags, "-o", str(args.output / f"large-control-{isa}.s")],
+            args.output / "build.log",
         )
+
+
+def mixed_layouts(catch_all: bool) -> list[tuple[str, int, list[str]]]:
+    """Include both bounded maximum save recipes in each handler profile."""
+    return [
+        ("small", 32 if catch_all else 40, []),
+        ("maximum", 224, [f"-DWORDS={54 if catch_all else 52}"]),
+        ("saved", 224, ["-DWORDS=46", "-DSAVE_ALL"]),
+    ]
+
+
+def mixed_matrix(args: argparse.Namespace) -> list[dict[str, object]]:
+    """Exercise local handlers, real escaping cleanups and bounded reentry."""
+    rows = []
+    for isa in ("arm", "thumb"):
+        for catch_all in (False, True):
+            for protected in (False, True):
+                for layout, expected, definitions in mixed_layouts(catch_all):
+                    stem = f"mixed-{isa}-{int(catch_all)}-{int(protected)}-{layout}"
+                    if catch_all:
+                        definitions.append("-DCATCH_ALL")
+                    if protected:
+                        definitions.append("-DPROTECTED")
+                    size = compile_source(args, stem, isa, definitions, source="mixed-inner.cpp")
+                    require(size == expected, f"Unexpected mixed-handler frame: {stem}")
+                    objects = [f"{stem}.o", "mixed-observer.o", "markers.o"]
+                    options = []
+                    if protected:
+                        objects.append("mixed-boundary.o")
+                        options.append("-Wl,--wrap=__cxa_end_cleanup")
+                    binary = link_objects(args, stem, objects, options=options)
+                    rows.extend(
+                        mixed_cases(args, binary, size, protected=protected, catch_all=catch_all)
+                    )
+    return rows
+
+
+def mixed_cases(
+    args: argparse.Namespace,
+    binary: Path,
+    size: int,
+    *,
+    protected: bool,
+    catch_all: bool,
+) -> list[dict[str, object]]:
+    """Keep each source scenario distinct from original-frame observations."""
+    rows = []
+    for scenario in range(9):
+        depth = 3 if scenario >= 7 else 0
+        log = args.output / f"{binary.stem}-{scenario}.log"
+        text = execute(
+            [
+                str(args.qemu),
+                "-cpu",
+                "cortex-a15",
+                str(binary),
+                str(scenario),
+                str(int(protected)),
+                str(int(catch_all)),
+                str(size),
+                str(depth),
+            ],
+            log,
+        )
+        match = re.fullmatch(rf"PASS mixed scenario={scenario} boundaries=(\d+)\n", text)
+        if match is None:
+            raise ValueError("Missing or repeated mixed-handler success")
+        rows.append(
+            {
+                "binary": binary.name,
+                "scenario": scenario,
+                "depth": depth,
+                "protected": protected,
+                "catch_all": catch_all,
+                "frame_size": size,
+                "original_observations": int(match[1]),
+                "log": log.name,
+                "passed": True,
+            }
+        )
+    return rows
+
+
+def terminate_matrix(args: argparse.Namespace) -> list[dict[str, object]]:
+    """Check generated terminate semantics without claiming termination erasure."""
+    rows = []
+    for isa in ("arm", "thumb"):
+        for protected in (False, True):
+            stem = f"terminate-{isa}-{int(protected)}"
+            flags = clang_flags(args, isa) + (["-DPROTECTED"] if protected else [])
+            for suffix, mode in (("s", "-S"), ("o", "-c")):
+                execute(
+                    [
+                        *flags,
+                        mode,
+                        str(args.inputs / "terminate-inner.cpp"),
+                        "-o",
+                        str(args.output / f"{stem}.{suffix}"),
+                    ],
+                    args.output / "build.log",
+                )
+            binary = link_objects(args, stem, [f"{stem}.o", "terminate-observer.o"], options=[])
+            for throwing in (0, 1):
+                log = args.output / f"{stem}-{throwing}.log"
+                text = execute(
+                    [str(args.qemu), "-cpu", "cortex-a15", str(binary), str(throwing)],
+                    log,
+                )
+                prefix = "terminate callback" if throwing else "normal"
+                require(
+                    text == f"{prefix} calls=1 cleanups=1 correct=1\n",
+                    "Wrong terminate behavior",
+                )
+                rows.append(
+                    {
+                        "binary": binary.name,
+                        "throwing": bool(throwing),
+                        "termination_erasure": False,
+                        "log": log.name,
+                        "passed": True,
+                    }
+                )
+    return rows
+
+
+def raw_personalities(assembly: str, mutation: str) -> str:
+    """Export actual helpers without observation code; mutate only a named production clear."""
+    for index, name in enumerate(("personality", "helper_personality")):
+        symbol = f".Larm_zeroize_{name}_0"
+        body = function_body(assembly, symbol)
+        private_layout(body)
+        changed = body
+        if mutation == f"{index}-r2":
+            changed, count = re.subn(r"^\s*mov\s+r2, #0$", "\tnop", body, flags=re.MULTILINE)
+            require(count == 1, "Expected one production R2 clear")
+        if mutation == f"{index}-flags":
+            changed, count = re.subn(
+                r"^\s*msr\s+APSR_nzcvq, r1$", "\tnop", body, flags=re.MULTILINE
+            )
+            require(count == 1, "Expected one production NZCVQ clear")
+        if mutation == "conflate" and index == 0:
+            changed, count = re.subn(
+                r"(mov\s+r0, #7\n)\s*bne\s+\.Lcleanup_return[0-9]+", r"\1\tnop", body
+            )
+            require(count == 1, "Expected one positive-handler return branch")
+        assembly = assembly.replace(body, changed, 1)
+    return (
+        assembly
+        + """
+.global phase_personality, helper_personality, after_cleanup, install_helper
+.set phase_personality,.Larm_zeroize_personality_0
+.set helper_personality,.Larm_zeroize_helper_personality_0
+.set after_cleanup,.Larm_zeroize_continuation_0
+.set install_helper,.Larm_zeroize_install_0
+"""
+    )
+
+
+def raw_helper_matrix(args: argparse.Namespace) -> list[dict[str, object]]:
+    """Check uninstrumented return registers and both helpers' deliberate omissions."""
+    rows = []
+    wraps = [
+        "_Unwind_VRS_Get",
+        "_Unwind_VRS_Set",
+        "__gnu_unwind_frame",
+        "__gxx_personality_v0",
+    ]
+    options = ["-Wl," + ",".join(f"--wrap={name}" for name in wraps)]
+    for isa in ("arm", "thumb"):
+        original = (args.output / f"small-{isa}-protected.s").read_text()
+        for mutation in ("none", "0-r2", "1-r2", "0-flags", "1-flags", "conflate"):
+            stem = f"raw-helper-{isa}-{mutation}"
+            (args.output / f"{stem}.s").write_text(raw_personalities(original, mutation))
+            assemble(args, stem)
+            binary = link_objects(
+                args,
+                stem,
+                [f"{stem}.o", "helper-unit.o", "helper-abi.o"],
+                options=options,
+            )
+            log = args.output / f"{stem}.log"
+            text = execute(
+                [str(args.qemu), "-cpu", "cortex-a15", str(binary)],
+                log,
+                expected=0 if mutation == "none" else 1,
+            )
+            if mutation == "none":
+                require(
+                    re.fullmatch(
+                        r"PASS raw-helper cases=62 physical-registers=checked "
+                        r"memory=unobserved\n",
+                        text,
+                    )
+                    is not None,
+                    "Missing raw ABI result",
+                )
+            else:
+                expected = (
+                    "FAIL helper-status actual=8 expected=7\n"
+                    if mutation == "conflate"
+                    else ("FAIL helper-status actual=99 expected=")
+                )
+                require(
+                    text.startswith(expected),
+                    "Raw mutation failed for an unrelated reason",
+                )
+            rows.append(
+                {
+                    "binary": binary.name,
+                    "mutation": mutation,
+                    "private_memory_observed": False,
+                    "log": log.name,
+                    "passed": True,
+                }
+            )
+    return rows
 
 
 def main() -> int:
@@ -612,7 +894,17 @@ def main() -> int:
     build_observers(args)
     rows = source_matrix(args) + distinct_matrix(args) + mutation_matrix(args)
     reject_oversized(args)
-    require(len(rows) == 68, "Expected 48 source cases, 12 lowered-IR cases and eight wipe probes")
+    require(
+        len(rows) == 68,
+        "Expected 48 source cases, 12 lowered-IR cases and eight wipe probes",
+    )
+    mixed = mixed_matrix(args)
+    terminate = terminate_matrix(args)
+    raw = raw_helper_matrix(args)
+    require(
+        len(mixed) == 216 and len(terminate) == 8 and len(raw) == 12,
+        "Incomplete mixed-handler or raw-helper matrix",
+    )
     artifacts = {
         str(path.relative_to(args.output)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(args.output.rglob("*"))
@@ -625,11 +917,17 @@ def main() -> int:
         "tools": tools,
         "inputs": inputs,
         "observations": rows,
+        "mixed_handlers": mixed,
+        "terminate_behavior": terminate,
+        "raw_helper_checks": raw,
         "artifacts": artifacts,
         "oversized_frame": "rejected for ARM/Thumb; unprotected controls compiled",
     }
     (args.output / "results.json").write_text(json.dumps(report, indent=2) + "\n")
-    print("PASS: 60 ARM32 behavior cases, two private observations and six detected wipe omissions")
+    print(
+        "PASS: existing 68 cleanup checks; 216 mixed-handler cases; "
+        "8 terminate cases; 12 raw-helper checks"
+    )
     return 0
 
 
