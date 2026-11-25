@@ -141,6 +141,12 @@ jobs:
             build/zeroize-cleanup
           done
 
+      - name: Observe native x86-64 residue
+        run: |
+          set -euo pipefail
+          bash .ci/check_zeroization_residue.sh \
+            "$PWD/build/bin/clang" artifacts/residue
+
       - name: Build and run full test suites
         run: |
           set -euo pipefail
