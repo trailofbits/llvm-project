@@ -8840,10 +8840,10 @@ condition-state clearing.
 
 **Current implementation limits.** ARM32, AArch64 ELF, and X86-64 LP64 ELF support
 stack and condition-state clearing for supported frames and ordinary return
-protocols. AArch64 also covers scalable SVE spill storage. X86 condition-state
-clearing requires SAHF support. Other targets and unsupported configurations
-are diagnosed; see the LLVM IR
-``zeroize-stack`` and ``zeroize-flags`` documentation for the target limits.
+protocols. AArch64 also covers scalable SVE spill storage. X86 support includes
+baseline x86-64 CPUs. Other targets and unsupported configurations are
+diagnosed. See the LLVM IR ``zeroize-stack`` and ``zeroize-flags`` documentation
+for the target limits.
 Register clearing uses the target implementation of ``zero_call_used_regs("all")``.
 Return-value registers and registers preserved by the calling convention are
 excluded. Floating-point control/status registers are not cleared by the flags
