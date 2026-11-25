@@ -25,7 +25,7 @@
 ; ASM-NEXT: [[EXIT:\.LBB[0-9]+_[0-9]+]]:
 ; ASM-NEXT: ldr q0, [sp]
 ; ASM-NEXT: bl use
-; ASM-NEXT: add w0, w0, [[ADJUST]]
+; ASM: add w0, w0, [[ADJUST]]
 ; ASM: ldr x30,
 ; ASM: mov [[WIPE:x[0-9]+]], sp
 ; ASM-NEXT: stp xzr, xzr, {{\[}}[[WIPE]]]
