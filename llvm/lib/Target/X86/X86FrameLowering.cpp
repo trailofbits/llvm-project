@@ -1304,6 +1304,9 @@ void X86FrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
   emitZeroizeImmediateStores(*Tail, InsertPt,
                              int64_t(Allocated) - int64_t(TailSize), TailSize);
   releaseZeroizedFrame(*Tail, InsertPt);
+  if (X86FI.getAMXProgModel() == AMXProgModelEnum::ManagedRA)
+    BuildMI(*Tail, InsertPt, InsertPt->getDebugLoc(), TII.get(X86::TILERELEASE))
+        .setMIFlag(MachineInstr::FrameDestroy);
 
   if (Tail == &MBB)
     return;
