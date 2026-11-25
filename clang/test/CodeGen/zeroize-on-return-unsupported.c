@@ -10,7 +10,7 @@
 // RUN: %if x86-registered-target %{ %clang_cc1 -triple x86_64-unknown-linux-gnu \
 // RUN:   -S -target-feature +sahf -verify=supported %s -o /dev/null %}
 // RUN: %if x86-registered-target %{ %clang_cc1 -triple x86_64-unknown-linux-gnu \
-// RUN:   -S -target-feature -sahf -verify=flags %s -o /dev/null %}
+// RUN:   -S -target-feature -sahf -verify=supported %s -o /dev/null %}
 // RUN: %if x86-registered-target %{ %clang_cc1 -triple x86_64-apple-darwin \
 // RUN:   -S -target-feature +sahf -verify=warning,layout %s -o /dev/null %}
 // RUN: %if x86-registered-target %{ %clang_cc1 -triple x86_64-apple-darwin \
@@ -20,14 +20,13 @@
 // RUN: %if arm-registered-target %{ %clang_cc1 -triple armv7-unknown-linux-gnueabi \
 // RUN:   -S -Werror -verify=supported %s -o /dev/null %}
 
-// ARM, AArch64 ELF, and X86 ELF with SAHF support this static frame and flags clearing.
+// ARM, AArch64 ELF, and X86 ELF support clearing this static frame and flags.
 // Unsupported requests and frame layouts are diagnosed.
 // supported-no-diagnostics
-// warning-warning@+6 {{"zeroize-stack" is not supported by this target}}
-// warning-error@+5 {{"zeroize-flags" is not supported by this target or exit protocol}}
-// error-error@+4 {{"zeroize-stack" is not supported by this target}}
-// error-error@+3 {{"zeroize-flags" is not supported by this target or exit protocol}}
-// flags-error@+2 {{"zeroize-flags" is not supported by this target or exit protocol}}
+// warning-warning@+5 {{"zeroize-stack" is not supported by this target}}
+// warning-error@+4 {{"zeroize-flags" is not supported by this target or exit protocol}}
+// error-error@+3 {{"zeroize-stack" is not supported by this target}}
+// error-error@+2 {{"zeroize-flags" is not supported by this target or exit protocol}}
 // layout-error@+1 {{stack clearing does not support this frame, calling convention, or exit}}
 [[clang::zeroize_on_return]] void unsupported(void) {
   [[clang::sensitive]] volatile int key = 42;
