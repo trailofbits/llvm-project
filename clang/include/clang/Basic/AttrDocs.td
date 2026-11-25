@@ -8840,8 +8840,8 @@ condition-state clearing.
 
 **Current implementation limits.** ARM32 and X86-64 LP64 ELF support stack and
 condition-state clearing for supported static frames and ordinary return
-protocols. X86 condition-state clearing requires SAHF support. Other targets
-and unsupported configurations are diagnosed; see the LLVM IR
+protocols, including on baseline x86-64 CPUs. Other targets and unsupported
+configurations are diagnosed; see the LLVM IR
 ``zeroize-stack`` and ``zeroize-flags`` documentation for the target limits.
 Register clearing uses the target implementation of ``zero_call_used_regs("all")``.
 Return-value registers and registers preserved by the calling convention are

@@ -936,7 +936,7 @@ static void zeroizeLiveUnitsAt(LiveRegUnits &Live, const MachineBasicBlock &MBB,
 }
 
 bool X86FrameLowering::supportsZeroizeFlags(const MachineFunction &MF) const {
-  return STI.canUseLAHFSAHF() && hasOrdinaryZeroizeExits(MF);
+  return hasOrdinaryZeroizeExits(MF);
 }
 
 bool X86FrameLowering::prepareZeroizeFlags(MachineBasicBlock &MBB,
@@ -950,7 +950,7 @@ bool X86FrameLowering::prepareZeroizeFlags(MachineBasicBlock &MBB,
   };
   if (InsertPt == MBB.end() || !isZeroizeReturn(*InsertPt))
     return Fail("X86 flags clearing requires an ordinary return");
-  if (MF.getRegInfo().isReserved(X86::RAX))
+  if (STI.canUseLAHFSAHF() && MF.getRegInfo().isReserved(X86::RAX))
     return Fail("X86 flags clearing needs an unreserved RAX register");
   LiveRegUnits Live(*TRI);
   zeroizeLiveUnitsAt(Live, MBB, InsertPt);
@@ -969,38 +969,56 @@ void X86FrameLowering::emitZeroizeFlags(MachineBasicBlock &MBB,
                                         MachineBasicBlock::iterator InsertPt,
                                         const BitVector &ScratchRegs,
                                         BitVector &ClearedRegs) const {
-  assert(ScratchRegs.count() == 1 && "expected one planned zero source");
-  MCRegister Zero = ScratchRegs.find_first();
+  assert(ScratchRegs.count() == 1 && "expected one planned scratch register");
+  MCRegister Scratch = ScratchRegs.find_first();
   DebugLoc DL = InsertPt->getDebugLoc();
+  auto OrderAfterClears = [&](MachineInstrBuilder MI, MCRegister FlagsInput) {
+    MI.addReg(X86::RSP, RegState::Implicit)
+        .setMIFlag(MachineInstr::FrameDestroy);
+    for (MCRegister Reg : ClearedRegs.set_bits())
+      if (Reg != X86::EFLAGS && Reg != X86::RSP &&
+          !TRI->regsOverlap(Reg, FlagsInput))
+        MI.addReg(Reg, RegState::Implicit);
+  };
+  ClearedRegs.set(X86::EFLAGS);
+
+  if (!STI.canUseLAHFSAHF()) {
+    // Adding one to the cleared scratch register sets all six arithmetic flags
+    // to zero. MOV restores the full scratch register without changing them.
+    OrderAfterClears(BuildMI(MBB, InsertPt, DL, TII.get(X86::ADD64ri8), Scratch)
+                         .addReg(Scratch)
+                         .addImm(1),
+                     Scratch);
+    BuildMI(MBB, InsertPt, DL, TII.get(X86::MOV64ri32), Scratch)
+        .addImm(0)
+        .setMIFlag(MachineInstr::FrameDestroy);
+    ClearedRegs.set(Scratch);
+    return;
+  }
+
   auto Exchange = [&] {
     BuildMI(MBB, InsertPt, DL, TII.get(X86::XCHG64rr), X86::RAX)
-        .addReg(Zero, RegState::Define)
+        .addReg(Scratch, RegState::Define)
         .addReg(X86::RAX)
-        .addReg(Zero)
+        .addReg(Scratch)
         .setMIFlag(MachineInstr::FrameDestroy);
   };
   // Preserve a live RAX return in the zero scratch register, without touching
   // the already-cleared stack. The second exchange leaves the scratch zero.
-  if (Zero != X86::RAX)
+  if (Scratch != X86::RAX)
     Exchange();
-  auto Test = BuildMI(MBB, InsertPt, DL, TII.get(X86::TEST32rr))
-                  .addReg(X86::EAX)
-                  .addReg(X86::EAX)
-                  .addReg(X86::RSP, RegState::Implicit)
-                  .setMIFlag(MachineInstr::FrameDestroy);
-  for (MCRegister Reg : ClearedRegs.set_bits())
-    if (Reg != X86::EFLAGS && Reg != X86::RSP &&
-        !TRI->regsOverlap(Reg, X86::RAX))
-      Test.addReg(Reg, RegState::Implicit);
+  OrderAfterClears(BuildMI(MBB, InsertPt, DL, TII.get(X86::TEST32rr))
+                       .addReg(X86::EAX)
+                       .addReg(X86::EAX),
+                   X86::RAX);
   // TEST clears OF. SAHF clears SF/ZF/AF/PF/CF from zero AH, preserving OF
   // and all control bits. Model the preserved OF as an EFLAGS use. FrameDestroy
   // makes these epilogue instructions scheduling boundaries on X86.
   BuildMI(MBB, InsertPt, DL, TII.get(X86::SAHF))
       .addReg(X86::EFLAGS, RegState::Implicit)
       .setMIFlag(MachineInstr::FrameDestroy);
-  if (Zero != X86::RAX)
+  if (Scratch != X86::RAX)
     Exchange();
-  ClearedRegs.set(X86::EFLAGS);
 }
 
 static bool hasZeroizeFrameObjects(const MachineFrameInfo &MFI) {
