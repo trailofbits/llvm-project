@@ -936,7 +936,7 @@ static void zeroizeLiveUnitsAt(LiveRegUnits &Live, const MachineBasicBlock &MBB,
 }
 
 bool X86FrameLowering::supportsZeroizeFlags(const MachineFunction &MF) const {
-  return STI.canUseLAHFSAHF() && hasOrdinaryZeroizeExits(MF);
+  return hasOrdinaryZeroizeExits(MF);
 }
 
 bool X86FrameLowering::prepareZeroizeFlags(MachineBasicBlock &MBB,
@@ -950,7 +950,7 @@ bool X86FrameLowering::prepareZeroizeFlags(MachineBasicBlock &MBB,
   };
   if (InsertPt == MBB.end() || !isZeroizeReturn(*InsertPt))
     return Fail("X86 flags clearing requires an ordinary return");
-  if (MF.getRegInfo().isReserved(X86::RAX))
+  if (STI.canUseLAHFSAHF() && MF.getRegInfo().isReserved(X86::RAX))
     return Fail("X86 flags clearing needs an unreserved RAX register");
   LiveRegUnits Live(*TRI);
   zeroizeLiveUnitsAt(Live, MBB, InsertPt);
@@ -969,38 +969,56 @@ void X86FrameLowering::emitZeroizeFlags(MachineBasicBlock &MBB,
                                         MachineBasicBlock::iterator InsertPt,
                                         const BitVector &ScratchRegs,
                                         BitVector &ClearedRegs) const {
-  assert(ScratchRegs.count() == 1 && "expected one planned zero source");
-  MCRegister Zero = ScratchRegs.find_first();
+  assert(ScratchRegs.count() == 1 && "expected one planned scratch register");
+  MCRegister Scratch = ScratchRegs.find_first();
   DebugLoc DL = InsertPt->getDebugLoc();
+  auto OrderAfterClears = [&](MachineInstrBuilder MI, MCRegister FlagsInput) {
+    MI.addReg(X86::RSP, RegState::Implicit)
+        .setMIFlag(MachineInstr::FrameDestroy);
+    for (MCRegister Reg : ClearedRegs.set_bits())
+      if (Reg != X86::EFLAGS && Reg != X86::RSP &&
+          !TRI->regsOverlap(Reg, FlagsInput))
+        MI.addReg(Reg, RegState::Implicit);
+  };
+  ClearedRegs.set(X86::EFLAGS);
+
+  if (!STI.canUseLAHFSAHF()) {
+    // Adding one to the cleared scratch register sets all six arithmetic flags
+    // to zero. MOV restores the full scratch register without changing them.
+    OrderAfterClears(BuildMI(MBB, InsertPt, DL, TII.get(X86::ADD64ri8), Scratch)
+                         .addReg(Scratch)
+                         .addImm(1),
+                     Scratch);
+    BuildMI(MBB, InsertPt, DL, TII.get(X86::MOV64ri32), Scratch)
+        .addImm(0)
+        .setMIFlag(MachineInstr::FrameDestroy);
+    ClearedRegs.set(Scratch);
+    return;
+  }
+
   auto Exchange = [&] {
     BuildMI(MBB, InsertPt, DL, TII.get(X86::XCHG64rr), X86::RAX)
-        .addReg(Zero, RegState::Define)
+        .addReg(Scratch, RegState::Define)
         .addReg(X86::RAX)
-        .addReg(Zero)
+        .addReg(Scratch)
         .setMIFlag(MachineInstr::FrameDestroy);
   };
   // Preserve a live RAX return in the zero scratch register, without touching
   // the already-cleared stack. The second exchange leaves the scratch zero.
-  if (Zero != X86::RAX)
+  if (Scratch != X86::RAX)
     Exchange();
-  auto Test = BuildMI(MBB, InsertPt, DL, TII.get(X86::TEST32rr))
-                  .addReg(X86::EAX)
-                  .addReg(X86::EAX)
-                  .addReg(X86::RSP, RegState::Implicit)
-                  .setMIFlag(MachineInstr::FrameDestroy);
-  for (MCRegister Reg : ClearedRegs.set_bits())
-    if (Reg != X86::EFLAGS && Reg != X86::RSP &&
-        !TRI->regsOverlap(Reg, X86::RAX))
-      Test.addReg(Reg, RegState::Implicit);
+  OrderAfterClears(BuildMI(MBB, InsertPt, DL, TII.get(X86::TEST32rr))
+                       .addReg(X86::EAX)
+                       .addReg(X86::EAX),
+                   X86::RAX);
   // TEST clears OF. SAHF clears SF/ZF/AF/PF/CF from zero AH, preserving OF
   // and all control bits. Model the preserved OF as an EFLAGS use. FrameDestroy
   // makes these epilogue instructions scheduling boundaries on X86.
   BuildMI(MBB, InsertPt, DL, TII.get(X86::SAHF))
       .addReg(X86::EFLAGS, RegState::Implicit)
       .setMIFlag(MachineInstr::FrameDestroy);
-  if (Zero != X86::RAX)
+  if (Scratch != X86::RAX)
     Exchange();
-  ClearedRegs.set(X86::EFLAGS);
 }
 
 static bool hasZeroizeFrameObjects(const MachineFrameInfo &MFI) {
@@ -1127,10 +1145,20 @@ static void restoreBeforeZeroize(MachineBasicBlock &MBB,
 
 static MachineBasicBlock *emitZeroizeLoop(MachineBasicBlock &MBB,
                                           MachineBasicBlock::iterator InsertPt,
-                                          MCRegister Ptr, MCRegister Count) {
+                                          uint64_t LoopSize,
+                                          ArrayRef<MCRegister> Work) {
   MachineFunction &MF = *MBB.getParent();
   const X86InstrInfo &TII = *MF.getSubtarget<X86Subtarget>().getInstrInfo();
+  const X86MachineFunctionInfo &X86FI = *MF.getInfo<X86MachineFunctionInfo>();
+  int64_t Start = int64_t(MF.getFrameInfo().getStackSize()) -
+                  int64_t(X86FI.getZeroizeStackSize());
+  MCRegister Ptr = Work[0];
+  MCRegister Count = Work[1];
   DebugLoc DL = InsertPt->getDebugLoc();
+  addRegOffset(BuildMI(MBB, InsertPt, DL, TII.get(X86::LEA64r), Ptr), X86::RSP,
+               false, Start);
+  BuildMI(MBB, InsertPt, DL, TII.get(X86::MOV64ri32), Count).addImm(LoopSize);
+
   auto *Body = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
   auto *Tail = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
   MF.insert(std::next(MBB.getIterator()), Body);
@@ -1212,30 +1240,6 @@ getZeroizeLoopScratch(const MachineBasicBlock &MBB,
       "X86 stack clearing needs two free caller-saved registers");
 }
 
-static MachineBasicBlock *
-emitZeroizeStores(MachineBasicBlock &MBB, MachineBasicBlock::iterator InsertPt,
-                  uint64_t Size, ArrayRef<MCRegister> Work,
-                  BitVector &ScratchRegs) {
-  MachineFunction &MF = *MBB.getParent();
-  const X86InstrInfo &TII = *MF.getSubtarget<X86Subtarget>().getInstrInfo();
-  int64_t Start = int64_t(MF.getFrameInfo().getStackSize()) - int64_t(Size);
-  if (Size <= 64) {
-    emitZeroizeImmediateStores(MBB, InsertPt, Start, Size);
-    return &MBB;
-  }
-  DebugLoc DL = InsertPt->getDebugLoc();
-  addRegOffset(BuildMI(MBB, InsertPt, DL, TII.get(X86::LEA64r), Work[0]),
-               X86::RSP, false, Start);
-  uint64_t LoopSize = alignDown(Size, 8);
-  BuildMI(MBB, InsertPt, DL, TII.get(X86::MOV64ri32), Work[1]).addImm(LoopSize);
-  for (MCRegister Reg : Work)
-    ScratchRegs.set(Reg);
-  MachineBasicBlock *Tail = emitZeroizeLoop(MBB, InsertPt, Work[0], Work[1]);
-  emitZeroizeImmediateStores(*Tail, InsertPt, Start + LoopSize,
-                             Size - LoopSize);
-  return Tail;
-}
-
 static void releaseZeroizedFrame(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator InsertPt) {
   MachineFunction &MF = *MBB.getParent();
@@ -1270,23 +1274,42 @@ void X86FrameLowering::emitZeroizeStack(MachineBasicBlock &MBB,
     return;
   }
   uint64_t Size = Extent->Ranges.empty() ? 0 : Extent->Ranges.front().Size;
-  SmallVector<MCRegister, 2> Work;
-  if (Size > 64) {
-    auto LoopScratch = getZeroizeLoopScratch(MBB, InsertPt);
-    if (!LoopScratch) {
-      Fail(toString(LoopScratch.takeError()));
-      return;
-    }
-    Work = std::move(*LoopScratch);
-  }
-  restoreBeforeZeroize(MBB, InsertPt);
-  MachineBasicBlock *Tail =
-      emitZeroizeStores(MBB, InsertPt, Size, Work, ScratchRegs);
-  if (Tail == &MBB) {
-    releaseZeroizedFrame(MBB, InsertPt);
+  const X86MachineFunctionInfo &X86FI = *MF.getInfo<X86MachineFunctionInfo>();
+  uint64_t Allocated = MF.getFrameInfo().getStackSize();
+  uint64_t SaveSize = X86FI.getCalleeSavedFrameSize();
+  if (hasFP(MF))
+    SaveSize += SlotSize;
+  if (SaveSize > Allocated) {
+    Fail("X86 stack clearing cannot establish ownership of saved registers");
     return;
   }
+
+  // Keep the topmost save slots intact through the loop so that each new
+  // basic-block section starts with the ordinary saved-register unwind rules.
+  uint64_t LoopSize = Size > 64 ? alignDown(Size - SaveSize, 8) : 0;
+  MachineBasicBlock *Tail = &MBB;
+  if (LoopSize) {
+    auto Work = getZeroizeLoopScratch(MBB, InsertPt);
+    if (!Work) {
+      Fail(toString(Work.takeError()));
+      return;
+    }
+    for (MCRegister Reg : *Work)
+      ScratchRegs.set(Reg);
+    Tail = emitZeroizeLoop(MBB, InsertPt, LoopSize, *Work);
+  }
+
+  restoreBeforeZeroize(*Tail, InsertPt);
+  uint64_t TailSize = Size - LoopSize;
+  emitZeroizeImmediateStores(*Tail, InsertPt,
+                             int64_t(Allocated) - int64_t(TailSize), TailSize);
   releaseZeroizedFrame(*Tail, InsertPt);
+  if (X86FI.getAMXProgModel() == AMXProgModelEnum::ManagedRA)
+    BuildMI(*Tail, InsertPt, InsertPt->getDebugLoc(), TII.get(X86::TILERELEASE))
+        .setMIFlag(MachineInstr::FrameDestroy);
+
+  if (Tail == &MBB)
+    return;
   MachineBasicBlock *Body = Tail->getSinglePredecessor();
   assert(Body && "expected a single zeroization loop predecessor");
   fullyRecomputeLiveIns({Tail, Body});
