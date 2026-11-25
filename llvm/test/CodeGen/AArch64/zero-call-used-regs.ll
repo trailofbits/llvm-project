@@ -330,6 +330,7 @@ define dso_local i32 @all(i32 noundef %a, i32 noundef %b, i32 noundef %c) local_
 ; SVE-NEXT:    mov x17, #0 // =0x0
 ; SVE-NEXT:    mov x18, #0 // =0x0
 ; SVE-NEXT:    pfalse p2.b
+; SVE-NEXT:    wrffr p0.b
 ; SVE-NEXT:    pfalse p3.b
 ; SVE-NEXT:    pfalse p4.b
 ; SVE-NEXT:    pfalse p5.b
@@ -820,6 +821,7 @@ define dso_local double @all_float(double noundef %a, float noundef %b) local_un
 ; SVE-NEXT:    pfalse p13.b
 ; SVE-NEXT:    pfalse p14.b
 ; SVE-NEXT:    pfalse p15.b
+; SVE-NEXT:    wrffr p0.b
 ; SVE-NEXT:    ret
 ;
 ; SME-LABEL: all_float:

@@ -1,10 +1,26 @@
 # Register-zeroing compatibility baseline
 
-This branch proposes fixture revision `b0632252fce3fa21c308b2db4c299eab706173e2` for
+This branch proposes fixture revision `91303c7f1d0138e1d24b40ee8313cf145385cf30` for
 review under [tracker #60](https://github.com/trailofbits/vspells-ct-internal-notes/issues/60).
-It extends the fixed-width proposal at `657dd456bef04ccd9f04e48319fe6e0b7c174579`.
+It extends the SVE upper-lane proposal at `b0632252fce3fa21c308b2db4c299eab706173e2`
+and the fixed-width proposal at `657dd456bef04ccd9f04e48319fe6e0b7c174579`.
 The November 14 baseline was `7932207f03ab3b3ed2fad5ea3fe2298d7e426dce`.
 Acceptance of these proposed expectation changes remains pending.
+
+## SVE first-fault register correction
+
+AAPCS64 makes the First Fault Register (FFR) caller-saved. The SVE `all` and
+`all_float` cases now require `wrffr p0.b` after P0 is cleared. Each existing
+SVE expectation gains one instruction; the input IR, all four RUN variants,
+and the default, streaming SME, and streaming-compatible checks are unchanged.
+The five other fixture files and their hashes are unchanged.
+
+All six fixtures and 23 compiler/FileCheck invocations pass with the correction.
+The previous SVE expectations reject the extra FFR clears, and the new checks
+reject the compiler that leaves FFR unchanged. This extends the proposed
+baseline; acceptance remains pending. Separate FFR tests cover used-only mode,
+predicate results, live FFR outputs, and diagnostics for unavailable scratch
+predicates or unsupported streaming instructions.
 
 ## SVE upper-lane correction
 

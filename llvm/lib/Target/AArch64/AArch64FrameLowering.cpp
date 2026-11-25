@@ -864,9 +864,11 @@ static MCRegister getRegisterOrZero(MCRegister Reg, bool HasSVE) {
   }
 }
 
-void AArch64FrameLowering::addZeroCallUsedRegsSubRegs(
+void AArch64FrameLowering::addZeroCallUsedRegsCandidates(
     const MachineFunction &MF, BitVector &Candidates) const {
   const auto &STI = MF.getSubtarget<AArch64Subtarget>();
+  if (STI.hasSVE())
+    Candidates.set(AArch64::FFR);
   if (!hasAArch64ZeroizeUpperLaneABI(MF))
     return;
 
@@ -980,6 +982,33 @@ static bool validateZeroCallUsedRegsWidening(const BitVector &RegsToZero,
   return true;
 }
 
+static bool prepareFFRClear(const MachineFunction &MF, LiveRegUnits Live,
+                            BitVector &PredicatesToZero,
+                            MCRegister &FFRScratch) {
+  const auto &STI = MF.getSubtarget<AArch64Subtarget>();
+  auto Diagnose = [&](StringRef Message) {
+    MF.getFunction().getContext().diagnose(
+        DiagnosticInfoUnsupported{MF.getFunction(), Message});
+    return false;
+  };
+  if (!STI.isSVEAvailable())
+    return Diagnose("\"zero-call-used-regs\" cannot clear FFR in streaming "
+                    "mode without SME FA64");
+
+  for (const MCPhysReg *CS = MF.getRegInfo().getCalleeSavedRegs(); *CS; ++CS)
+    Live.addReg(*CS);
+  const BitVector Allocatable = STI.getRegisterInfo()->getAllocatableSet(MF);
+  for (MCRegister PReg : AArch64::PPRRegClass) {
+    if (!Allocatable.test(PReg) || !Live.available(PReg))
+      continue;
+    FFRScratch = PReg;
+    PredicatesToZero.set(PReg);
+    return true;
+  }
+  return Diagnose("\"zero-call-used-regs\" cannot clear FFR without "
+                  "overwriting a predicate needed at the exit");
+}
+
 void AArch64FrameLowering::emitZeroCallUsedRegs(
     BitVector RegsToZero, MachineBasicBlock &MBB,
     MachineBasicBlock::iterator MBBI, RegScavenger *) const {
@@ -997,11 +1026,18 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
   collectZeroCallUsedRegs(*MBB.getParent(), RegsToZero, GPRsToZero, FPRsToZero,
                           PredicatesToZero);
 
+  LiveRegUnits Live = getZeroCallUsedRegsExitUnits(MBB, MBBI, TRI);
+  MCRegister FFRScratch;
+  if (RegsToZero.test(AArch64::FFR) &&
+      !prepareFFRClear(*MBB.getParent(), Live, PredicatesToZero, FFRScratch))
+    return;
+
   // Check widened writes for live fragments before emitting any clears.
   BitVector FullRegsToZero = GPRsToZero;
   FullRegsToZero |= FPRsToZero;
   FullRegsToZero |= PredicatesToZero;
-  LiveRegUnits Live = getZeroCallUsedRegsExitUnits(MBB, MBBI, TRI);
+  if (FFRScratch)
+    FullRegsToZero.set(AArch64::FFR);
   if (!validateZeroCallUsedRegsWidening(RegsToZero, FullRegsToZero,
                                         *MBB.getParent(), Live))
     return;
@@ -1046,6 +1082,8 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
 
   for (MCRegister PReg : PredicatesToZero.set_bits())
     BuildMI(MBB, MBBI, DL, TII.get(AArch64::PFALSE), PReg);
+  if (FFRScratch)
+    BuildMI(MBB, MBBI, DL, TII.get(AArch64::WRFFR)).addReg(FFRScratch);
 }
 
 bool AArch64FrameLowering::windowsRequiresStackProbe(

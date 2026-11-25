@@ -35,6 +35,9 @@ public:
     return getEncodingValue(i);
   }
 
+  bool isFixedRegister(const MachineFunction &MF,
+                       MCRegister Reg) const override;
+
   bool isReservedReg(const MachineFunction &MF, MCRegister Reg) const;
   bool isUserReservedReg(const MachineFunction &MF, MCRegister Reg) const;
   bool isStrictlyReservedReg(const MachineFunction &MF, MCRegister Reg) const;

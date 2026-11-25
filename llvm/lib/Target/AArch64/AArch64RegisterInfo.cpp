@@ -35,6 +35,13 @@
 
 using namespace llvm;
 
+bool AArch64RegisterInfo::isFixedRegister(const MachineFunction &MF,
+                                          MCRegister Reg) const {
+  // FFR is nonallocatable global state, but AAPCS64 makes it caller-saved.
+  return Reg != AArch64::FFR &&
+         AArch64GenRegisterInfo::isFixedRegister(MF, Reg);
+}
+
 #define GET_CC_REGISTER_LISTS
 #include "AArch64GenCallingConv.inc"
 #define GET_REGINFO_TARGET_DESC
