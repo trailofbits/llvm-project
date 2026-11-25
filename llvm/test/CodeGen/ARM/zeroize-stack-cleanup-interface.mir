@@ -1,0 +1,208 @@
+# RUN: llc -start-after=arm-cp-islands %s -o - | FileCheck %s --check-prefix=VALID
+# RUN: sed 's/\.Larm_zeroize_continuation_0/\.Lwrong_continuation/g' %s > %t.continuation.mir
+# RUN: not llc -disable-verify -verify-machineinstrs=0 -start-after=arm-cp-islands %t.continuation.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: sed 's/\.Larm_zeroize_carrier_0/\.Lwrong_carrier/g' %s > %t.carrier.mir
+# RUN: not llc -disable-verify -verify-machineinstrs=0 -start-after=arm-cp-islands %t.carrier.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: sed 's/\$r2 = MOVi 0,/\$r2 = MOVi 9,/g' %s > %t.selector.mir
+# RUN: not llc -disable-verify -verify-machineinstrs=0 -start-after=arm-cp-islands %t.selector.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: sed 's/PICADD killed \$r1, 0,/PICADD killed \$r1, 9,/g' %s > %t.pic.mir
+# RUN: not llc -disable-verify -verify-machineinstrs=0 -start-after=arm-cp-islands %t.pic.mir -o /dev/null 2>&1 | FileCheck %s
+# VALID: bx r12
+# VALID: .Larm_zeroize_carrier_0:
+# CHECK: error: {{.*}}ARM cleanup clearing has an invalid final interface
+# CHECK-NOT: Assertion
+
+--- |
+  ; ModuleID = 'zeroize-stack-cleanup.ll'
+  source_filename = "zeroize-stack-cleanup.ll"
+  target datalayout = "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
+  target triple = "armv7-unknown-linux-gnueabihf"
+
+  declare void @action() #0
+
+  ; Function Attrs: nounwind
+  declare void @cleanup_event() #1
+
+  declare i32 @__gxx_personality_v0(...) #0
+
+  define i32 @cleanup(i32 %value) #2 personality ptr @__gxx_personality_v0 {
+  entry:
+    %words = alloca [6 x i32], align 4
+    %slot = getelementptr [6 x i32], ptr %words, i32 0, i32 1
+    store volatile i32 %value, ptr %slot, align 4
+    call void asm sideeffect "", "r,~{r4},~{memory}"(ptr %words)
+    invoke void @action()
+            to label %return unwind label %cleanup
+
+  return:                                           ; preds = %entry
+    %sunkaddr = getelementptr i8, ptr %words, i32 4
+    %result = load volatile i32, ptr %sunkaddr, align 4
+    call void @cleanup_event()
+    ret i32 %result
+
+  cleanup:                                          ; preds = %entry
+    %exception = landingpad { ptr, i32 }
+            cleanup
+    call void @cleanup_event()
+    %exn.obj = extractvalue { ptr, i32 } %exception, 0
+    call arm_aapcs_vfpcc void @__cxa_end_cleanup() #3
+    unreachable
+  }
+
+  declare void @__cxa_end_cleanup()
+
+  attributes #0 = { "target-features"="+neon" }
+  attributes #1 = { nounwind "target-features"="+neon" }
+  attributes #2 = { "frame-pointer"="none" "target-features"="+neon" "zero-call-used-regs"="all-gpr" "zeroize-flags" "zeroize-stack"="used" }
+  attributes #3 = { noreturn }
+...
+---
+name:            cleanup
+alignment:       4
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+hasFakeUses:     false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHContTarget: false
+hasEHScopes:     false
+hasEHFunclets:   false
+isOutlined:      false
+debugInstrRef:   false
+failsVerification: false
+tracksDebugUserValues: true
+registers:       []
+liveins:
+  - { reg: '$r0', virtual-reg: '' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       32
+  offsetAdjustment: 0
+  maxAlignment:    4
+  adjustsStack:    true
+  hasCalls:        true
+  framePointerPolicy: none
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 0
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  isCalleeSavedInfoValid: true
+  localFrameSize:  24
+fixedStack:      []
+stack:
+  - { id: 0, name: words, type: default, offset: -32, size: 24, alignment: 4,
+      stack-id: default, callee-saved-register: '', callee-saved-restored: true,
+      local-offset: -24, debug-info-variable: '', debug-info-expression: '',
+      debug-info-location: '' }
+  - { id: 1, name: '', type: spill-slot, offset: -4, size: 4, alignment: 4,
+      stack-id: default, callee-saved-register: '$lr', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+  - { id: 2, name: '', type: spill-slot, offset: -8, size: 4, alignment: 4,
+      stack-id: default, callee-saved-register: '$r4', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+entry_values:    []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo:
+  isLRSpilled:     true
+body:             |
+  bb.0.entry:
+    successors: %bb.1(0x7ffff800), %bb.2(0x00000800)
+    liveins: $r0, $r4, $lr
+
+    $sp = frame-setup STMDB_UPD $sp, 14 /* CC::al */, $noreg, killed $r4, killed $lr
+    frame-setup CFI_INSTRUCTION def_cfa_offset 8
+    frame-setup CFI_INSTRUCTION offset $lr, -4
+    frame-setup CFI_INSTRUCTION offset $r4, -8
+    $sp = frame-setup SUBri $sp, 24, 14 /* CC::al */, $noreg, $noreg
+    frame-setup CFI_INSTRUCTION def_cfa_offset 32
+    STRi12 killed renamable $r0, $sp, 4, 14 /* CC::al */, $noreg :: (volatile store (s32) into %ir.slot)
+    renamable $r0 = MOVr $sp, 14 /* CC::al */, $noreg, $noreg
+    INLINEASM &"", sideeffect mayload maystore attdialect, reguse:GPR, killed renamable $r0, clobber, implicit-def dead early-clobber $r4
+    EH_LABEL <mcsymbol .Ltest0>
+    BL @action, csr_aapcs, implicit-def dead $lr, implicit $sp, implicit-def $sp
+    EH_LABEL <mcsymbol .Ltest1>
+
+  bb.1.return:
+    renamable $r4 = LDRi12 $sp, 4, 14 /* CC::al */, $noreg :: (volatile dereferenceable load (s32) from %ir.sunkaddr)
+    BL @cleanup_event, csr_aapcs, implicit-def dead $lr, implicit $sp, implicit-def $sp
+    $r0 = MOVr killed $r4, 14 /* CC::al */, $noreg, $noreg
+    frame-destroy CFI_INSTRUCTION def_cfa $sp, 32
+    $r1 = ADDri $sp, 28, 14 /* CC::al */, $noreg, $noreg
+    $lr = LDRi12 killed $r1, 0, 14 /* CC::al */, $noreg :: (load (s32) from %stack.1)
+    frame-destroy CFI_INSTRUCTION restore $lr
+    $r1 = ADDri $sp, 24, 14 /* CC::al */, $noreg, $noreg
+    $r4 = LDRi12 killed $r1, 0, 14 /* CC::al */, $noreg :: (load (s32) from %stack.2)
+    frame-destroy CFI_INSTRUCTION restore $r4
+    $r1 = MOVr $sp, 14 /* CC::al */, $noreg, $noreg
+    $r2 = MOVi 0, 14 /* CC::al */, $noreg, $noreg
+    STRi12 $r2, $r1, 0, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 $r2, $r1, 4, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 $r2, $r1, 8, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 $r2, $r1, 12, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 $r2, $r1, 16, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 $r2, $r1, 20, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 $r2, $r1, 24, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 killed $r2, killed $r1, 28, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    $r1 = ADDri $sp, 32, 14 /* CC::al */, $noreg, $noreg
+    $sp = MOVr killed $r1, 14 /* CC::al */, $noreg, $noreg
+    frame-destroy CFI_INSTRUCTION def_cfa $sp, 0
+    $r1 = MOVi 0, 14 /* CC::al */, $noreg, $noreg
+    $r2 = MOVi 0, 14 /* CC::al */, $noreg, $noreg
+    $r3 = MOVi 0, 14 /* CC::al */, $noreg, $noreg
+    $r12 = MOVi 0, 14 /* CC::al */, $noreg, $noreg
+    $r1 = UADD8 killed $r1, $r1, 14 /* CC::al */, $noreg, implicit-def $cpsr, implicit $sp, implicit $r0, implicit $r2, implicit $r3, implicit $r12
+    MSR 8, $r1, 14 /* CC::al */, $noreg, implicit-def $cpsr, implicit $sp, implicit killed $cpsr, implicit $r0, implicit $r2, implicit $r3, implicit $r12
+    BX_RET 14 /* CC::al */, $noreg, implicit killed $r0, implicit killed $r1, implicit killed $r2, implicit killed $r3, implicit killed $r12, implicit killed $cpsr
+
+  bb.2.cleanup (landing-pad):
+    liveins: $r0, $r1
+
+    EH_LABEL <mcsymbol .Ltest2>
+    BL @cleanup_event, csr_aapcs, implicit-def dead $lr, implicit $sp, implicit-def $sp
+    frame-destroy CFI_INSTRUCTION def_cfa $sp, 32
+    $r0 = ADDri $sp, 28, 14 /* CC::al */, $noreg, $noreg
+    $lr = LDRi12 killed $r0, 0, 14 /* CC::al */, $noreg :: (load (s32) from %stack.1)
+    frame-destroy CFI_INSTRUCTION restore $lr
+    $r0 = ADDri $sp, 24, 14 /* CC::al */, $noreg, $noreg
+    $r4 = LDRi12 killed $r0, 0, 14 /* CC::al */, $noreg :: (load (s32) from %stack.2)
+    frame-destroy CFI_INSTRUCTION restore $r4
+    $r0 = MOVr $sp, 14 /* CC::al */, $noreg, $noreg
+    $r3 = MOVi 0, 14 /* CC::al */, $noreg, $noreg
+    STRi12 $r3, $r0, 0, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    $r2 = MOVi 0, 14 /* CC::al */, $noreg, $noreg
+    STRi12 $r3, $r0, 4, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 $r3, $r0, 8, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 $r3, $r0, 12, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 $r3, $r0, 16, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 $r3, $r0, 20, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 $r3, $r0, 24, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    STRi12 $r3, killed $r0, 28, 14 /* CC::al */, $noreg :: (volatile store (s32))
+    $r1 = MOVi16_ga_pcrel <mcsymbol .Larm_zeroize_continuation_0>, 0
+    $r1 = MOVTi16_ga_pcrel killed $r1, <mcsymbol .Larm_zeroize_continuation_0>, 0
+    $r12 = MOVi16_ga_pcrel <mcsymbol .Larm_zeroize_carrier_0>, 1
+    $r0 = ADDri $sp, 32, 14 /* CC::al */, $noreg, $noreg
+    $r12 = MOVTi16_ga_pcrel killed $r12, <mcsymbol .Larm_zeroize_carrier_0>, 1
+    $r0 = MOVi 0, 14 /* CC::al */, $noreg, $noreg
+    $r1 = PICADD killed $r1, 0, 14 /* CC::al */, $noreg
+    $r12 = PICADD killed $r12, 1, 14 /* CC::al */, $noreg
+    $r0 = UADD8 killed $r0, $r0, 14 /* CC::al */, $noreg, implicit-def $cpsr, implicit $sp, implicit $lr, implicit $r1, implicit $r2, implicit $r3, implicit $r4, implicit $r12
+    MSR 8, $r0, 14 /* CC::al */, $noreg, implicit-def $cpsr, implicit $sp, implicit killed $cpsr, implicit $lr, implicit $r1, implicit $r2, implicit $r3, implicit $r4, implicit $r12
+    BL @__cxa_end_cleanup, csr_aapcs, implicit-def dead $lr, implicit $sp, implicit-def $sp, implicit killed $r1, implicit killed $r2, implicit killed $r4, implicit killed $r12, implicit killed $lr, implicit killed $r0, implicit killed $r3, implicit killed $cpsr
+...

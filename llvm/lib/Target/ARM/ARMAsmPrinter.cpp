@@ -17,6 +17,7 @@
 #include "ARMMachineFunctionInfo.h"
 #include "ARMTargetMachine.h"
 #include "ARMTargetObjectFile.h"
+#include "ARMZeroizeCleanup.h"
 #include "MCTargetDesc/ARMInstPrinter.h"
 #include "MCTargetDesc/ARMMCAsmInfo.h"
 #include "TargetInfo/ARMTargetInfo.h"
@@ -26,6 +27,7 @@
 #include "llvm/CodeGen/MachineModuleInfoImpls.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
@@ -61,10 +63,11 @@ const ARMBaseTargetMachine &ARMAsmPrinter::getTM() const {
 void ARMAsmPrinter::emitFunctionBodyEnd() {
   // Make sure to terminate any constant pools that were at the end
   // of the function.
-  if (!InConstantPool)
-    return;
-  InConstantPool = false;
-  OutStreamer->emitDataRegion(MCDR_DataRegionEnd);
+  if (InConstantPool) {
+    InConstantPool = false;
+    OutStreamer->emitDataRegion(MCDR_DataRegionEnd);
+  }
+  emitZeroizeCleanupContinuation();
 }
 
 void ARMAsmPrinter::emitFunctionEntryLabel() {
@@ -195,7 +198,14 @@ bool ARMAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   }
 
   // Emit the rest of the function body.
+  auto &ATS = static_cast<ARMTargetStreamer &>(*OutStreamer->getTargetStreamer());
+  bool Cleanup = hasARMZeroizeCleanup(MF);
+  if (Cleanup)
+    ATS.setPersonalityOverride(getARMZeroizeSymbol(MF, "personality"));
   emitFunctionBody();
+  ATS.setPersonalityOverride(nullptr);
+  if (Cleanup)
+    emitZeroizeCleanupHelpers();
 
   // Emit the XRay table for this function.
   emitXRayTable();
@@ -1970,6 +1980,20 @@ void ARMAsmPrinter::LowerKCFI_CHECK(const MachineInstr &MI) {
 }
 
 void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
+  if (isARMZeroizeCleanup(*MI)) {
+    if (!hasARMZeroizeCleanupFrame(*MF) ||
+        !hasARMZeroizeCleanupInterface(*MI)) {
+      MF->getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+          MF->getFunction(), "ARM cleanup clearing has an invalid final interface"});
+      return;
+    }
+    auto Transfer = MCInstBuilder(AFI->isThumbFunction() ? ARM::tBX : ARM::BX)
+                        .addReg(ARM::R12);
+    if (AFI->isThumbFunction())
+      Transfer.addImm(ARMCC::AL).addReg(0);
+    EmitToStreamer(*OutStreamer, Transfer);
+    return;
+  }
   ARM_MC::verifyInstructionPredicates(MI->getOpcode(),
                                       getSubtargetInfo().getFeatureBits());
 
@@ -2136,8 +2160,10 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
     TmpInst.addOperand(MCOperand::createReg(MI->getOperand(0).getReg()));
 
     unsigned TF = MI->getOperand(1).getTargetFlags();
-    const GlobalValue *GV = MI->getOperand(1).getGlobal();
-    MCSymbol *GVSym = GetARMGVSymbol(GV, TF);
+    const MachineOperand &Address = MI->getOperand(1);
+    MCSymbol *GVSym = Address.isMCSymbol()
+                          ? Address.getMCSymbol()
+                          : GetARMGVSymbol(Address.getGlobal(), TF);
     const MCExpr *GVSymExpr = MCSymbolRefExpr::create(GVSym, OutContext);
 
     MCSymbol *LabelSym =
@@ -2172,8 +2198,10 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
     TmpInst.addOperand(MCOperand::createReg(MI->getOperand(1).getReg()));
 
     unsigned TF = MI->getOperand(2).getTargetFlags();
-    const GlobalValue *GV = MI->getOperand(2).getGlobal();
-    MCSymbol *GVSym = GetARMGVSymbol(GV, TF);
+    const MachineOperand &Address = MI->getOperand(2);
+    MCSymbol *GVSym = Address.isMCSymbol()
+                          ? Address.getMCSymbol()
+                          : GetARMGVSymbol(Address.getGlobal(), TF);
     const MCExpr *GVSymExpr = MCSymbolRefExpr::create(GVSym, OutContext);
 
     MCSymbol *LabelSym =

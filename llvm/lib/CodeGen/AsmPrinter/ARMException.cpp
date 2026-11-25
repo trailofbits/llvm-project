@@ -72,7 +72,9 @@ void ARMException::endFunction(const MachineFunction *MF) {
   else if (shouldEmitPersonality) {
     // Emit references to personality.
     if (Per) {
-      MCSymbol *PerSym = Asm->getSymbol(Per);
+      const MCSymbol *PerSym = ATS.getPersonalityOverride();
+      if (!PerSym)
+        PerSym = Asm->getSymbol(Per);
       ATS.emitPersonality(PerSym);
     }
 
