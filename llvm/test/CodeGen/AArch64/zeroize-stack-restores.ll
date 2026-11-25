@@ -36,7 +36,7 @@ define { i64, double } @saved(i64 %x, double %y)
 ; MEM-LABEL: name: saved_scalable
 ; MEM: $z8 = frame-destroy LDR_ZXI {{.*}}(load (<vscale x 1 x s128>)
 ; MEM: $p4 = frame-destroy LDR_PXI {{.*}}(load (<vscale x 1 x s16>)
-define aarch64_sve_vector_pcs void @saved_scalable() "zeroize-stack"="used" {
+define aarch64_sve_vector_pcs void @saved_scalable() uwtable "zeroize-stack"="used" {
   call void asm sideeffect "", "~{z8},~{p4}"()
   ret void
 }
