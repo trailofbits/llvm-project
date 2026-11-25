@@ -2,15 +2,22 @@
 ; RUN: llc -O2 -mtriple=x86_64-unknown-linux-gnu -mattr=+sahf -frame-pointer=all -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=FP
 ; RUN: llc -O2 -mtriple=x86_64-unknown-linux-gnu -mattr=+sahf -frame-pointer=all -verify-machineinstrs -stop-after=prolog-epilog %s -o - | FileCheck %s --check-prefix=FP-MIR
 ;
-; The vector lives across several calls and therefore has a register allocator
-; spill. Its reload and the caller-owned results must precede the frame clear.
-
+; The vector has a register allocator spill. Reload it before clearing locals.
+; The save slots must stay intact through the loop, then be restored and erased.
+;
 ; CHECK-LABEL: spill_cleanup:
 ; CHECK: .cfi_def_cfa_offset 176
 ; CHECK: movaps %xmm0, (%rsp)
 ; CHECK: callq may_throw
 ; CHECK: movaps (%rsp), %xmm0
 ; CHECK: callq finish
+; CHECK: leaq (%rsp), %r11
+; CHECK-NEXT: movq $136, %r10
+; CHECK: [[RETLOOP:\.LBB[0-9_]+]]:
+; CHECK: movq $0, (%r11)
+; CHECK-NEXT: addq $8, %r11
+; CHECK-NEXT: subq $8, %r10
+; CHECK-NEXT: jne [[RETLOOP]]
 ; CHECK: movq 136(%rsp), %rbx
 ; CHECK-NEXT: .cfi_restore %rbx
 ; CHECK-NEXT: movq 144(%rsp), %r14
@@ -19,14 +26,11 @@
 ; CHECK-NEXT: .cfi_restore %r15
 ; CHECK-NEXT: movq 160(%rsp), %rbp
 ; CHECK-NEXT: .cfi_restore %rbp
-; CHECK-NEXT: leaq (%rsp), %r11
-; CHECK-NEXT: movq $168, %r10
-; CHECK: [[RETLOOP:\.LBB[0-9_]+]]:
-; CHECK: movq $0, (%r11)
-; CHECK-NEXT: addq $8, %r11
-; CHECK-NEXT: subq $8, %r10
-; CHECK-NEXT: jne [[RETLOOP]]
-; CHECK: addq $168, %rsp
+; CHECK-NEXT: movq $0, 136(%rsp)
+; CHECK-NEXT: movq $0, 144(%rsp)
+; CHECK-NEXT: movq $0, 152(%rsp)
+; CHECK-NEXT: movq $0, 160(%rsp)
+; CHECK-NEXT: leaq 168(%rsp), %rsp
 ; CHECK-NEXT: .cfi_def_cfa %rsp, 8
 ; CHECK: retq
 ; CHECK: .cfi_def_cfa_offset 176
@@ -35,7 +39,14 @@
 ; CHECK-DAG: .cfi_offset %r14, -32
 ; CHECK-DAG: .cfi_offset %r15, -24
 ; CHECK: movq %rbx, %rdi
-; CHECK-NEXT: movq 136(%rsp), %rbx
+; CHECK-NEXT: leaq (%rsp), %r11
+; CHECK-NEXT: movq $136, %r10
+; CHECK: [[RESUMELOOP:\.LBB[0-9_]+]]:
+; CHECK: movq $0, (%r11)
+; CHECK-NEXT: addq $8, %r11
+; CHECK-NEXT: subq $8, %r10
+; CHECK-NEXT: jne [[RESUMELOOP]]
+; CHECK: movq 136(%rsp), %rbx
 ; CHECK-NEXT: .cfi_restore %rbx
 ; CHECK-NEXT: movq 144(%rsp), %r14
 ; CHECK-NEXT: .cfi_restore %r14
@@ -43,13 +54,10 @@
 ; CHECK-NEXT: .cfi_restore %r15
 ; CHECK-NEXT: movq 160(%rsp), %rbp
 ; CHECK-NEXT: .cfi_restore %rbp
-; CHECK-NEXT: leaq (%rsp), %r11
-; CHECK-NEXT: movq $168, %r10
-; CHECK: [[RESUMELOOP:\.LBB[0-9_]+]]:
-; CHECK: movq $0, (%r11)
-; CHECK-NEXT: addq $8, %r11
-; CHECK-NEXT: subq $8, %r10
-; CHECK-NEXT: jne [[RESUMELOOP]]
+; CHECK-NEXT: movq $0, 136(%rsp)
+; CHECK-NEXT: movq $0, 144(%rsp)
+; CHECK-NEXT: movq $0, 152(%rsp)
+; CHECK-NEXT: movq $0, 160(%rsp)
 ; CHECK-NOT: .cfi_
 ; CHECK-NOT: %rsp
 ; CHECK-NOT: %rdi
@@ -57,35 +65,41 @@
 ; CHECK-NEXT: sahf
 ; CHECK-NEXT: callq _Unwind_Resume
 
-; The vector spill also works with a dedicated RBP. The large clearing loop
-; preserves the restored RBP and RSP-based unwind rule through the resume.
+; With a dedicated RBP, keep RBP-based unwind rules through the loop and switch
+; to RSP before restoring and erasing the saved RBP.
 ; FP-LABEL: spill_cleanup:
 ; FP: .cfi_def_cfa_register %rbp
 ; FP: movaps %xmm0, -48(%rbp)
 ; FP: callq may_throw
 ; FP: movaps -48(%rbp), %xmm0
 ; FP: callq finish
+; FP: leaq (%rsp), %r11
+; FP-NEXT: movq $128, %r10
+; FP: movq $0, (%r11)
 ; FP: .cfi_def_cfa %rsp, 176
 ; FP: movq 160(%rsp), %rbp
 ; FP-NEXT: .cfi_restore %rbp
-; FP-NEXT: leaq (%rsp), %r11
-; FP-NEXT: movq $168, %r10
-; FP: movq $0, (%r11)
+; FP: movq $0, 160(%rsp)
 ; FP: retq
 ; FP: .cfi_def_cfa %rbp, 16
 ; FP: .cfi_offset %rbp, -16
 ; FP: callq destroyed
 ; FP: movq %rbx, %rdi
-; FP-NEXT: .cfi_def_cfa %rsp, 176
-; FP: movq 160(%rsp), %rbp
-; FP-NEXT: .cfi_restore %rbp
 ; FP-NEXT: leaq (%rsp), %r11
-; FP-NEXT: movq $168, %r10
+; FP-NEXT: movq $128, %r10
 ; FP: [[FPLOOP:\.LBB[0-9_]+]]:
 ; FP: movq $0, (%r11)
 ; FP-NEXT: addq $8, %r11
 ; FP-NEXT: subq $8, %r10
 ; FP-NEXT: jne [[FPLOOP]]
+; FP: .cfi_def_cfa %rsp, 176
+; FP: movq 160(%rsp), %rbp
+; FP-NEXT: .cfi_restore %rbp
+; FP-NEXT: movq $0, 128(%rsp)
+; FP-NEXT: movq $0, 136(%rsp)
+; FP-NEXT: movq $0, 144(%rsp)
+; FP-NEXT: movq $0, 152(%rsp)
+; FP-NEXT: movq $0, 160(%rsp)
 ; FP-NOT: .cfi_
 ; FP-NOT: %rbp
 ; FP-NOT: %rsp
