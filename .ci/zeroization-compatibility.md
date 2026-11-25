@@ -1,17 +1,33 @@
 # Register-zeroing compatibility baseline
 
-This branch proposes a new fixture revision, `657dd456bef04ccd9f04e48319fe6e0b7c174579`, for
+This branch proposes fixture revision `b0632252fce3fa21c308b2db4c299eab706173e2` for
 review under [tracker #60](https://github.com/trailofbits/vspells-ct-internal-notes/issues/60).
-The November 14 baseline was `7932207f03ab3b3ed2fad5ea3fe2298d7e426dce`. The decision about this
-proposal for acceptance is pending.
+It extends the fixed-width proposal at `657dd456bef04ccd9f04e48319fe6e0b7c174579`.
+The November 14 baseline was `7932207f03ab3b3ed2fad5ea3fe2298d7e426dce`.
+Acceptance of these proposed expectation changes remains pending.
+
+## SVE upper-lane correction
+
+[PR #61](https://github.com/trailofbits/llvm-project/pull/61) extends the base AAPCS64
+upper-lane clear to functions with SVE. The `all` and `all_float` expectations now require
+writes to V8 through V15 that preserve the low 64 bits and clear their scalable upper bits.
+Those instructions also change scheduling. SVE and streaming SME therefore have separate
+checks for these two functions; the SME expectations retain their previous instruction sequence.
+The default and streaming-compatible expectations, fixture inputs, and all RUN variants remain.
+
+The previous fixture failed the corrected compiler's SVE invocation. The new expectations
+pass all four AArch64 invocations and reject the compiler without the SVE upper-lane correction.
+The five other fixture files and their hashes remain unchanged. This amendment preserves the
+six-file, 23-invocation gate; it does not claim unchanged output against either prior baseline.
 
 ## Proposed AArch64 expectations
 
 In the fixed-width AArch64 C ABI, the caller owns the low 64 bits of V8 through V15. Each upper
 half must be cleared while its low half is preserved. Two existing default-mode checks now
 require the eight corresponding writes. All earlier assertions and the five other fixture files
-are retained. The November 14 inputs pass 22 of 23 variants on the candidate. The proposed
-expectations pass 23 of 23.
+are retained. The comparison recorded for that fixed-width proposal passed 22 of 23 variants
+with the November 14 inputs and 23 of 23 with its revised expectations. Those historical results
+precede the SVE upper-lane correction above.
 
 ## November 14 differences
 

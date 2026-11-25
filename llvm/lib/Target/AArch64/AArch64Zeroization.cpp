@@ -63,10 +63,12 @@ static bool mayInstrumentZeroizeExits(const Function &F) {
 
 bool llvm::hasAArch64ZeroizeUpperLaneABI(const MachineFunction &MF) {
   const auto &STI = MF.getSubtarget<AArch64Subtarget>();
+  // In base AAPCS64 only D8-D15 are preserved. Writing the corresponding
+  // upper V lanes also zeroes the bits above V in an SVE Z register.
   return STI.isTargetELF() &&
          MF.getFunction().getCallingConv() == CallingConv::C &&
-         STI.hasFPARMv8() && !STI.hasSVE() && !STI.hasSME() &&
-         !STI.isStreaming() && !STI.isStreamingCompatible();
+         STI.hasFPARMv8() && !STI.hasSME() && !STI.isStreaming() &&
+         !STI.isStreamingCompatible();
 }
 
 static bool hasAndroidShadowCallStack(const MachineFunction &MF) {
