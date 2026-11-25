@@ -566,8 +566,9 @@ void ARMPassConfig::addPreEmitPass2() {
 
   // Clearing a stack frame emits epilogue CFI, possibly across several blocks.
   // Reconcile the CFA and saved registers after the final block layout.
+  // Split stacks are diagnosed before clearing; keep their ordinary CFI path.
   addPass(createCFIInstrInserter([](const MachineFunction &MF) {
-    return MF.getFunction().hasZeroizeStack();
+    return MF.getFunction().hasZeroizeStack() && !MF.shouldSplitStack();
   }));
 
   if (TM->getTargetTriple().isOSWindows()) {
