@@ -7,16 +7,27 @@
 // RUN: %if arm-registered-target %{ not %{arm} %{protect} -o %t.s 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=ARM-ERROR %}
 // RUN: %if aarch64-registered-target %{ %{a64} -o - | FileCheck %s --check-prefix=A64-CONTROL %}
-// RUN: %if aarch64-registered-target %{ not %{a64} %{protect} -o %t.s 2>&1 \
-// RUN:   | FileCheck %s --check-prefix=A64-ERROR %}
+// RUN: %if aarch64-registered-target %{ %{a64} %{protect} -o - \
+// RUN:   | FileCheck %s --check-prefix=A64 %}
 // RUN: %if aarch64-registered-target %{ %{compile} --target=aarch64-linux-android29 \
 // RUN:   -ffixed-x18 -fsanitize=shadow-call-stack -funwind-tables %{protect} -o - \
 // RUN:   | FileCheck %s --check-prefix=ANDROID %}
 // RUN: %if x86-registered-target %{ %{compile} --target=x86_64-linux-gnu -msahf %{protect} \
 // RUN:   -o - | FileCheck %s --check-prefix=X86 %}
 
+// RUN: %if aarch64-registered-target %{ %{a64} -ffixed-x21 -o - \
+// RUN:   | FileCheck %s --check-prefix=A64-CONTROL %}
+// RUN: %if aarch64-registered-target %{ not %{a64} %{protect} -ffixed-x21 \
+// RUN:   -o %t.s 2>&1 | FileCheck %s --check-prefix=A64-RESERVED %}
+// RUN: %if aarch64-registered-target %{ %{a64} %{protect} -ffixed-x21 \
+// RUN:   -DNO_THROW -o - | FileCheck %s --check-prefix=A64-RETURN %}
+
 extern "C" void record_cleanup() noexcept;
+#ifdef NO_THROW
+extern "C" void may_throw() noexcept;
+#else
 extern "C" void may_throw();
+#endif
 
 struct Guard {
   ~Guard() { record_cleanup(); }
@@ -39,10 +50,30 @@ unsigned outgoing(unsigned value) {
 // ARM-ERROR: error: ARM stack clearing does not support
 // A64-CONTROL: bl record_cleanup
 // A64-CONTROL: bl _Unwind_Resume
-// A64-ERROR: error: AArch64 stack clearing does not support
+// A64-RESERVED: error: AArch64 stack clearing does not support
+// A64-RETURN-LABEL: outgoing:
+// A64-RETURN: stp xzr, xzr,
+// A64-RETURN: msr NZCV, xzr
+// A64-RETURN: ret
+// A64-RETURN-NOT: .Lzeroize_resume_thunk
 
 // Start past the ordinary return so that an earlier clear cannot satisfy
 // the checks for the destructor's outgoing cleanup.
+// A64-LABEL: outgoing:
+// A64: ret
+// A64: bl record_cleanup
+// A64: ldr x30,
+// A64: stp xzr, xzr,
+// A64: adrp x1, .Lzeroize_resume_[[CONT:[0-9]+]]
+// A64-NEXT: add x1, x1, :lo12:.Lzeroize_resume_[[CONT]]
+// A64: msr NZCV, xzr
+// A64-NEXT: b .Lzeroize_resume_thunk[[THUNK:[0-9]+]]
+// A64: .Lzeroize_resume_[[CONT]]:
+// A64: .Lzeroize_resume_thunk[[THUNK]]:
+// A64: sub sp, sp, #32
+// A64: stp x30, x21, [sp]
+// A64: mov x21, sp
+// A64: bl _Unwind_Resume
 // ANDROID-LABEL: outgoing:
 // ANDROID: str x30, [x18], #8
 // ANDROID: ret

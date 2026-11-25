@@ -33,11 +33,13 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/COFF.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/FaultMaps.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
@@ -108,6 +110,12 @@ class AArch64AsmPrinter : public AsmPrinter {
   MapVector<MCSection *, std::vector<std::pair<MCSymbol *, MCSymbol *>>>
       SectionToImportedFunctionCalls;
   unsigned PAuthIFuncNextUniqueID = 1;
+  MCSymbol *ZeroizeResumeContinuation = nullptr;
+  std::map<uint64_t, MCSymbol *> ZeroizeResumeThunks;
+
+  void emitZeroizeResume(const MachineInstr &MI);
+  void emitZeroizeContinuation();
+  void emitZeroizeResumeThunks();
 
 public:
   static char ID;
@@ -304,6 +312,7 @@ public:
   }
 
   bool runOnMachineFunction(MachineFunction &MF) override {
+    ZeroizeResumeContinuation = nullptr;
     const Function &F = MF.getFunction();
     if ((F.hasFnAttribute("zeroize-flags") ||
          F.hasFnAttribute("zero-call-used-regs")) &&
@@ -1046,6 +1055,7 @@ static void emitAuthenticatedPointer(MCStreamer &OutStreamer,
 
 void AArch64AsmPrinter::emitEndOfAsmFile(Module &M) {
   emitHwasanMemaccessSymbols(M);
+  emitZeroizeResumeThunks();
 
   const Triple &TT = TM.getTargetTriple();
   if (TT.isOSBinFormatMachO()) {
@@ -1163,8 +1173,107 @@ void AArch64AsmPrinter::emitLOHs() {
 }
 
 void AArch64AsmPrinter::emitFunctionBodyEnd() {
+  emitZeroizeContinuation();
   if (!AArch64FI->getLOHRelated().empty())
     emitLOHs();
+}
+
+void AArch64AsmPrinter::emitZeroizeResume(const MachineInstr &MI) {
+  uint64_t Size = MF->getFrameInfo().getStackSize();
+  MCSymbol *&Thunk = ZeroizeResumeThunks[Size];
+  if (!Thunk)
+    Thunk = OutContext.createTempSymbol("zeroize_resume_thunk");
+  ZeroizeResumeContinuation = getAArch64ZeroizeContinuation(*MF);
+  assert(hasAArch64ZeroizeCarrierInterface(MI) &&
+         "missing cleanup carrier interface");
+  // PEI has restored the caller context, erased the original allocation and
+  // materialized the constant continuation. A call would overwrite its LR.
+  EmitToStreamer(MCInstBuilder(AArch64::B)
+                     .addExpr(MCSymbolRefExpr::create(Thunk, OutContext)));
+}
+
+void AArch64AsmPrinter::emitZeroizeContinuation() {
+  if (!ZeroizeResumeContinuation)
+    return;
+  const auto &TRI = *STI->getRegisterInfo();
+  OutStreamer->emitCFIDefCfa(31, MF->getFrameInfo().getStackSize());
+  for (const CalleeSavedInfo &CSI : MF->getFrameInfo().getCalleeSavedInfo())
+    OutStreamer->emitCFISameValue(TRI.getDwarfRegNum(CSI.getReg(), true));
+  // Only this unreachable row interprets X21 as the initialized helper record.
+  static const char Rules[] = {
+      dwarf::DW_CFA_val_expression,           30, 3,
+      static_cast<char>(dwarf::DW_OP_breg21), 0,  dwarf::DW_OP_deref,
+      dwarf::DW_CFA_val_expression,           21, 3,
+      static_cast<char>(dwarf::DW_OP_breg21), 8,  dwarf::DW_OP_deref};
+  OutStreamer->emitCFIEscape(StringRef(Rules, sizeof(Rules)));
+  // Return-address lookup uses PC-1. The preceding instruction must therefore
+  // already belong to this row, even though neither instruction executes.
+  EmitToStreamer(MCInstBuilder(AArch64::HINT).addImm(0));
+  OutStreamer->emitLabel(ZeroizeResumeContinuation);
+  EmitToStreamer(MCInstBuilder(AArch64::BRK).addImm(0));
+}
+
+void AArch64AsmPrinter::emitZeroizeResumeThunks() {
+  if (ZeroizeResumeThunks.empty())
+    return;
+  auto ThunkSTI = std::make_unique<AArch64Subtarget>(
+      TM.getTargetTriple(), TM.getTargetCPU(), TM.getTargetCPU(),
+      TM.getTargetFeatureString(), TM, true);
+  STI = ThunkSTI.get();
+  OutStreamer->switchSection(getObjFileLowering().getTextSection());
+  const MCExpr *Resume = MCSymbolRefExpr::create(
+      OutContext.getOrCreateSymbol("_Unwind_Resume"), OutContext);
+  for (const auto &[Size, Thunk] : ZeroizeResumeThunks) {
+    emitAlignment(Align(4));
+    OutStreamer->emitSymbolAttribute(Thunk, MCSA_ELF_TypeFunction);
+    OutStreamer->emitLabel(Thunk);
+    OutStreamer->emitCFIStartProc(false);
+    // Until the carrier is initialized, unwind directly to the original
+    // caller. This initial row depends on the protected function's extent.
+    OutStreamer->emitCFIDefCfaOffset(Size);
+    EmitToStreamer(MCInstBuilder(AArch64::SUBXri)
+                       .addReg(AArch64::SP)
+                       .addReg(AArch64::SP)
+                       .addImm(32)
+                       .addImm(0));
+    OutStreamer->emitCFIDefCfaOffset(Size + 32);
+    EmitToStreamer(MCInstBuilder(AArch64::STPXi)
+                       .addReg(AArch64::LR)
+                       .addReg(AArch64::X21)
+                       .addReg(AArch64::SP)
+                       .addImm(0));
+    OutStreamer->emitCFIOffset(30, -int64_t(Size + 32));
+    OutStreamer->emitCFIOffset(21, -int64_t(Size + 24));
+    EmitToStreamer(MCInstBuilder(AArch64::STPXi)
+                       .addReg(AArch64::XZR)
+                       .addReg(AArch64::X1)
+                       .addReg(AArch64::SP)
+                       .addImm(2));
+    EmitToStreamer(MCInstBuilder(AArch64::ADDXri)
+                       .addReg(AArch64::X21)
+                       .addReg(AArch64::SP)
+                       .addImm(0)
+                       .addImm(0));
+    // Expose the original function at its original SP for forced-unwind stops.
+    OutStreamer->emitCFIDefCfaOffset(32);
+    OutStreamer->emitCFIOffset(30, -8);
+    OutStreamer->emitCFISameValue(21);
+    EmitToStreamer(MCInstBuilder(AArch64::ORRXrs)
+                       .addReg(AArch64::X1)
+                       .addReg(AArch64::XZR)
+                       .addReg(AArch64::XZR)
+                       .addImm(0));
+    EmitToStreamer(MCInstBuilder(AArch64::BL).addExpr(Resume));
+    EmitToStreamer(MCInstBuilder(AArch64::BRK).addImm(0));
+    OutStreamer->emitCFIEndProc();
+    MCSymbol *End = OutContext.createTempSymbol();
+    OutStreamer->emitLabel(End);
+    OutStreamer->emitELFSize(
+        Thunk, MCBinaryExpr::createSub(
+                   MCSymbolRefExpr::create(End, OutContext),
+                   MCSymbolRefExpr::create(Thunk, OutContext), OutContext));
+  }
+  STI = nullptr;
 }
 
 /// GetCPISymbol - Return the symbol for the specified constant pool entry.
@@ -3278,6 +3387,12 @@ void AArch64AsmPrinter::emitInstruction(const MachineInstr *MI) {
     assert(STI->getInstrInfo()->getInstSizeInBytes(*MI) >= InstsEmitted * 4);
   });
 #endif
+
+  if (isAArch64ZeroizeCarrierResume(*MI) &&
+      hasAArch64ZeroizeCarrierInterface(*MI)) {
+    emitZeroizeResume(*MI);
+    return;
+  }
 
   // Do any auto-generated pseudo lowerings.
   if (MCInst OutInst; lowerPseudoInstExpansion(MI, OutInst)) {

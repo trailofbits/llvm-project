@@ -26,6 +26,7 @@
 #include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
@@ -81,14 +82,12 @@ static bool hasAndroidShadowCallStack(const MachineFunction &MF) {
          STI.isXRegisterReserved(18);
 }
 
-bool llvm::isAArch64ZeroizeShadowResume(const MachineInstr &MI) {
+static bool isTerminalCXXResume(const MachineInstr &MI) {
   if (MI.getOpcode() != AArch64::BL)
     return false;
   const auto &MF = *MI.getMF();
   const auto &F = MF.getFunction();
-  const auto &AFI = *MF.getInfo<AArch64FunctionInfo>();
-  if (!hasAndroidShadowCallStack(MF) || !AFI.needsDwarfUnwindInfo(MF) ||
-      !AFI.needsShadowCallStackPrologueEpilogue(MF) || !F.hasPersonalityFn() ||
+  if (!F.hasPersonalityFn() ||
       classifyEHPersonality(F.getPersonalityFn()) != EHPersonality::GNU_CXX)
     return false;
 
@@ -99,8 +98,6 @@ bool llvm::isAArch64ZeroizeShadowResume(const MachineInstr &MI) {
   bool HasMask = false;
   for (const MachineOperand &MO : MI.operands()) {
     if (MO.isRegMask()) {
-      if (MO.clobbersPhysReg(AArch64::X18))
-        return false;
       HasMask = true;
     } else if (MO.isReg() && MO.isUse() && MO.readsReg() &&
                MO.getReg() == AArch64::X0) {
@@ -119,6 +116,53 @@ bool llvm::isAArch64ZeroizeShadowResume(const MachineInstr &MI) {
   return llvm::all_of(
       make_range(std::next(MI.getIterator()), MI.getParent()->instr_end()),
       [](const MachineInstr &I) { return I.isMetaInstruction(); });
+}
+
+bool llvm::isAArch64ZeroizeShadowResume(const MachineInstr &MI) {
+  const MachineFunction &MF = *MI.getMF();
+  const auto &AFI = *MF.getInfo<AArch64FunctionInfo>();
+  return isTerminalCXXResume(MI) && hasAndroidShadowCallStack(MF) &&
+         AFI.needsDwarfUnwindInfo(MF) &&
+         AFI.needsShadowCallStackPrologueEpilogue(MF) &&
+         llvm::none_of(MI.operands(), [](const MachineOperand &MO) {
+           return MO.isRegMask() && MO.clobbersPhysReg(AArch64::X18);
+         });
+}
+
+MCSymbol *llvm::getAArch64ZeroizeContinuation(const MachineFunction &MF) {
+  return MF.getContext().getOrCreateSymbol(Twine(".Lzeroize_resume_") +
+                                           Twine(MF.getFunctionNumber()));
+}
+
+bool llvm::hasAArch64ZeroizeCarrierInterface(const MachineInstr &MI) {
+  const MachineFunction &MF = *MI.getMF();
+  const auto *TRI = MF.getSubtarget().getRegisterInfo();
+  for (MCRegister Reg : {AArch64::X1, AArch64::X21, AArch64::LR})
+    if (!MI.readsRegister(Reg, TRI))
+      return false;
+  const MCSymbol *Continuation = getAArch64ZeroizeContinuation(MF);
+  SmallVector<const MachineInstr *, 2> Definitions;
+  for (auto I = MI.getIterator(); I != MI.getParent()->begin();) {
+    --I;
+    if (I->modifiesRegister(AArch64::X1, TRI)) {
+      Definitions.push_back(&*I);
+      if (Definitions.size() == 2)
+        break;
+    }
+  }
+  if (Definitions.size() != 2)
+    return false;
+  const MachineInstr &Add = *Definitions[0], &Page = *Definitions[1];
+  return Add.getOpcode() == AArch64::ADDXri &&
+         Add.getOperand(1).getReg() == AArch64::X1 &&
+         Add.getOperand(2).isMCSymbol() &&
+         Add.getOperand(2).getMCSymbol() == Continuation &&
+         Add.getOperand(2).getTargetFlags() ==
+             (AArch64II::MO_PAGEOFF | AArch64II::MO_NC) &&
+         Add.getOperand(3).getImm() == 0 && Page.getOpcode() == AArch64::ADRP &&
+         Page.getOperand(1).isMCSymbol() &&
+         Page.getOperand(1).getMCSymbol() == Continuation &&
+         Page.getOperand(1).getTargetFlags() == AArch64II::MO_PAGE;
 }
 
 static bool hasSupportedZeroizeABI(const MachineFunction &MF) {
@@ -161,7 +205,8 @@ static bool isUnsupportedZeroizeExit(const MachineInstr &MI) {
   if (MI.isEHScopeReturn())
     return true;
   if (isAArch64ZeroizeUnwindResume(MI))
-    return !isAArch64ZeroizeShadowResume(MI);
+    return !isAArch64ZeroizeShadowResume(MI) &&
+           !isAArch64ZeroizeCarrierResume(MI);
   return MI.isReturn() && (MI.getOpcode() != AArch64::RET_ReallyLR ||
                            !MI.getParent()->succ_empty());
 }
@@ -273,6 +318,27 @@ static bool hasUntrackedZeroizeStorage(const MachineFunction &MF) {
           MI.getOpcode() == TargetOpcode::PATCHABLE_TYPED_EVENT_CALL)
         return true;
   return false;
+}
+
+static bool hasCarrierResumeProtocol(const MachineFunction &MF) {
+  const Function &F = MF.getFunction();
+  const auto &STI = MF.getSubtarget<AArch64Subtarget>();
+  const auto &AFI = *MF.getInfo<AArch64FunctionInfo>();
+  return F.getCallingConv() == CallingConv::C && !STI.isXRegisterReserved(1) &&
+         !STI.isXRegisterReserved(21) && !STI.hasSVE() && !STI.hasSME() &&
+         !AFI.shouldSignReturnAddress(MF) &&
+         !F.hasFnAttribute(Attribute::ShadowCallStack) && !MF.hasBBSections() &&
+         AFI.needsDwarfUnwindInfo(MF);
+}
+
+bool llvm::isAArch64ZeroizeCarrierResume(const MachineInstr &MI) {
+  const MachineFunction &MF = *MI.getMF();
+  Align StackAlign = MF.getSubtarget().getFrameLowering()->getStackAlign();
+  return isTerminalCXXResume(MI) && MF.getFunction().hasZeroizeStack() &&
+         hasSupportedZeroizeABI(MF) && hasOrdinaryZeroizeStorage(MF) &&
+         hasFixedZeroizeLayout(MF, StackAlign) &&
+         hasOrdinaryZeroizeFrameProtocol(MF) &&
+         !hasUntrackedZeroizeStorage(MF) && hasCarrierResumeProtocol(MF);
 }
 
 bool AArch64FrameLowering::supportsZeroizeStack(
@@ -531,6 +597,20 @@ class AArch64StackClearEmitter {
       if (EmitUnwindCFI)
         CFIInstBuilder(Tail, InsertPt, MachineInstr::FrameDestroy)
             .buildDefCFA(AArch64::SP, 0);
+    }
+    if (isAArch64ZeroizeCarrierResume(*InsertPt)) {
+      // This constant is independent of the selected cleanup and protected
+      // data. Keep it and the restored caller context live through clearing.
+      MCSymbol *Continuation = getAArch64ZeroizeContinuation(MF);
+      BuildMI(Tail, InsertPt, DL, TII.get(AArch64::ADRP), AArch64::X1)
+          .addSym(Continuation, AArch64II::MO_PAGE);
+      BuildMI(Tail, InsertPt, DL, TII.get(AArch64::ADDXri), AArch64::X1)
+          .addReg(AArch64::X1)
+          .addSym(Continuation, AArch64II::MO_PAGEOFF | AArch64II::MO_NC)
+          .addImm(0);
+      for (MCRegister Reg : {AArch64::X1, AArch64::X21, AArch64::LR})
+        if (!InsertPt->readsRegister(Reg, &TRI))
+          InsertPt->addOperand(MF, MachineOperand::CreateReg(Reg, false, true));
     }
     if (Loop) {
       MachineBasicBlock *Body = Tail.getSinglePredecessor();

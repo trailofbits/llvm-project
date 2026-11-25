@@ -15,6 +15,7 @@ class LiveRegUnits;
 class MachineFunction;
 class MachineInstr;
 class MachineOperand;
+class MCSymbol;
 
 /// Whether the fixed-width ELF register contract can be checked in this
 /// function.
@@ -25,6 +26,15 @@ bool hasAArch64ZeroizeUpperLaneABI(const MachineFunction &MF);
 
 /// Whether this is the supported Android SCS transfer to _Unwind_Resume.
 bool isAArch64ZeroizeShadowResume(const MachineInstr &MI);
+
+/// Experimental fixed-frame ELF cleanup transfer using a local carrier thunk.
+bool isAArch64ZeroizeCarrierResume(const MachineInstr &MI);
+
+/// Whether PEI established the constant continuation and retained caller state.
+bool hasAArch64ZeroizeCarrierInterface(const MachineInstr &MI);
+
+/// One public-control continuation per protected function, shared by its exits.
+MCSymbol *getAArch64ZeroizeContinuation(const MachineFunction &MF);
 
 /// Whether this calls one of the recognized C++ unwind-transfer entry points.
 bool isAArch64ZeroizeUnwindResume(const MachineInstr &MI);
