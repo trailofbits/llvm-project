@@ -228,6 +228,7 @@ class AArch64StackClearEmitter {
   const AArch64RegisterInfo &TRI;
   DebugLoc DL;
   StackOffset Size;
+  const bool EmitAsyncCFI;
   MCRegister Ptr;
   MCRegister End;
 
@@ -336,11 +337,15 @@ class AArch64StackClearEmitter {
   }
 
   void restore() {
-    unsigned CFI =
-        MF.addFrameInst(createDefCFA(TRI, AArch64::SP, AArch64::SP, Size));
-    BuildMI(MBB, InsertPt, DL, TII.get(TargetOpcode::CFI_INSTRUCTION))
-        .addCFIIndex(CFI)
-        .setMIFlag(MachineInstr::FrameDestroy);
+    // As in the ordinary epilogue, keep synchronous unwind rows valid for
+    // calls laid out after an earlier return.
+    if (EmitAsyncCFI) {
+      unsigned CFI =
+          MF.addFrameInst(createDefCFA(TRI, AArch64::SP, AArch64::SP, Size));
+      BuildMI(MBB, InsertPt, DL, TII.get(TargetOpcode::CFI_INSTRUCTION))
+          .addCFIIndex(CFI)
+          .setMIFlag(MachineInstr::FrameDestroy);
+    }
     for (const CalleeSavedInfo &CSI : MFI.getCalleeSavedInfo()) {
       int FI = CSI.getFrameIdx();
       StackOffset Offset = Size + TFI.getFrameIndexReferenceFromSP(MF, FI);
@@ -357,7 +362,8 @@ class AArch64StackClearEmitter {
               MachinePointerInfo::getFixedStack(MF, FI),
               MachineMemOperand::MOLoad, LoadSize, MFI.getObjectAlign(FI)));
       MCRegister Reg = CSI.getReg();
-      if (!MFI.hasScalableStackID(FI) || TRI.regNeedsCFI(Reg, Reg))
+      if (EmitAsyncCFI &&
+          (!MFI.hasScalableStackID(FI) || TRI.regNeedsCFI(Reg, Reg)))
         CFIInstBuilder(MBB, InsertPt, MachineInstr::FrameDestroy)
             .buildRestore(Reg);
     }
@@ -403,8 +409,9 @@ class AArch64StackClearEmitter {
   void finish(MachineBasicBlock &Tail, bool Loop) {
     emitFrameOffset(Tail, InsertPt, DL, AArch64::SP, Ptr, {}, &TII,
                     MachineInstr::FrameDestroy);
-    CFIInstBuilder(Tail, InsertPt, MachineInstr::FrameDestroy)
-        .buildDefCFA(AArch64::SP, 0);
+    if (EmitAsyncCFI)
+      CFIInstBuilder(Tail, InsertPt, MachineInstr::FrameDestroy)
+          .buildDefCFA(AArch64::SP, 0);
     if (Loop) {
       MachineBasicBlock *Body = Tail.getSinglePredecessor();
       assert(Body && "Expected a single clearing-loop predecessor");
@@ -422,7 +429,9 @@ public:
         TRI(*MF.getSubtarget<AArch64Subtarget>().getRegisterInfo()),
         DL(InsertPt->getDebugLoc()),
         Size(StackOffset::getFixed(MFI.getStackSize()) +
-             TFI.getSVEStackSize(MF)) {}
+             TFI.getSVEStackSize(MF)),
+        EmitAsyncCFI(
+            MF.getInfo<AArch64FunctionInfo>()->needsAsyncDwarfUnwindInfo(MF)) {}
 
   void emit(BitVector &ScratchRegs) {
     if (!Size || !validate())
