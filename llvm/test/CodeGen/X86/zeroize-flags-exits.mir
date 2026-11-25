@@ -4,6 +4,11 @@
 # RUN: llc -mtriple=x86_64-unknown-linux-gnu -mattr=+sahf -x mir \
 # RUN:   -run-pass=postmisched,dead-mi-elimination -verify-machineinstrs %t -o - \
 # RUN:   | FileCheck %s
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu -mattr=-sahf \
+# RUN:   -run-pass=prolog-epilog -verify-machineinstrs %s -o %t.base
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu -mattr=-sahf -x mir \
+# RUN:   -run-pass=postmisched,dead-mi-elimination -verify-machineinstrs %t.base -o - \
+# RUN:   | FileCheck %s --check-prefix=BASE
 
 # Separate exits preserve different return registers and retain the final flags.
 # CHECK-LABEL: name: different_liveouts
@@ -17,6 +22,15 @@
 # CHECK: frame-destroy TEST32rr $eax, $eax, implicit-def $eflags
 # CHECK: frame-destroy SAHF implicit-def $eflags, implicit $ah, implicit $eflags
 # CHECK: RET64 0, implicit $rdx, implicit $eax, implicit $eflags
+# BASE-LABEL: name: different_liveouts
+# BASE: $r11d = XOR32rr
+# BASE-NEXT: $r11 = frame-destroy ADD64ri8 $r11, 1, implicit-def $eflags
+# BASE-NEXT: $r11 = frame-destroy MOV64ri32 0
+# BASE-NEXT: RET64 0, implicit $rax, {{.*}}implicit $eflags
+# BASE: $eax = XOR32rr
+# BASE-NEXT: $rax = frame-destroy ADD64ri8 $rax, 1, implicit-def $eflags
+# BASE-NEXT: $rax = frame-destroy MOV64ri32 0
+# BASE-NEXT: RET64 0, implicit $rdx, {{.*}}implicit $eflags
 --- |
   define void @different_liveouts() "zeroize-flags" { ret void }
 ...
