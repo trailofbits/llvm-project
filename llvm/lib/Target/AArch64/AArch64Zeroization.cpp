@@ -319,6 +319,7 @@ class AArch64StackClearEmitter {
   MCRegister End;
   bool ShadowCallStack;
   bool UnwindResume;
+  const bool EmitUnwindCFI;
 
   bool fail(StringRef Message) const {
     const Function &F = MF.getFunction();
@@ -436,16 +437,22 @@ class AArch64StackClearEmitter {
       return;
     }
     TFI.emitShadowCallStackPop(MBB, InsertPt, DL);
-    CFI.buildRestore(AArch64::X18);
-    CFI.buildRestore(AArch64::LR);
+    if (EmitUnwindCFI) {
+      CFI.buildRestore(AArch64::X18);
+      CFI.buildRestore(AArch64::LR);
+    }
   }
 
   void restore() {
-    unsigned CFI =
-        MF.addFrameInst(createDefCFA(TRI, AArch64::SP, AArch64::SP, Size));
-    BuildMI(MBB, InsertPt, DL, TII.get(TargetOpcode::CFI_INSTRUCTION))
-        .addCFIIndex(CFI)
-        .setMIFlag(MachineInstr::FrameDestroy);
+    // An explicit unwind-resume call needs the updated frame rules even for
+    // synchronous tables. Ordinary epilogues follow the async CFI policy.
+    if (EmitUnwindCFI) {
+      unsigned CFI =
+          MF.addFrameInst(createDefCFA(TRI, AArch64::SP, AArch64::SP, Size));
+      BuildMI(MBB, InsertPt, DL, TII.get(TargetOpcode::CFI_INSTRUCTION))
+          .addCFIIndex(CFI)
+          .setMIFlag(MachineInstr::FrameDestroy);
+    }
     for (const CalleeSavedInfo &CSI : MFI.getCalleeSavedInfo()) {
       if (CSI.getReg() == AArch64::LR && ShadowCallStack) {
         restoreShadowReturnAddress();
@@ -467,11 +474,12 @@ class AArch64StackClearEmitter {
               MachineMemOperand::MOLoad, LoadSize, MFI.getObjectAlign(FI)));
       MCRegister Reg = CSI.getReg();
       // The unwinder consumes the restored caller context through the CFI
-      // rule, even when a clearing loop separates the load from the call.
+      // rule at the resume call.
       if (UnwindResume)
         InsertPt->addOperand(MF, MachineOperand::CreateReg(Reg, /*isDef=*/false,
                                                            /*isImp=*/true));
-      if (!MFI.hasScalableStackID(FI) || TRI.regNeedsCFI(Reg, Reg))
+      if (EmitUnwindCFI &&
+          (!MFI.hasScalableStackID(FI) || TRI.regNeedsCFI(Reg, Reg)))
         CFIInstBuilder(MBB, InsertPt, MachineInstr::FrameDestroy)
             .buildRestore(Reg);
     }
@@ -518,8 +526,9 @@ class AArch64StackClearEmitter {
     if (!UnwindResume) {
       emitFrameOffset(Tail, InsertPt, DL, AArch64::SP, Ptr, {}, &TII,
                       MachineInstr::FrameDestroy);
-      CFIInstBuilder(Tail, InsertPt, MachineInstr::FrameDestroy)
-          .buildDefCFA(AArch64::SP, 0);
+      if (EmitUnwindCFI)
+        CFIInstBuilder(Tail, InsertPt, MachineInstr::FrameDestroy)
+            .buildDefCFA(AArch64::SP, 0);
     }
     if (Loop) {
       MachineBasicBlock *Body = Tail.getSinglePredecessor();
@@ -541,7 +550,10 @@ public:
              TFI.getSVEStackSize(MF)),
         ShadowCallStack(MF.getInfo<AArch64FunctionInfo>()
                             ->needsShadowCallStackPrologueEpilogue(MF)),
-        UnwindResume(isAArch64ZeroizeUnwindResume(*InsertPt)) {}
+        UnwindResume(isAArch64ZeroizeUnwindResume(*InsertPt)),
+        EmitUnwindCFI(
+            UnwindResume ||
+            MF.getInfo<AArch64FunctionInfo>()->needsAsyncDwarfUnwindInfo(MF)) {}
 
   void emit(BitVector &ScratchRegs) {
     if (!Size || !validate())
