@@ -8840,20 +8840,20 @@ condition-state clearing.
 
 **Current implementation limits.** ARM32, AArch64 ELF, and X86-64 LP64 ELF support
 stack and condition-state clearing for supported frames and ordinary return
-protocols. AArch64 also covers scalable SVE spill storage. X86 condition-state
-clearing requires SAHF support. Ordinary returns after internal catch handlers
-are covered under those same frame limits. On X86-64 this requires GNU C++ DWARF
-handling and the C calling convention.
+protocols. AArch64 also covers scalable SVE spill storage. X86 support includes
+baseline x86-64 CPUs. Ordinary returns after internal catch handlers are covered
+under those same frame limits. On X86-64 this requires GNU C++ DWARF handling
+and the C calling convention.
 
 An exception that leaves after running a local destructor has a separate exit.
 Classic Clang supports these explicit GNU C++ DWARF cleanup paths with the C
 calling convention:
 
-* On X86-64 LP64 ELF, the compiler restores saved general-purpose registers,
-  including a dedicated frame pointer, and switches to SP-based unwind rules
-  before clearing the fully allocated fixed frame. The frame stays allocated at
-  the call to ``_Unwind_Resume``. A cleanup can also catch a matching C++
-  exception and let another exception propagate to the caller.
+* On X86-64 LP64 ELF, the compiler keeps callee-save slots valid until it
+  restores the registers and switches to SP-based unwind rules. It then erases
+  those slots and keeps the fixed frame allocated at ``_Unwind_Resume``.
+  A cleanup can also catch a matching C++ exception and let another exception
+  propagate to the caller.
 * On AArch64 ELF, an ordinary fixed frame can use a compiler-local cleanup
   helper without SVE, SME, return-address signing, or a shadow call stack.
   The compiler restores saved caller registers and clears the original frame.
