@@ -1,0 +1,96 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=aarch64-linux-gnu -mattr=+sme2 -run-pass=prolog-epilog \
+# RUN:   -verify-machineinstrs %t/clear.mir -o - | FileCheck %s
+# RUN: not llc -mtriple=aarch64-linux-gnu -mattr=+sme2 -run-pass=prolog-epilog \
+# RUN:   -verify-machineinstrs %t/no-gpr.mir -o /dev/null 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOGPR
+# RUN: not llc -mtriple=aarch64-linux-gnu -mattr=+sme2 -run-pass=prolog-epilog \
+# RUN:   -verify-machineinstrs %t/live-flags.mir -o /dev/null 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=FLAGS
+# RUN: not llc -mtriple=aarch64-linux-gnu -mattr=+sme2 -run-pass=prolog-epilog \
+# RUN:   -verify-machineinstrs %t/live-upper.mir -o /dev/null 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=UPPER
+
+# A locally streaming function with a streaming-compatible interface returns in
+# streaming mode when its caller was streaming. Without SVE the predicate clear
+# is only executable in that mode, so the exit tests PSTATE.SM with a register
+# that is cleared afterwards.
+
+#--- clear.mir
+--- |
+  define void @used_counter() "zero-call-used-regs"="used" "aarch64_pstate_sm_compatible" "aarch64_pstate_sm_body" { ret void }
+...
+---
+name: used_counter
+tracksRegLiveness: true
+body: |
+  bb.0:
+    ; CHECK-LABEL: name: used_counter
+    ; CHECK: bb.0:
+    ; CHECK: dead $x9 = MOVZXi 42, 0
+    ; CHECK-NEXT: dead $pn8 = PTRUE_C_B implicit $vg
+    ; CHECK: $x9 = MRS 55826, implicit-def dead $nzcv, implicit $vg
+    ; CHECK-NEXT: TBZW $w9, 0, %bb.2
+    ; CHECK: bb.1:
+    ; CHECK: $p8 = PFALSE implicit $vg
+    ; CHECK-NEXT: FAKE_USE implicit $p8
+    ; CHECK: bb.2:
+    ; CHECK: $x9 = MOVZXi 0, 0
+    ; CHECK-NEXT: RET_ReallyLR implicit $x9
+    dead $x9 = MOVZXi 42, 0
+    dead $pn8 = PTRUE_C_B implicit $vg
+    RET_ReallyLR
+...
+
+#--- no-gpr.mir
+--- |
+  define void @no_gpr() "zero-call-used-regs"="used" "aarch64_pstate_sm_compatible" "aarch64_pstate_sm_body" { ret void }
+...
+---
+name: no_gpr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    dead $pn8 = PTRUE_C_B implicit $vg
+    RET_ReallyLR
+...
+# NOGPR: error: {{.*}} "zero-call-used-regs" cannot clear predicate registers
+# NOGPR-SAME: at an exit of unknown streaming mode without SVE
+
+# The mode test is modelled as writing the flags, so it is refused where they
+# are needed. Ordinary lowering does not keep NZCV live at an exit.
+
+#--- live-flags.mir
+--- |
+  define void @live_flags() "zero-call-used-regs"="used" "aarch64_pstate_sm_compatible" "aarch64_pstate_sm_body" { ret void }
+...
+---
+name: live_flags
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $nzcv
+    dead $x9 = MOVZXi 42, 0
+    dead $pn8 = PTRUE_C_B implicit $vg
+    RET_ReallyLR implicit $nzcv
+...
+# FLAGS: error: {{.*}} "zero-call-used-regs" cannot clear predicate registers
+# FLAGS-SAME: the streaming mode test would overwrite flags needed at the exit
+
+# In streaming mode a scalar clear zeroes the whole Z register, including a
+# live upper part that the clearing instruction does not name.
+
+#--- live-upper.mir
+--- |
+  define void @live_upper() "zero-call-used-regs"="used" "aarch64_pstate_sm_compatible" "aarch64_pstate_sm_body" { ret void }
+...
+---
+name: live_upper
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $z0 = DUP_ZI_D 1, 0, implicit $vg
+    RET_ReallyLR implicit $q0_hi
+...
+# UPPER: error: {{.*}} "zero-call-used-regs" cannot clear register 'Z0'
+# UPPER-SAME: without overwriting a value needed at the exit

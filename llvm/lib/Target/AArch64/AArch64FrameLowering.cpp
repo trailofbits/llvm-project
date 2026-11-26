@@ -816,7 +816,11 @@ static MCRegister getRegisterOrZero(MCRegister Reg, bool HasSVE) {
   CASE(28);
 #undef CASE
 
-  // Some calling conventions leave W29 call-used even though FP is fixed.
+  // X29 is only ever requested through W29. FP is in the FixedRegisters
+  // category, so the generic selection never offers it, while W29 is an
+  // ordinary GPR32 that is allocatable and call-used when the calling
+  // convention does not preserve X29 and the function has no frame pointer
+  // (e.g. GHC). Map it to the full register; FP itself stays unmapped.
   case AArch64::W29:
     return AArch64::FP;
 
@@ -915,14 +919,59 @@ static MCRegister getPredicateToZero(MCRegister Reg,
   return 0;
 }
 
-static void collectZeroCallUsedRegs(const MachineFunction &MF,
+static SMEAttrs getExitCalleeSMEAttrs(const MachineInstr &Call,
+                                      const AArch64Subtarget &STI) {
+  const auto &RTLCI = STI.getTargetLowering()->getRuntimeLibcallsInfo();
+  for (const MachineOperand &MO : Call.operands()) {
+    if (MO.isGlobal()) {
+      if (const auto *Callee = dyn_cast<Function>(MO.getGlobal()))
+        return SMEAttrs(*Callee, &RTLCI);
+      break;
+    }
+    if (MO.isSymbol())
+      return SMEAttrs(MO.getSymbolName(), RTLCI);
+  }
+  // If the call's interface is unavailable, test the mode at runtime.
+  return SMEAttrs(SMEAttrs::SM_Compatible);
+}
+
+/// Sort \p RegsToZero into the full registers to clear at the exit \p MBBI.
+/// Returns true if the predicates in \p PredicatesToZero can only be cleared
+/// when the exit is reached in streaming mode, which has to be tested there.
+static bool collectZeroCallUsedRegs(const MachineBasicBlock &MBB,
+                                    MachineBasicBlock::const_iterator MBBI,
                                     const BitVector &RegsToZero,
                                     BitVector &GPRsToZero,
                                     BitVector &FPRsToZero,
                                     BitVector &PredicatesToZero) {
+  const MachineFunction &MF = *MBB.getParent();
   const AArch64Subtarget &STI = MF.getSubtarget<AArch64Subtarget>();
   const AArch64RegisterInfo &TRI = *STI.getRegisterInfo();
   bool HasSVE = STI.isSVEorStreamingSVEAvailable();
+  bool PredicatesOnlyIfStreaming = false;
+  if (!STI.hasSVE() && STI.hasSME()) {
+    SMEAttrs FnAttrs = MF.getInfo<AArch64FunctionInfo>()->getSMEFnAttrs();
+    if (MBBI != MBB.end() && MBBI->isCall() && !MBBI->isReturn()) {
+      // Unwind calls run in the callee's mode, which is non-streaming for
+      // the standard _Unwind_Resume.
+      SMEAttrs CalleeAttrs = getExitCalleeSMEAttrs(*MBBI, STI);
+      HasSVE = CalleeAttrs.hasStreamingInterface();
+      PredicatesOnlyIfStreaming = CalleeAttrs.hasStreamingCompatibleInterface();
+    } else if (MBBI != MBB.end() && !MBBI->isReturn()) {
+      // Any other exit, such as inline assembly that branches away, leaves
+      // from the body with no mode change in front of it. The subtarget
+      // describes the body, except that a streaming-compatible body without
+      // a locally streaming one runs in the caller's mode.
+      PredicatesOnlyIfStreaming = !FnAttrs.hasStreamingBody() &&
+                                  FnAttrs.hasStreamingCompatibleInterface();
+    } else if (FnAttrs.hasStreamingBody() ||
+               FnAttrs.hasStreamingCompatibleInterface()) {
+      // A normal return follows the function's interface. A compatible
+      // interface can return in either mode, regardless of the body.
+      HasSVE = FnAttrs.hasStreamingInterface();
+      PredicatesOnlyIfStreaming = FnAttrs.hasStreamingCompatibleInterface();
+    }
+  }
   // Without an FP unit (e.g. -mgeneral-regs-only) the FP/vector registers can't
   // hold a value and there is no instruction to clear them, so leave them out.
   bool HasFPR = STI.hasFPARMv8();
@@ -932,11 +981,12 @@ static void collectZeroCallUsedRegs(const MachineFunction &MF,
         GPRsToZero.set(FullReg);
       else if (HasFPR)
         FPRsToZero.set(FullReg);
-    } else if (HasSVE) {
+    } else if (HasSVE || PredicatesOnlyIfStreaming) {
       if (MCRegister PReg = getPredicateToZero(Reg, TRI))
         PredicatesToZero.set(PReg);
     }
   }
+  return PredicatesOnlyIfStreaming && PredicatesToZero.any();
 }
 
 static LiveRegUnits
@@ -980,6 +1030,69 @@ static bool validateZeroCallUsedRegsWidening(const BitVector &RegsToZero,
   return true;
 }
 
+/// Whether the flags at \p MBBI are read before they are next written.
+static bool isNZCVReadFrom(const MachineBasicBlock &MBB,
+                           MachineBasicBlock::const_iterator MBBI,
+                           const AArch64RegisterInfo &TRI) {
+  for (const MachineInstr &MI : make_range(MBBI, MBB.end())) {
+    if (MI.readsRegister(AArch64::NZCV, &TRI))
+      return true;
+    // A call does not preserve the flags.
+    if (MI.isCall() || MI.modifiesRegister(AArch64::NZCV, &TRI))
+      return false;
+  }
+  return any_of(MBB.successors(), [](const MachineBasicBlock *Succ) {
+    return Succ->isLiveIn(AArch64::NZCV);
+  });
+}
+
+/// Clear \p PredicatesToZero on the path where the function returns in
+/// streaming mode. PFALSE is not executable in non-streaming mode without SVE,
+/// so the exit tests PSTATE.SM and branches around the clears. The exit moves
+/// to a new block, which is returned; \p MBBI stays valid and points into it.
+/// \p Scratch receives SVCR and must be cleared by the caller afterwards.
+static MachineBasicBlock *
+emitStreamingOnlyPredicateClears(const BitVector &PredicatesToZero,
+                                 MCRegister Scratch, MachineBasicBlock &MBB,
+                                 MachineBasicBlock::iterator MBBI,
+                                 const DebugLoc &DL) {
+  MachineFunction &MF = *MBB.getParent();
+  const AArch64Subtarget &STI = MF.getSubtarget<AArch64Subtarget>();
+  const AArch64RegisterInfo &TRI = *STI.getRegisterInfo();
+  const AArch64InstrInfo &TII = *STI.getInstrInfo();
+
+  MachineBasicBlock *Clear = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
+  MachineBasicBlock *Tail = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
+  MF.insert(std::next(MBB.getIterator()), Clear);
+  MF.insert(std::next(Clear->getIterator()), Tail);
+  Tail->splice(Tail->end(), &MBB, MBBI, MBB.end());
+  Tail->transferSuccessorsAndUpdatePHIs(&MBB);
+  MBB.addSuccessor(Clear);
+  MBB.addSuccessor(Tail);
+  Clear->addSuccessor(Tail);
+
+  // Reading SVCR does not change the flags; MRS only models that it may.
+  BuildMI(MBB, MBB.end(), DL, TII.get(AArch64::MRS), Scratch)
+      .addImm(AArch64SysReg::SVCR)
+      .addReg(AArch64::VG, RegState::Implicit)
+      ->addRegisterDead(AArch64::NZCV, &TRI);
+  BuildMI(MBB, MBB.end(), DL, TII.get(AArch64::TBZW))
+      .addReg(TRI.getSubReg(Scratch, AArch64::sub_32))
+      .addImm(0)
+      .addMBB(Tail);
+
+  // The predicates are only written on this path, so the exit cannot name
+  // them. A FAKE_USE in the same block keeps the clears from looking dead.
+  for (MCRegister PReg : PredicatesToZero.set_bits())
+    BuildMI(*Clear, Clear->end(), DL, TII.get(AArch64::PFALSE), PReg);
+  MachineInstrBuilder FakeUse =
+      BuildMI(*Clear, Clear->end(), DL, TII.get(TargetOpcode::FAKE_USE));
+  for (MCRegister PReg : PredicatesToZero.set_bits())
+    FakeUse.addReg(PReg, RegState::Implicit);
+  MF.setHasFakeUses(true);
+  return Tail;
+}
+
 void AArch64FrameLowering::emitZeroCallUsedRegs(
     BitVector RegsToZero, MachineBasicBlock &MBB,
     MachineBasicBlock::iterator MBBI, RegScavenger *) const {
@@ -987,57 +1100,101 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
   if (MBBI != MBB.end())
     DL = MBBI->getDebugLoc();
 
-  const AArch64Subtarget &STI =
-      MBB.getParent()->getSubtarget<AArch64Subtarget>();
+  MachineFunction &MF = *MBB.getParent();
+  const AArch64Subtarget &STI = MF.getSubtarget<AArch64Subtarget>();
   const AArch64RegisterInfo &TRI = *STI.getRegisterInfo();
   const AArch64InstrInfo &TII = *STI.getInstrInfo();
   BitVector GPRsToZero(TRI.getNumRegs());
   BitVector FPRsToZero(TRI.getNumRegs());
   BitVector PredicatesToZero(TRI.getNumRegs());
-  collectZeroCallUsedRegs(*MBB.getParent(), RegsToZero, GPRsToZero, FPRsToZero,
-                          PredicatesToZero);
+  bool PredicatesOnlyIfStreaming = collectZeroCallUsedRegs(
+      MBB, MBBI, RegsToZero, GPRsToZero, FPRsToZero, PredicatesToZero);
 
-  // Check widened writes for live fragments before emitting any clears.
-  BitVector FullRegsToZero = GPRsToZero;
-  FullRegsToZero |= FPRsToZero;
-  FullRegsToZero |= PredicatesToZero;
+  // Check widened writes for live fragments before emitting any clears. A
+  // write to a vector register zeroes the rest of its Z register whenever the
+  // SVE state is enabled, whichever instruction does it, so check the Z
+  // register if the target has one.
+  BitVector ClobberedRegs = GPRsToZero;
+  ClobberedRegs |= PredicatesToZero;
+  const bool HasZRegs = STI.hasSVE() || STI.hasSME();
+  for (MCRegister Reg : FPRsToZero.set_bits()) {
+    MCRegister ZReg;
+    if (HasZRegs && AArch64::FPR128RegClass.contains(Reg))
+      ZReg = TRI.getMatchingSuperReg(Reg, AArch64::zsub, &AArch64::ZPRRegClass);
+    ClobberedRegs.set(ZReg ? ZReg : Reg);
+  }
   LiveRegUnits Live = getZeroCallUsedRegsExitUnits(MBB, MBBI, TRI);
-  if (!validateZeroCallUsedRegsWidening(RegsToZero, FullRegsToZero,
-                                        *MBB.getParent(), Live))
+  if (!validateZeroCallUsedRegsWidening(RegsToZero, ClobberedRegs, MF, Live))
     return;
 
-  const MachineFunction &MF = *MBB.getParent();
   if (isMachineVerificationEnabled(MF.getTarget()) &&
       shouldVerifyAArch64ZeroizedRegisters(MF)) {
+    // The verifier tracks fixed-width registers even on a target with SME.
+    BitVector VerifiedRegs = GPRsToZero;
+    VerifiedRegs |= FPRsToZero;
     for (MachineInstr &MI : make_range(MBBI, MBB.end()))
       if (isOrdinaryZeroizeReturn(MI) || isAArch64ZeroizeShadowResume(MI))
-        recordAArch64ZeroizationObligation(MI, FullRegsToZero, RegsToZero,
-                                           Live);
+        recordAArch64ZeroizationObligation(MI, VerifiedRegs, RegsToZero, Live);
+  }
+
+  // The predicate clears go first when they need the mode test: it borrows a
+  // general-purpose register that is cleared below.
+  MachineBasicBlock *ClearMBB = &MBB;
+  MachineBasicBlock *PredicateMBB = nullptr;
+  if (PredicatesOnlyIfStreaming) {
+    MCRegister Scratch;
+    for (MCRegister Reg : GPRsToZero.set_bits()) {
+      if (Reg != AArch64::FP) {
+        Scratch = Reg;
+        break;
+      }
+    }
+    // Reading SVCR leaves the flags alone, but MRS is modelled as defining
+    // NZCV, so the test cannot be placed where the flags are needed.
+    const char *Reason = nullptr;
+    if (!Scratch)
+      Reason = "no general-purpose register is being cleared that could hold "
+               "the streaming mode";
+    else if (isNZCVReadFrom(MBB, MBBI, TRI))
+      Reason = "the streaming mode test would overwrite flags needed at the "
+               "exit";
+    if (!Reason) {
+      ClearMBB = emitStreamingOnlyPredicateClears(PredicatesToZero, Scratch,
+                                                  MBB, MBBI, DL);
+      PredicateMBB = ClearMBB->getPrevNode();
+    } else {
+      MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+          MF.getFunction(),
+          Twine("\"zero-call-used-regs\" cannot clear predicate registers at "
+                "an exit of unknown streaming mode without SVE: ") +
+              Reason});
+    }
+    PredicatesToZero.reset();
   }
 
   // Zero out GPRs.
   for (MCRegister Reg : GPRsToZero.set_bits())
-    TII.buildClearRegister(Reg, MBB, MBBI, DL);
+    TII.buildClearRegister(Reg, *ClearMBB, MBBI, DL);
 
   // Zero out FP/vector registers.
   for (MCRegister Reg : FPRsToZero.set_bits())
-    TII.buildClearRegister(Reg, MBB, MBBI, DL);
+    TII.buildClearRegister(Reg, *ClearMBB, MBBI, DL);
 
   // Only Dn is an input. The high half may be undefined even when the
   // callee has already restored Dn. On a register-only resume the unwinder
   // can recover Dn from its stack slot and the physical Dn can be dead.
-  Live.addLiveOuts(MBB);
+  Live.addLiveOuts(*ClearMBB);
   for (unsigned Q = AArch64::Q8; Q <= AArch64::Q15; ++Q) {
     if (!RegsToZero.test(TRI.getSubReg(Q, AArch64::dsub_hi)))
       continue;
     MachineInstrBuilder MIB;
     if (STI.isNeonAvailable())
-      MIB = BuildMI(MBB, MBBI, DL, TII.get(AArch64::INSvi64gpr), Q)
+      MIB = BuildMI(*ClearMBB, MBBI, DL, TII.get(AArch64::INSvi64gpr), Q)
                 .addReg(Q, RegState::Undef)
                 .addImm(1)
                 .addReg(AArch64::XZR);
     else
-      MIB = BuildMI(MBB, MBBI, DL, TII.get(AArch64::FMOVXDHighr), Q)
+      MIB = BuildMI(*ClearMBB, MBBI, DL, TII.get(AArch64::FMOVXDHighr), Q)
                 .addReg(AArch64::XZR)
                 .addImm(1);
     MCRegister D = TRI.getSubReg(Q, AArch64::dsub);
@@ -1045,7 +1202,10 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
   }
 
   for (MCRegister PReg : PredicatesToZero.set_bits())
-    BuildMI(MBB, MBBI, DL, TII.get(AArch64::PFALSE), PReg);
+    BuildMI(*ClearMBB, MBBI, DL, TII.get(AArch64::PFALSE), PReg);
+
+  if (PredicateMBB)
+    fullyRecomputeLiveIns({ClearMBB, PredicateMBB});
 }
 
 bool AArch64FrameLowering::windowsRequiresStackProbe(
