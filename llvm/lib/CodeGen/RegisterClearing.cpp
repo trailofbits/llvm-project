@@ -125,8 +125,9 @@ static bool validateScratchRegs(const BitVector &Regs,
 
 /// Find allocatable physical defs, including target scratch, to keep live.
 static BitVector
-getClearingDefs(iterator_range<MachineBasicBlock::iterator> Sequence,
-                const MachineFunction &MF, const TargetRegisterInfo &TRI) {
+markClearingDefsLive(iterator_range<MachineBasicBlock::iterator> Sequence,
+                     const MachineFunction &MF,
+                     const TargetRegisterInfo &TRI) {
   const BitVector Allocatable = TRI.getAllocatableSet(MF);
   BitVector Defs(TRI.getNumRegs());
   for (MachineInstr &MI : Sequence) {
@@ -169,7 +170,8 @@ bool llvm::emitZeroCallUsedRegsWithScratch(
   MachineBasicBlock::iterator First =
       &ExitMBB != &MBB ? ExitMBB.begin()
                        : AtBegin ? MBB.begin() : std::next(Before);
-  retainClearingState(getClearingDefs(make_range(First, InsertPt), MF, TRI),
-                      InsertPt, ExitMI);
+  retainClearingState(
+      markClearingDefsLive(make_range(First, InsertPt), MF, TRI), InsertPt,
+      ExitMI);
   return true;
 }
