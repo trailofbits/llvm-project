@@ -161,7 +161,14 @@ bool llvm::emitZeroCallUsedRegsWithScratch(
 
   TFI.emitZeroCallUsedRegs(RegsToZero, MBB, InsertPt, RS);
 
-  MachineBasicBlock::iterator First = AtBegin ? MBB.begin() : std::next(Before);
+  // A target may split the block to clear under a run-time condition. The
+  // exit and the insertion point then sit in a new block. The target keeps
+  // what it defined in the other blocks live; the defs in the exit block are
+  // handled here.
+  MachineBasicBlock &ExitMBB = *ExitMI.getParent();
+  MachineBasicBlock::iterator First =
+      &ExitMBB != &MBB ? ExitMBB.begin()
+                       : AtBegin ? MBB.begin() : std::next(Before);
   retainClearingState(getClearingDefs(make_range(First, InsertPt), MF, TRI),
                       InsertPt, ExitMI);
   return true;
