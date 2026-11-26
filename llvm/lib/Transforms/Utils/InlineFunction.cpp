@@ -2639,6 +2639,13 @@ llvm::InlineResult llvm::CanInlineCallSite(const CallBase &CB,
   const BasicBlock *OrigBB = CB.getParent();
   const Function *Caller = OrigBB->getParent();
 
+  // These obligations must survive every inlining entry point, including
+  // callers which bypass the cost model or disable attribute merging.
+  if (!AttributeFuncs::isZeroizeStackInlineCompatible(*Caller, *CalledFunc))
+    return InlineResult::failure("incompatible zeroize-stack attributes");
+  if (!AttributeFuncs::isZeroizeFlagsInlineCompatible(*Caller, *CalledFunc))
+    return InlineResult::failure("incompatible zeroize-flags attributes");
+
   // GC poses two hazards to inlining, which only occur when the callee has GC:
   //  1. If the caller has no GC, then the callee's GC must be propagated to the
   //     caller.

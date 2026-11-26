@@ -53,12 +53,14 @@
 
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Statepoint.h"
@@ -649,9 +651,13 @@ InsertSafepointPoll(BasicBlock::iterator InsertBefore,
 
   // Do the actual inlining
   InlineFunctionInfo IFI;
-  bool InlineStatus = InlineFunction(*PollCall, IFI).isSuccess();
-  assert(InlineStatus && "inline must succeed");
-  (void)InlineStatus; // suppress warning in release-asserts
+  InlineResult InlineStatus = InlineFunction(*PollCall, IFI);
+  if (!InlineStatus.isSuccess()) {
+    F->getContext().emitError(Twine("cannot inline gc.safepoint_poll: ") +
+                              InlineStatus.getFailureReason());
+    PollCall->eraseFromParent();
+    return;
+  }
 
   // Check post-conditions
   assert(IFI.StaticAllocas.empty() && "can't have allocs");
