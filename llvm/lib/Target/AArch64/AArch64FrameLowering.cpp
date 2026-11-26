@@ -220,6 +220,7 @@
 #include "AArch64RegisterInfo.h"
 #include "AArch64SMEAttributes.h"
 #include "AArch64Subtarget.h"
+#include "AArch64Zeroization.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
 #include "MCTargetDesc/AArch64MCTargetDesc.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -237,6 +238,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineVerifier.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
@@ -866,6 +868,26 @@ static MCRegister getRegisterOrZero(MCRegister Reg, bool HasSVE) {
   }
 }
 
+void AArch64FrameLowering::addZeroCallUsedRegsSubRegs(
+    const MachineFunction &MF, BitVector &Candidates) const {
+  const auto &STI = MF.getSubtarget<AArch64Subtarget>();
+  if (!hasAArch64ZeroizeUpperLaneABI(MF))
+    return;
+
+  // Base AAPCS64 preserves D8-D15, leaving the high half of each Q register
+  // independently call-used. Its artificial D_HI register models exactly the
+  // units a lane insert can write, including when the low half is live.
+  const AArch64RegisterInfo &TRI = *STI.getRegisterInfo();
+  for (const MCPhysReg *CS = MF.getRegInfo().getCalleeSavedRegs(); *CS; ++CS) {
+    if (*CS < AArch64::D8 || *CS > AArch64::D15)
+      continue;
+    MCRegister Q =
+        TRI.getMatchingSuperReg(*CS, AArch64::dsub, &AArch64::FPR128RegClass);
+    if (Candidates.test(Q))
+      Candidates.set(TRI.getSubReg(Q, AArch64::dsub_hi));
+  }
+}
+
 bool AArch64FrameLowering::isZeroCallUsedRegsScratchReg(
     const MachineFunction &MF, MCRegister Reg) const {
   // The shared scratch validator checks the function's final CSR and live-out
@@ -979,13 +1001,12 @@ getZeroCallUsedRegsExitUnits(const MachineBasicBlock &MBB,
   return NeededAtExit;
 }
 
-static bool validateZeroCallUsedRegsWidening(
-    const BitVector &RegsToZero, const BitVector &FullRegsToZero,
-    const MachineBasicBlock &MBB, MachineBasicBlock::const_iterator MBBI) {
-  const MachineFunction &MF = *MBB.getParent();
+static bool validateZeroCallUsedRegsWidening(const BitVector &RegsToZero,
+                                             const BitVector &FullRegsToZero,
+                                             const MachineFunction &MF,
+                                             LiveRegUnits NeededAtExit) {
   const AArch64RegisterInfo &TRI =
       *MF.getSubtarget<AArch64Subtarget>().getRegisterInfo();
-  LiveRegUnits NeededAtExit = getZeroCallUsedRegsExitUnits(MBB, MBBI, TRI);
   // Recheck only units added by widening.
   for (MCRegister Reg : RegsToZero.set_bits())
     NeededAtExit.removeReg(Reg);
@@ -1093,17 +1114,28 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
   // write to a vector register zeroes the rest of its Z register whenever the
   // SVE state is enabled, whichever instruction does it, so check the Z
   // register if the target has one.
-  BitVector FullRegsToZero = GPRsToZero;
-  FullRegsToZero |= PredicatesToZero;
+  BitVector ClobberedRegs = GPRsToZero;
+  ClobberedRegs |= PredicatesToZero;
   const bool HasZRegs = STI.hasSVE() || STI.hasSME();
   for (MCRegister Reg : FPRsToZero.set_bits()) {
     MCRegister ZReg;
     if (HasZRegs && AArch64::FPR128RegClass.contains(Reg))
       ZReg = TRI.getMatchingSuperReg(Reg, AArch64::zsub, &AArch64::ZPRRegClass);
-    FullRegsToZero.set(ZReg ? ZReg : Reg);
+    ClobberedRegs.set(ZReg ? ZReg : Reg);
   }
-  if (!validateZeroCallUsedRegsWidening(RegsToZero, FullRegsToZero, MBB, MBBI))
+  LiveRegUnits Live = getZeroCallUsedRegsExitUnits(MBB, MBBI, TRI);
+  if (!validateZeroCallUsedRegsWidening(RegsToZero, ClobberedRegs, MF, Live))
     return;
+
+  if (isMachineVerificationEnabled(MF.getTarget()) &&
+      shouldVerifyAArch64ZeroizedRegisters(MF)) {
+    // The verifier tracks fixed-width registers even on a target with SME.
+    BitVector VerifiedRegs = GPRsToZero;
+    VerifiedRegs |= FPRsToZero;
+    for (MachineInstr &MI : make_range(MBBI, MBB.end()))
+      if (isOrdinaryZeroizeReturn(MI) || isAArch64ZeroizeShadowResume(MI))
+        recordAArch64ZeroizationObligation(MI, VerifiedRegs, RegsToZero, Live);
+  }
 
   // The predicate clears go first when they need the mode test: it borrows a
   // general-purpose register that is cleared below.
@@ -1147,6 +1179,27 @@ void AArch64FrameLowering::emitZeroCallUsedRegs(
   // Zero out FP/vector registers.
   for (MCRegister Reg : FPRsToZero.set_bits())
     TII.buildClearRegister(Reg, *ClearMBB, MBBI, DL);
+
+  // Only Dn is an input. The high half may be undefined even when the
+  // callee has already restored Dn. On a register-only resume the unwinder
+  // can recover Dn from its stack slot and the physical Dn can be dead.
+  Live.addLiveOuts(*ClearMBB);
+  for (unsigned Q = AArch64::Q8; Q <= AArch64::Q15; ++Q) {
+    if (!RegsToZero.test(TRI.getSubReg(Q, AArch64::dsub_hi)))
+      continue;
+    MachineInstrBuilder MIB;
+    if (STI.isNeonAvailable())
+      MIB = BuildMI(*ClearMBB, MBBI, DL, TII.get(AArch64::INSvi64gpr), Q)
+                .addReg(Q, RegState::Undef)
+                .addImm(1)
+                .addReg(AArch64::XZR);
+    else
+      MIB = BuildMI(*ClearMBB, MBBI, DL, TII.get(AArch64::FMOVXDHighr), Q)
+                .addReg(AArch64::XZR)
+                .addImm(1);
+    MCRegister D = TRI.getSubReg(Q, AArch64::dsub);
+    MIB.addReg(D, RegState::Implicit | getUndefRegState(Live.available(D)));
+  }
 
   for (MCRegister PReg : PredicatesToZero.set_bits())
     BuildMI(*ClearMBB, MBBI, DL, TII.get(AArch64::PFALSE), PReg);

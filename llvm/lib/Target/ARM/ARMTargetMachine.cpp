@@ -564,6 +564,12 @@ void ARMPassConfig::addPreEmitPass2() {
   // sizes will only be decreased by this pass.
   addPass(createARMLowOverheadLoopsPass());
 
+  // Clearing a stack frame emits epilogue CFI, possibly across several blocks.
+  // Reconcile the CFA and saved registers after the final block layout.
+  addPass(createCFIInstrInserter([](const MachineFunction &MF) {
+    return MF.getFunction().hasZeroizeStack();
+  }));
+
   if (TM->getTargetTriple().isOSWindows()) {
     // Identify valid longjmp targets for Windows Control Flow Guard.
     addPass(createCFGuardLongjmpPass());
