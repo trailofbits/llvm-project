@@ -935,6 +935,13 @@ static bool collectZeroCallUsedRegs(const MachineBasicBlock &MBB,
       SMEAttrs CalleeAttrs = getExitCalleeSMEAttrs(*MBBI, STI);
       HasSVE = CalleeAttrs.hasStreamingInterface();
       PredicatesOnlyIfStreaming = CalleeAttrs.hasStreamingCompatibleInterface();
+    } else if (MBBI != MBB.end() && !MBBI->isReturn()) {
+      // Any other exit, such as inline assembly that branches away, leaves
+      // from the body with no mode change in front of it. The subtarget
+      // describes the body, except that a streaming-compatible body without
+      // a locally streaming one runs in the caller's mode.
+      PredicatesOnlyIfStreaming = !FnAttrs.hasStreamingBody() &&
+                                  FnAttrs.hasStreamingCompatibleInterface();
     } else if (FnAttrs.hasStreamingBody() ||
                FnAttrs.hasStreamingCompatibleInterface()) {
       // A normal return follows the function's interface. A compatible

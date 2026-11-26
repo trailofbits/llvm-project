@@ -82,3 +82,39 @@ define void @compatible_all() "zero-call-used-regs"="all" "aarch64_pstate_sm_com
 ; CHECK: ret
   ret void
 }
+
+; Inline assembly that branches away leaves a locally streaming function from
+; its body, in streaming mode and with no SMSTOP in front of it. The predicate
+; still holds the body's value there and PFALSE is executable.
+define void @asm_exit(i64 %start, i64 %end) "zero-call-used-regs"="used" "aarch64_pstate_sm_body" {
+; CHECK-LABEL: asm_exit:
+; CHECK: smstart sm
+; CHECK: cntp x0, pn8.b, vlx2
+; CHECK-NOT: {{smstop|SVCR}}
+; CHECK: pfalse p8.b
+; CHECK-NOT: {{smstop|SVCR}}
+; CHECK: b sink
+  %counter = call target("aarch64.svcount") @llvm.aarch64.sve.whilelo.c8(
+      i64 %start, i64 %end, i32 2)
+  %count = call i64 @llvm.aarch64.sve.cntp.c8(target("aarch64.svcount") %counter, i32 2)
+  call void asm sideeffect "b sink", "{x0}"(i64 %count)
+  unreachable
+}
+
+; The same exit of a streaming-compatible function is reached in the caller's
+; mode, so the predicate clears need the mode test.
+define void @compatible_asm_exit(i64 %value) "zero-call-used-regs"="all" "aarch64_pstate_sm_compatible" {
+; CHECK-LABEL: compatible_asm_exit:
+; SME: mrs x[[SCRATCH:[0-9]+]], SVCR
+; SME-NEXT: tbz w[[SCRATCH]], #0, [[DONE:.LBB[0-9_]+]]
+; SME: pfalse p0.b
+; SME: pfalse p15.b
+; SME: [[DONE]]:
+; SME: mov x[[SCRATCH]], #0
+; SVE-NOT: SVCR
+; SVE: pfalse p0.b
+; SVE: pfalse p15.b
+; CHECK: b sink
+  call void asm sideeffect "b sink", "{x0}"(i64 %value)
+  unreachable
+}
