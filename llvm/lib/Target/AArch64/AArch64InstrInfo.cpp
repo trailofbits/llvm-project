@@ -11476,7 +11476,10 @@ void AArch64InstrInfo::buildClearRegister(Register Reg, MachineBasicBlock &MBB,
 
   if (TRI.isGeneralPurposeRegister(MF, Reg)) {
     BuildMI(MBB, Iter, DL, get(AArch64::MOVZXi), Reg).addImm(0).addImm(0);
-  } else if (STI.isSVEorStreamingSVEAvailable()) {
+  } else if (AArch64::ZPRRegClass.contains(Reg)) {
+    // The caller asks for a Z register only where SVE is usable. That is not
+    // the same as SVE being usable in the function body: a locally streaming
+    // function returns in non-streaming mode.
     BuildMI(MBB, Iter, DL, get(AArch64::DUP_ZI_D), Reg)
       .addImm(0)
       .addImm(0);
