@@ -1,12 +1,19 @@
 ; RUN: llc -mtriple=aarch64-linux-gnu -verify-machineinstrs %s -o - \
 ; RUN:   | FileCheck %s --check-prefixes=CHECK,NORMAL
-; RUN: llc -mtriple=aarch64-linux-gnu -mattr=+call-saved-x20 -verify-machineinstrs %s -o - \
-; RUN:   | FileCheck %s --implicit-check-not='mov x20, #0'
+; RUN: llc -mtriple=aarch64-linux-gnu -mattr=+reserve-x20 -verify-machineinstrs %s -o %t.reserved
+; RUN: FileCheck %s --input-file=%t.reserved
+; RUN: FileCheck %s --input-file=%t.reserved --check-prefix=RESERVED
 
 ; The final per-function CSR list, rather than the usual AAPCS list, determines
 ; which registers are call-used. Return values must still survive the clearing.
+; A reserved register is not call-used under any convention and stays untouched.
+; RESERVED is checked on its own: a NOT pattern does not cover the inside of a
+; DAG group.
 
 define preserve_nonecc i64 @preserve_none() "zero-call-used-regs"="all-gpr" {
+; RESERVED-LABEL: preserve_none:
+; RESERVED-NOT: x20
+; RESERVED: ret
 ; CHECK-LABEL: preserve_none:
 ; CHECK-DAG: mov w0, #42
 ; CHECK-DAG: mov x19, #0
