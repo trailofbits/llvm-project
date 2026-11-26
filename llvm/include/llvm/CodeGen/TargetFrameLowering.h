@@ -242,6 +242,11 @@ public:
   /// exits, or the exit call otherwise. This preserves PEI's ClearingSequence
   /// ordering.
   ///
+  /// A target may split \p MBB to clear under a run-time condition, provided
+  /// \p MBBI and the exit end up together in the last block of the sequence.
+  /// PEI then handles the defs in that block only; the target keeps what it
+  /// defined in the other blocks live.
+  ///
   /// PEI clears dead flags on all inserted allocatable physical defs, including
   /// target-selected scratch. It adds missing exact, non-undef exit uses as
   /// implicit operands, optionally on a separate FAKE_USE as requested by
