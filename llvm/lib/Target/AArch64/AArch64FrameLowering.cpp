@@ -897,6 +897,22 @@ static MCRegister getPredicateToZero(MCRegister Reg,
   return 0;
 }
 
+static SMEAttrs getExitCalleeSMEAttrs(const MachineInstr &Call,
+                                      const AArch64Subtarget &STI) {
+  const auto &RTLCI = STI.getTargetLowering()->getRuntimeLibcallsInfo();
+  for (const MachineOperand &MO : Call.operands()) {
+    if (MO.isGlobal()) {
+      if (const auto *Callee = dyn_cast<Function>(MO.getGlobal()))
+        return SMEAttrs(*Callee, &RTLCI);
+      break;
+    }
+    if (MO.isSymbol())
+      return SMEAttrs(MO.getSymbolName(), RTLCI);
+  }
+  // If the call's interface is unavailable, test the mode at runtime.
+  return SMEAttrs(SMEAttrs::SM_Compatible);
+}
+
 /// Sort \p RegsToZero into the full registers to clear at the exit \p MBBI.
 /// Returns true if the predicates in \p PredicatesToZero can only be cleared
 /// when the exit is reached in streaming mode, which has to be tested there.
@@ -911,26 +927,20 @@ static bool collectZeroCallUsedRegs(const MachineBasicBlock &MBB,
   const AArch64RegisterInfo &TRI = *STI.getRegisterInfo();
   bool HasSVE = STI.isSVEorStreamingSVEAvailable();
   bool PredicatesOnlyIfStreaming = false;
-  // The subtarget describes the function body. Without SVE, SVE instructions
-  // are usable there only because the body is streaming, and that need not be
-  // the mode at the exit.
-  SMEAttrs SMEFnAttrs = MF.getInfo<AArch64FunctionInfo>()->getSMEFnAttrs();
-  if (!STI.hasSVE() && STI.hasSME() &&
-      SMEFnAttrs.hasStreamingInterfaceOrBody()) {
+  if (!STI.hasSVE() && STI.hasSME()) {
+    SMEAttrs FnAttrs = MF.getInfo<AArch64FunctionInfo>()->getSMEFnAttrs();
     if (MBBI != MBB.end() && MBBI->isCall() && !MBBI->isReturn()) {
-      // An exit that is a call and not a return, such as the call that
-      // resumes unwinding, is made in the callee's mode. A landing pad is
-      // entered in non-streaming mode and usually stays in it.
-      HasSVE = false;
-      PredicatesOnlyIfStreaming = true;
-    } else if (!SMEFnAttrs.hasStreamingInterface()) {
-      // A locally streaming function returns in the mode it was entered in.
-      // A non-streaming interface leaves nothing to clear: SMSTOP has zeroed
-      // the predicate and Z registers. A streaming-compatible interface skips
-      // SMSTOP when the caller is streaming, and the predicates then still
-      // hold the body's values.
-      HasSVE = false;
-      PredicatesOnlyIfStreaming = SMEFnAttrs.hasStreamingCompatibleInterface();
+      // Unwind calls run in the callee's mode, which is non-streaming for
+      // the standard _Unwind_Resume.
+      SMEAttrs CalleeAttrs = getExitCalleeSMEAttrs(*MBBI, STI);
+      HasSVE = CalleeAttrs.hasStreamingInterface();
+      PredicatesOnlyIfStreaming = CalleeAttrs.hasStreamingCompatibleInterface();
+    } else if (FnAttrs.hasStreamingBody() ||
+               FnAttrs.hasStreamingCompatibleInterface()) {
+      // A normal return follows the function's interface. A compatible
+      // interface can return in either mode, regardless of the body.
+      HasSVE = FnAttrs.hasStreamingInterface();
+      PredicatesOnlyIfStreaming = FnAttrs.hasStreamingCompatibleInterface();
     }
   }
   // Without an FP unit (e.g. -mgeneral-regs-only) the FP/vector registers can't

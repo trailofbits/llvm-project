@@ -4,10 +4,9 @@
 ; RUN:   | FileCheck %s --check-prefixes=CHECK,SVE
 
 ; A streaming function returns in streaming mode, where SVE instructions are
-; usable. Its landing pad is entered in non-streaming mode and resumes unwinding
-; from there, so without SVE the same clears are not executable at that exit.
-; Vector registers are cleared through their scalar views, and predicates only
-; after a test of PSTATE.SM.
+; usable. _Unwind_Resume has a non-streaming interface. Without SVE, clear
+; vector registers through their scalar views and omit the predicate clears
+; at the call.
 
 declare void @may_throw()
 declare void @cleanup()
@@ -19,12 +18,7 @@ define i64 @used_counter(i64 %start, i64 %end) "zero-call-used-regs"="used" "aar
 ; CHECK: pfalse p8.b
 ; CHECK: ret
 ; CHECK: bl cleanup
-; SME: mrs x[[MODE:[0-9]+]], SVCR
-; SME-NEXT: tbz w[[MODE]], #0, [[TAIL:.LBB[0-9_]+]]
-; SME-NEXT: // %bb.
-; SME-NEXT: pfalse p8.b
-; SME: [[TAIL]]:
-; SME: mov x[[MODE]], #0
+; SME-NOT: {{SVCR|pfalse}}
 ; SVE-NOT: SVCR
 ; SVE: pfalse p8.b
 ; SVE-NOT: SVCR
@@ -48,14 +42,9 @@ define i64 @all_regs(i64 %value) "zero-call-used-regs"="all" "aarch64_pstate_sm_
 ; CHECK: pfalse p15.b
 ; CHECK: ret
 ; CHECK: bl cleanup
-; SME-NOT: {{z[0-9]+\.d}}
-; SME: tbz w{{[0-9]+}}, #0, [[TAIL:.LBB[0-9_]+]]
-; SME: pfalse p0.b
-; SME: pfalse p15.b
-; SME: [[TAIL]]:
-; SME-NOT: {{z[0-9]+\.d|pfalse}}
+; SME-NOT: {{SVCR|z[0-9]+\.d|pfalse}}
 ; SME: fmov d0, xzr
-; SME-NOT: {{z[0-9]+\.d|pfalse}}
+; SME-NOT: {{SVCR|z[0-9]+\.d|pfalse}}
 ; SVE: mov z0.d, #0
 ; SVE: pfalse p15.b
 ; CHECK: bl _Unwind_Resume
@@ -63,6 +52,30 @@ entry:
   invoke void @may_throw() to label %ok unwind label %lpad
 ok:
   ret i64 %value
+lpad:
+  %lp = landingpad { ptr, i32 } cleanup
+  call void @cleanup()
+  resume { ptr, i32 } %lp
+}
+
+; At _Unwind_Resume, X0 holds the exception object and P0 is the only
+; argument register selected for clearing. The call needs no mode test or
+; scratch register; the ordinary streaming return must still clear P0.
+define i64 @used_arg(i64 %arg, <vscale x 16 x i1> %pred) "zero-call-used-regs"="used-arg" "aarch64_pstate_sm_enabled" personality ptr @__gxx_personality_v0 {
+; CHECK-LABEL: used_arg:
+; CHECK: pfalse p0.b
+; CHECK: ret
+; CHECK: bl cleanup
+; SME-NOT: {{SVCR|pfalse}}
+; SVE-NOT: SVCR
+; SVE: pfalse p0.b
+; CHECK: bl _Unwind_Resume
+entry:
+  %count = call i64 @llvm.aarch64.sve.cntp.nxv16i1(<vscale x 16 x i1> %pred, <vscale x 16 x i1> %pred)
+  invoke void @may_throw() to label %ok unwind label %lpad
+ok:
+  %result = add i64 %arg, %count
+  ret i64 %result
 lpad:
   %lp = landingpad { ptr, i32 } cleanup
   call void @cleanup()

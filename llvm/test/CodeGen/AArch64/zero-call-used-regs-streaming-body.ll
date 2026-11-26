@@ -64,3 +64,21 @@ define i64 @compatible_counter(i64 %start, i64 %end) "zero-call-used-regs"="used
   %count = call i64 @llvm.aarch64.sve.cntp.c8(target("aarch64.svcount") %counter, i32 2)
   ret i64 %count
 }
+
+; A streaming-compatible interface also needs the mode test when the body
+; never changes PSTATE.SM. In "all" mode the predicates are selected even in
+; an empty function.
+define void @compatible_all() "zero-call-used-regs"="all" "aarch64_pstate_sm_compatible" {
+; CHECK-LABEL: compatible_all:
+; SME: mrs x[[SCRATCH:[0-9]+]], SVCR
+; SME-NEXT: tbz w[[SCRATCH]], #0, [[DONE:.LBB[0-9_]+]]
+; SME: pfalse p0.b
+; SME: pfalse p15.b
+; SME: [[DONE]]:
+; SME: mov x[[SCRATCH]], #0
+; SVE-NOT: SVCR
+; SVE: pfalse p0.b
+; SVE: pfalse p15.b
+; CHECK: ret
+  ret void
+}
