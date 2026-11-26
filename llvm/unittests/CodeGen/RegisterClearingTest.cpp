@@ -148,6 +148,19 @@ protected:
                           });
   }
 
+  void enableLVIRetention() {
+    auto *F =
+        Function::Create(FunctionType::get(Type::getVoidTy(Context), false),
+                         GlobalValue::ExternalLinkage, "lvi", *Mod);
+    F->addFnAttr("target-features", "+lvi-cfi");
+    ReturnInst::Create(Context, BasicBlock::Create(Context, "entry", F));
+    MF = &MMI->getOrCreateMachineFunction(*F);
+    MF->getProperties().set(MachineFunctionProperties::Property::NoVRegs);
+    MF->getRegInfo().freezeReservedRegs();
+    TRI = MF->getSubtarget().getRegisterInfo();
+    TII = MF->getSubtarget().getInstrInfo();
+  }
+
   void expectClears(MachineBasicBlock &MBB,
                     std::initializer_list<MCRegister> Expected) {
     EXPECT_EQ(MBB.size(), Expected.size() + 1);
@@ -244,15 +257,7 @@ TEST_P(RegisterClearingTest, EmptyScratchLeavesOnlyCandidates) {
 TEST_P(RegisterClearingTest, LVIKeepAliveProtectsLaterClearingSteps) {
   if (TM->getTargetTriple().getArch() != Triple::x86_64)
     GTEST_SKIP() << "Uses X86 LVI return hardening";
-  auto *F = Function::Create(FunctionType::get(Type::getVoidTy(Context), false),
-                             GlobalValue::ExternalLinkage, "lvi", *Mod);
-  F->addFnAttr("target-features", "+lvi-cfi");
-  ReturnInst::Create(Context, BasicBlock::Create(Context, "entry", F));
-  MF = &MMI->getOrCreateMachineFunction(*F);
-  MF->getProperties().set(MachineFunctionProperties::Property::NoVRegs);
-  MF->getRegInfo().freezeReservedRegs();
-  TRI = MF->getSubtarget().getRegisterInfo();
-  TII = MF->getSubtarget().getInstrInfo();
+  enableLVIRetention();
 
   auto &MBB = addExit();
   MachineInstr &ExitMI = MBB.back();
@@ -271,6 +276,105 @@ TEST_P(RegisterClearingTest, LVIKeepAliveProtectsLaterClearingSteps) {
                                                InsertPt, ExitMI, nullptr));
   EXPECT_EQ(Errors, 1u);
   EXPECT_THAT(Diagnostics, HasSubstr("needed at the exit"));
+}
+
+TEST_P(RegisterClearingTest, FinalStateReusesFakeUse) {
+  if (TM->getTargetTriple().getArch() != Triple::x86_64)
+    GTEST_SKIP() << "Uses X86 LVI retention policy";
+  enableLVIRetention();
+  auto &MBB = addExit();
+  MachineInstr &ExitMI = MBB.back();
+  MachineBasicBlock::iterator InsertPt = ExitMI.getIterator();
+  MCRegister Scratch = reg(GetParam().Scratch);
+  ASSERT_TRUE(emitZeroCallUsedRegsWithScratch(regs({}), regs({Scratch}), MBB,
+                                              InsertPt, ExitMI, nullptr));
+  ASSERT_TRUE(InsertPt->isFakeUse());
+  MachineInstr *Anchor = &*InsertPt;
+  // A later step declares flags in addition to the retained GPR. The
+  // retention helper must preserve both without changing real exit operands.
+  MCRegister Flags = reg("EFLAGS");
+  retainClearingState(regs({Scratch, Flags}), InsertPt, ExitMI);
+  unsigned RetainedOperands = InsertPt->getNumOperands();
+  retainClearingState(regs({Scratch, Flags}), InsertPt, ExitMI);
+  EXPECT_EQ(&*InsertPt, Anchor);
+  EXPECT_EQ(llvm::count_if(
+                MBB, [](const MachineInstr &MI) { return MI.isFakeUse(); }),
+            1);
+  EXPECT_TRUE(InsertPt->readsRegister(Scratch, TRI));
+  EXPECT_TRUE(InsertPt->readsRegister(Flags, TRI));
+  EXPECT_FALSE(ExitMI.readsRegister(Scratch, TRI));
+  EXPECT_FALSE(ExitMI.readsRegister(Flags, TRI));
+  EXPECT_EQ(countExitUses(MBB, reg(GetParam().ReturnValue)), 1u);
+  EXPECT_EQ(InsertPt->getNumOperands(), RetainedOperands);
+}
+
+TEST_P(RegisterClearingTest, FlagsOnlyStateCreatesFakeUse) {
+  if (TM->getTargetTriple().getArch() != Triple::x86_64)
+    GTEST_SKIP() << "Uses X86 LVI retention policy";
+  enableLVIRetention();
+  auto &MBB = addExit();
+  MachineInstr &ExitMI = MBB.back();
+  MachineBasicBlock::iterator InsertPt = ExitMI.getIterator();
+  MCRegister Flags = reg("EFLAGS");
+  retainClearingState(regs({Flags}), InsertPt, ExitMI);
+  ASSERT_TRUE(InsertPt->isFakeUse());
+  EXPECT_EQ(std::next(InsertPt), ExitMI.getIterator());
+  EXPECT_TRUE(MF->hasFakeUses());
+  EXPECT_TRUE(InsertPt->readsRegister(Flags, TRI));
+  EXPECT_FALSE(ExitMI.readsRegister(Flags, TRI));
+  EXPECT_EQ(countExitUses(MBB, reg(GetParam().ReturnValue)), 1u);
+}
+
+TEST_P(RegisterClearingTest, FinalStateRetainsExactWidth) {
+  auto &MBB = addExit();
+  MachineInstr &ExitMI = MBB.back();
+  MachineBasicBlock::iterator InsertPt = ExitMI.getIterator();
+  MCRegister Full = reg(GetParam().FullReturnValue);
+  retainClearingState(regs({Full}), InsertPt, ExitMI);
+  retainClearingState(regs({Full}), InsertPt, ExitMI);
+  EXPECT_EQ(countExitUses(MBB, Full), 1u);
+  EXPECT_EQ(countExitUses(MBB, reg(GetParam().ReturnValue)), 1u);
+  EXPECT_EQ(MBB.size(), 1u);
+}
+
+TEST_P(RegisterClearingTest, FinalStateRetainsFlagsAtOrdinaryExit) {
+  const Triple &TT = TM->getTargetTriple();
+  if (!TT.isX86() && !TT.isAArch64())
+    GTEST_SKIP() << "Uses X86 or AArch64 condition flags";
+  auto &MBB = addExit();
+  MachineInstr &ExitMI = MBB.back();
+  MachineBasicBlock::iterator InsertPt = ExitMI.getIterator();
+  MCRegister Flags = reg(TT.isX86() ? "EFLAGS" : "NZCV");
+  ASSERT_FALSE(TRI->getAllocatableSet(*MF).test(Flags));
+  retainClearingState(regs({Flags}), InsertPt, ExitMI);
+  retainClearingState(regs({Flags}), InsertPt, ExitMI);
+  EXPECT_EQ(countExitUses(MBB, Flags), 1u);
+  EXPECT_EQ(countExitUses(MBB, reg(GetParam().ReturnValue)), 1u);
+  EXPECT_EQ(MBB.size(), 1u);
+}
+
+TEST_P(RegisterClearingTest, FinalStateIgnoresUndefUse) {
+  auto &MBB = addExit();
+  MachineInstr &ExitMI = MBB.back();
+  MachineBasicBlock::iterator InsertPt = ExitMI.getIterator();
+  MCRegister Scratch = reg(GetParam().Scratch);
+  ExitMI.addOperand(
+      *MF, MachineOperand::CreateReg(Scratch, /*isDef=*/false, /*isImp=*/true,
+                                     /*isKill=*/false, /*isDead=*/false,
+                                     /*isUndef=*/true));
+  retainClearingState(regs({Scratch}), InsertPt, ExitMI);
+  EXPECT_EQ(countExitUses(MBB, Scratch), 1u);
+}
+
+TEST_P(RegisterClearingTest, EmptyFinalStateLeavesExitAlone) {
+  auto &MBB = addExit();
+  MachineInstr &ExitMI = MBB.back();
+  MachineBasicBlock::iterator InsertPt = ExitMI.getIterator();
+  unsigned Operands = ExitMI.getNumOperands();
+  retainClearingState(regs({}), InsertPt, ExitMI);
+  EXPECT_EQ(InsertPt, ExitMI.getIterator());
+  EXPECT_EQ(ExitMI.getNumOperands(), Operands);
+  EXPECT_EQ(MBB.size(), 1u);
 }
 
 TEST_P(RegisterClearingTest, OverlappingExitUseDoesNotReplaceExactUse) {

@@ -16,6 +16,15 @@
 namespace llvm {
 class RegScavenger;
 
+/// Retain the complete physical registers in \p Regs through the remaining
+/// clearing steps. Preserve genuine operands of \p ExitMI and honor the
+/// target's separate FAKE_USE policy, moving \p InsertPt before that use.
+/// Unlike register-clear discovery, this includes explicit flags requirements.
+/// The insertion point must precede or refer to \p ExitMI in the same block.
+LLVM_ABI void retainClearingState(const BitVector &Regs,
+                                  MachineBasicBlock::iterator &InsertPt,
+                                  MachineInstr &ExitMI);
+
 /// Validate \p ScratchRegs, merge them into \p RegsToZero, and emit at
 /// \p InsertPt. Keep all emitted allocatable physical defs live through
 /// clearing, including target scratch. Scratch declarations are per exit,
