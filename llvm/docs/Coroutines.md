@@ -1360,10 +1360,12 @@ the buffer provided as the third argument.  They must be constant.
 The fourth argument must be a reference to a global function, called
 the 'continuation prototype function'.  The type, calling convention,
 and attributes of any continuation functions will be taken from this
-declaration.  The return type of the prototype function must match the
-return type of the current function.  The first parameter type must be
-a pointer type.  The second parameter type must be an integer type;
-it will be used only as a boolean flag.
+declaration.  The one exception is a `"zeroize-flags"` request on the
+current function, which is retained on every continuation in addition
+to the prototype's attributes.  The return type of the prototype
+function must match the return type of the current function.  The first
+parameter type must be a pointer type.  The second parameter type must
+be an integer type; it will be used only as a boolean flag.
 
 The fifth argument must be a reference to a global function that will
 be used to allocate memory.  It may not fail, either by returning null
