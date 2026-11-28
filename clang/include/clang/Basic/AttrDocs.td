@@ -8843,15 +8843,24 @@ stack and condition-state clearing for supported frames and ordinary return
 protocols. AArch64 also covers scalable SVE spill storage. X86 support includes
 baseline x86-64 CPUs. Ordinary returns after internal catch handlers are covered
 under those same frame limits. On X86-64 this requires GNU C++ DWARF handling
-and the C calling convention. A call that propagates an exception out of the
-function, including ``__cxa_end_catch``, can bypass the ordinary return.
-On X86-64 LP64 ELF, classic Clang also supports
-a cleanup-only GNU C++ DWARF landing pad that explicitly calls
-``_Unwind_Resume`` with the C calling convention. Its fixed frame must be fully
-allocated. The compiler keeps callee-save slots valid until it restores the
-registers and switches to SP-based unwind rules, then erases those slots.
-The frame stays allocated at the resume call. An exception that propagates
-directly out of a call can bypass this sequence. See the LLVM IR
+and the C calling convention.
+
+An exception that leaves after running a local destructor has a separate exit.
+Classic Clang supports these explicit GNU C++ DWARF cleanup paths with the C
+calling convention:
+
+* On X86-64 LP64 ELF, the compiler keeps callee-save slots valid until it
+  restores the registers and switches to SP-based unwind rules. It then erases
+  those slots and keeps the fixed frame allocated at ``_Unwind_Resume``.
+* On AArch64 Android API level 29 and later, a supported fixed frame can use
+  the shadow call stack with X18 reserved and SVE disabled. The cleanup clears
+  the owned frame and NZCV before calling ``_Unwind_Resume``. The unwinder
+  recovers the caller's return address from the shadow stack.
+
+ARM32 Linux and AArch64 Linux without this shadow-stack protocol diagnose a
+protected cleanup that resumes unwinding. An exception
+that propagates directly out of a call, including ``__cxa_end_catch``, can
+bypass both an ordinary return and an explicit cleanup. See the LLVM IR
 ``zeroize-stack`` and ``zeroize-flags`` documentation for the target limits.
 Register clearing uses the target implementation of ``zero_call_used_regs("all")``.
 Return-value registers and registers preserved by the calling convention are
@@ -8921,9 +8930,10 @@ objects: capturing a sensitive variable does not mark the closure sensitive.
 If the IR is used with the ``"sensitive"`` stack mode, the programmer must mark
 every local whose storage needs clearing so it is not exempted. The current
 ``zeroize_on_return`` lowering always requests ``"used"``, which ignores these
-exemptions. No target implements stack clearing yet, so the annotation currently
-changes IR metadata only. Losing ``!nozeroize`` metadata can only widen the
-requested clearing in ``"sensitive"`` mode.
+exemptions. The annotation changes allocation metadata; stack clearing follows
+the enclosing function's request and the target limits documented above.
+Losing ``!nozeroize`` metadata can only widen the requested clearing in
+``"sensitive"`` mode.
 Compiler-introduced temporary and parameter storage remains unmarked, as does
 storage shared with return objects or Blocks runtime bookkeeping.
 ClangIR currently omits these exemptions, requesting coverage of all local
