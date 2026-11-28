@@ -92,6 +92,7 @@ add_llvm_target(AArch64CodeGen
   AArch64TargetObjectFile.cpp
   AArch64TargetTransformInfo.cpp
   AArch64Zeroization.cpp
+  AArch64ZeroizationVerifier.cpp
   SMEPeepholeOpt.cpp
   SVEShuffleOpts.cpp
   MachineSMEABIPass.cpp

@@ -1,12 +1,22 @@
 # Register-zeroing compatibility baseline
 
 The [tracker #60](https://github.com/trailofbits/vspells-ct-internal-notes/issues/60)
-baseline is frozen at `7932207f03ab3b3ed2fad5ea3fe2298d7e426dce`.
-The November 14, 2026 decision accepts the documented changes below and replaces
-the original unchanged-assembly criterion with compatibility against this revision.
-The six test files themselves are not changed by the gate.
+baseline was frozen at `7932207f03ab3b3ed2fad5ea3fe2298d7e426dce` on November 14,
+2026. That decision accepted the differences below and set the frozen revision
+as the compatibility reference.
 
-## Accepted differences
+This branch proposes `657dd456bef04ccd9f04e48319fe6e0b7c174579` as the next fixture
+revision. Acceptance of the proposed AArch64 expectations is pending.
+
+## Proposed AArch64 expectations
+
+In the fixed-width AArch64 C ABI, the caller owns the low 64 bits of V8 through V15. Each upper
+half must be cleared while its low half is preserved. Two existing default-mode checks now
+require the eight corresponding writes. All earlier assertions and the five other fixture files
+are retained. The November 14 inputs pass 22 of 23 variants on the candidate. The proposed
+expectations pass 23 of 23.
+
+## November 14 accepted differences
 
 The original baseline was `c7317d79aacf76b5eb2dc65010e574a5269838ef`. An audit of its
 six unchanged files against the updated compiler passed two complete files and

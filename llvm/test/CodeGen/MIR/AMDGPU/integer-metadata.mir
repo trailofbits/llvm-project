@@ -1,0 +1,33 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=amdgpu9.00 -run-pass=none %t/integers.mir -o %t/printed.mir
+# RUN: llc -mtriple=amdgpu9.00 -run-pass=none %t/printed.mir -o - | FileCheck %s
+# RUN: not llc -mtriple=amdgpu9.00 -run-pass=none %t/invalid.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=ERR
+
+# CHECK: machineMetadataNodes:
+# CHECK-DAG: - '[[TUPLE:![0-9]+]] = !{i1 true, i128 -18446744073709551617, [[CHILD:![0-9]+]], i1 false}'
+# CHECK-DAG: - '[[CHILD]] = !{!"child"}'
+# CHECK: G_INTRINSIC intrinsic(@llvm.amdgcn.reloc.constant), [[TUPLE]]
+# ERR: expected an integer literal
+
+#--- integers.mir
+--- |
+  define void @test() { ret void }
+  declare i32 @llvm.amdgcn.reloc.constant(metadata)
+...
+---
+name: test
+machineMetadataNodes:
+  - '!8 = !{i1 true, i128 -18446744073709551617, !9, i1 false}'
+  - '!9 = !{!"child"}'
+body: |
+  bb.0:
+    %0:_(s32) = G_INTRINSIC intrinsic(@llvm.amdgcn.reloc.constant), !8
+    S_ENDPGM 0
+...
+
+#--- invalid.mir
+---
+name: test
+machineMetadataNodes:
+  - '!0 = !{i32}'
+...

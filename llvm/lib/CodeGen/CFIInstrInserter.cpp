@@ -39,7 +39,9 @@ class CFIInstrInserter : public MachineFunctionPass {
  public:
   static char ID;
 
-  CFIInstrInserter() : MachineFunctionPass(ID) {}
+  explicit CFIInstrInserter(
+      std::function<bool(const MachineFunction &)> Predicate = nullptr)
+      : MachineFunctionPass(ID), Predicate(std::move(Predicate)) {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesAll();
@@ -47,7 +49,7 @@ class CFIInstrInserter : public MachineFunctionPass {
   }
 
   bool runOnMachineFunction(MachineFunction &MF) override {
-    if (!MF.needsFrameMoves())
+    if (!MF.needsFrameMoves() || (Predicate && !Predicate(MF)))
       return false;
 
     MBBVector.resize(MF.getNumBlockIDs());
@@ -64,6 +66,8 @@ class CFIInstrInserter : public MachineFunctionPass {
   }
 
 private:
+  std::function<bool(const MachineFunction &)> Predicate;
+
   /// contains the location where CSR register is saved.
   class CSRSavedLocation {
   public:
@@ -201,7 +205,10 @@ char CFIInstrInserter::ID = 0;
 INITIALIZE_PASS(CFIInstrInserter, "cfi-instr-inserter",
                 "Check CFA info and insert CFI instructions if needed", false,
                 false)
-FunctionPass *llvm::createCFIInstrInserter() { return new CFIInstrInserter(); }
+FunctionPass *llvm::createCFIInstrInserter(
+    std::function<bool(const MachineFunction &)> Predicate) {
+  return new CFIInstrInserter(std::move(Predicate));
+}
 
 void CFIInstrInserter::calculateCFAInfo(MachineFunction &MF) {
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();

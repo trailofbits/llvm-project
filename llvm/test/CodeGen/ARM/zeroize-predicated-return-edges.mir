@@ -1,0 +1,57 @@
+# RUN: split-file %s %t
+# RUN: llc -O0 -verify-machineinstrs -mattr=+dsp -start-before=prolog-epilog %t/several.mir -o - | FileCheck %s
+# RUN: not llc -O0 -verify-machineinstrs -start-before=prolog-epilog %t/bundle.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=BUNDLE
+
+# The second predicate must still read the original comparison. Each outgoing
+# edge clears the flags only after deciding whether to take that return.
+# CHECK-LABEL: several:
+# CHECK: cmp r1, #0
+# CHECK: bne [[SECOND:\.LBB[0-9_]+]]
+# CHECK: msr APSR_nzcvq, r1
+# CHECK: bx lr
+# CHECK: [[SECOND]]:
+# CHECK: bge [[LAST:\.LBB[0-9_]+]]
+# CHECK: msr APSR_nzcvq, r1
+# CHECK: bx lr
+# CHECK: [[LAST]]:
+# CHECK: msr APSR_nzcvq, r1
+# CHECK: bx lr
+# BUNDLE: cannot separate ordinary return from in-function control flow for clearing
+
+#--- several.mir
+--- |
+  target triple = "armv7-none-eabi"
+  define i32 @several(i32 %x) "zero-call-used-regs"="all-gpr" "zeroize-flags" { ret i32 %x }
+...
+---
+name: several
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r0, $r1, $lr
+    CMPri $r1, 0, 14, $noreg, implicit-def $cpsr
+    BX_RET 0, $cpsr, implicit $r0
+    BX_RET 11, killed $cpsr, implicit $r0
+    BX_RET 14, $noreg, implicit $r0
+...
+
+#--- bundle.mir
+--- |
+  target triple = "thumbv7m-none-eabi"
+  define i32 @explicit_it(i32 %x) "zero-call-used-regs"="all-gpr" { ret i32 %x }
+...
+---
+name: explicit_it
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r0, $lr, $cpsr
+    BUNDLE implicit-def dead $itstate, implicit killed $cpsr, implicit $r0 {
+      t2IT 0, 8, implicit-def $itstate
+      tBX_RET 0, killed $cpsr, implicit $r0, implicit internal killed $itstate
+    }
+  bb.1:
+    liveins: $r0, $lr
+    tBX_RET 14, $noreg, implicit $r0
+...

@@ -17,7 +17,11 @@ void MachineModuleSlotTracker::processMachineFunctionMetadata(
     AbstractSlotTrackerStorage *AST, const MachineFunction &MF) {
   // Create metadata created within the backend.
   for (const MachineBasicBlock &MBB : MF)
-    for (const MachineInstr &MI : MBB.instrs())
+    for (const MachineInstr &MI : MBB.instrs()) {
+      // Backend-created tuple operands have no slot in the original IR.
+      for (const MachineOperand &MO : MI.operands())
+        if (MO.isMetadata() && isa<MDTuple>(MO.getMetadata()))
+          AST->createMetadataSlot(MO.getMetadata());
       for (const MachineMemOperand *MMO : MI.memoperands()) {
         AAMDNodes AAInfo = MMO->getAAInfo();
         if (AAInfo.TBAA)
@@ -29,6 +33,7 @@ void MachineModuleSlotTracker::processMachineFunctionMetadata(
         if (AAInfo.NoAlias)
           AST->createMetadataSlot(AAInfo.NoAlias);
       }
+    }
 }
 
 void MachineModuleSlotTracker::processMachineModule(

@@ -553,6 +553,11 @@ bool ARMBaseRegisterInfo::canRealignStack(const MachineFunction &MF) const {
   // 2. There are VLAs in the function and the base pointer is disabled.
   if (!TargetRegisterInfo::canRealignStack(MF))
     return false;
+  // A preferred spill alignment alone must not turn a clearable fixed frame
+  // into a realigned frame. Honor realignment already required by the function.
+  if (MF.getFunction().hasZeroizeStack() &&
+      !MF.getFrameInfo().shouldRealignStack())
+    return false;
   // Stack realignment requires a frame pointer.  If we already started
   // register allocation with frame pointer elimination, it is too late now.
   if (!MRI->canReserveReg(STI.getFramePointerReg()))

@@ -43,6 +43,9 @@ public:
                               MutableArrayRef<CalleeSavedInfo> CSI,
                               const TargetRegisterInfo *TRI) const override;
 
+  int getInitialCFAOffset(const MachineFunction &MF) const override;
+  Register getInitialCFARegister(const MachineFunction &MF) const override;
+
   bool keepFramePointer(const MachineFunction &MF) const;
 
   bool enableCalleeSaveSkip(const MachineFunction &MF) const override;
@@ -90,6 +93,9 @@ public:
   const SpillSlot *
   getCalleeSavedSpillSlots(unsigned &NumEntries) const override;
 
+  bool isOrdinaryZeroizeReturn(const MachineInstr &MI) const override;
+  bool branchAroundZeroizeReturn(MachineInstr &MI,
+                                 MachineBasicBlock &Continue) const override;
   bool supportsZeroizeFlags(const MachineFunction &MF) const override;
   bool prepareZeroizeFlags(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator InsertPt,
