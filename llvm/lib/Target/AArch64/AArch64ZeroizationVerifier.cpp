@@ -284,9 +284,9 @@ struct Checks {
 
 bool verifyExit(const MachineInstr &MI, KnownZero Known, const Checks &Check,
                 bool Resume) {
-  bool Ordinary =
-      MI.getOpcode() == AArch64::RET_ReallyLR || MI.getOpcode() == AArch64::RET;
   const MachineFunction &MF = *MI.getMF();
+  bool Ordinary =
+      MF.getSubtarget().getFrameLowering()->isOrdinaryZeroizeReturn(MI);
   const auto &AFI = *MF.getInfo<AArch64FunctionInfo>();
   if (!Resume && MF.getFunction().hasZeroizeStack() &&
       AFI.shouldSignReturnAddress(MF)) {
@@ -303,8 +303,7 @@ bool verifyExit(const MachineInstr &MI, KnownZero Known, const Checks &Check,
     return report(MI, Twine("NZCV is not proven zero at ") + Site);
   if (!Check.Registers)
     return true;
-  if (!Resume && (!Ordinary || (MI.getOpcode() == AArch64::RET &&
-                                MI.getOperand(0).getReg() != AArch64::LR))) {
+  if (!Resume && !Ordinary) {
     if (llvm::any_of(MI.operands(), isAArch64ZeroizationObligation))
       return report(MI,
                     "register obligation on unsupported final return protocol");
