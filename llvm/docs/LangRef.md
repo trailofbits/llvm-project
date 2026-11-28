@@ -2729,7 +2729,10 @@ fn -> other_fn -> other_fn ; fn is norecurse
     clearing would destroy live state are compilation errors. Targets must
     document the state they clear and their supported exit protocols.
     Inlining a callee with this attribute requires the caller to carry it as
-    well, including for `alwaysinline` callees.
+    well, including for `alwaysinline` callees. Coroutine splitting keeps the
+    attribute on every function it splits out of a coroutine carrying it. This
+    includes the returned-continuation lowerings, where a continuation's other
+    function attributes come from the continuation prototype.
 
     ARM32 clears NZCV, Q where implemented, and GE where implemented, together
     with VPR on MVE targets. It preserves execution state, interrupt masks,
