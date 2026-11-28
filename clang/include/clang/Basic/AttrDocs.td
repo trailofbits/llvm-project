@@ -8852,6 +8852,8 @@ calling convention:
 * On X86-64 LP64 ELF, the compiler keeps callee-save slots valid until it
   restores the registers and switches to SP-based unwind rules. It then erases
   those slots and keeps the fixed frame allocated at ``_Unwind_Resume``.
+  A cleanup can also catch a matching C++ exception and let another exception
+  propagate to the caller.
 * On AArch64 Android API level 29 and later, a supported fixed frame can use
   the shadow call stack with X18 reserved and SVE disabled. The cleanup clears
   the owned frame and NZCV before calling ``_Unwind_Resume``. The unwinder
